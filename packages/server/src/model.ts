@@ -11,19 +11,22 @@ export interface RegistryOptions {
 }
 
 export function createRegistry(options: RegistryOptions = {}) {
-  return createProviderRegistry({
-    anthropic,
-    openai,
-    openrouter: createOpenRouter({
-      apiKey: options.openrouterApiKey,
-      fetch: options.fetch,
-      // "strict" is the setting OpenRouter recommends when talking to its own API.
-      compatibility: "strict",
-      // Shown in the OpenRouter dashboard's app attribution.
-      appName: "Mivra",
-      appUrl: "https://github.com/okhay-p/mivra",
-    }),
+  const openrouter = createOpenRouter({
+    apiKey: options.openrouterApiKey,
+    fetch: options.fetch,
+    // "strict" is the setting OpenRouter recommends when talking to its own API.
+    compatibility: "strict",
+    // Shown in the OpenRouter dashboard's app attribution.
+    appName: "Mivra",
+    appUrl: "https://github.com/okhay-p/mivra",
   });
+  // @openrouter/ai-sdk-provider 3.1.0 returns v4 models but its provider object doesn't declare
+  // specificationVersion. The registry then treats it as a v2 provider and runs its models through a
+  // v2→v4 adapter, which wraps finishReason twice. The SDK no longer sees "tool-calls", so tools never
+  // execute. Declaring v4 makes the registry pass the provider through unchanged.
+  Object.assign(openrouter, { specificationVersion: "v4" as const });
+
+  return createProviderRegistry({ anthropic, openai, openrouter });
 }
 
 const defaultRegistry = createRegistry();
