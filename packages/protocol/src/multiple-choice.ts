@@ -28,14 +28,34 @@ export const MultipleChoiceSpec = z
       .max(80)
       .describe('Short label for the concept being checked, e.g. "sliding window invariant". Used to track progress.'),
     question: z.string().trim().min(1).max(1000),
-    options: z.array(MultipleChoiceOption).min(2).max(6),
-    correctOptionIndex: z.number().int().nonnegative().describe("0-based index of the single correct option."),
+    options: z.array(MultipleChoiceOption).min(2).max(6).describe("2-6 options with distinct text."),
+    correctOptionIndex: z
+      .number()
+      .int()
+      .nonnegative()
+      .describe("0-based index of the single correct option; must be less than the number of options."),
     explanation: z.string().trim().min(1).max(1000).describe("Shown after answering: why the correct option is correct."),
   })
   .strict()
-  .refine((spec) => spec.correctOptionIndex < spec.options.length, {
-    path: ["correctOptionIndex"],
-    message: "correctOptionIndex must point at one of the options",
+  .superRefine((spec, ctx) => {
+    if (spec.correctOptionIndex >= spec.options.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["correctOptionIndex"],
+        message: "correctOptionIndex must point at one of the options",
+      });
+    }
+    // Two options that read the same can't be told apart, but only one would be graded correct.
+    const seen = new Map<string, number>();
+    spec.options.forEach((option, i) => {
+      const key = option.text.toLowerCase().replace(/\s+/g, " ");
+      const first = seen.get(key);
+      if (first !== undefined) {
+        ctx.addIssue({ code: "custom", path: ["options", i, "text"], message: `duplicates option ${first}` });
+      } else {
+        seen.set(key, i);
+      }
+    });
   });
 
 export type MultipleChoiceSpec = z.infer<typeof MultipleChoiceSpec>;

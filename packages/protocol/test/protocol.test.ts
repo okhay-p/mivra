@@ -65,6 +65,25 @@ describe("every artifact kind", () => {
     expect(schema.additionalProperties).toBe(false);
   });
 
+  it("keeps nested objects strict, optional fields optional and descriptions visible to the model", () => {
+    type Node = { type?: string; required?: string[]; additionalProperties?: boolean; description?: string; maxItems?: number; properties?: Record<string, Node>; items?: Node };
+    const trace = z.toJSONSchema(artifactKinds.algorithm_trace.spec) as Node;
+    const step = trace.properties!.steps!.items!;
+    expect(step.additionalProperties).toBe(false);
+    expect(step.required).toEqual(["explanation"]);
+    expect(step.properties!.pointers!.description).toMatch(/Not carried over/);
+    expect(step.properties!.pointers!.maxItems).toBe(8);
+    const range = step.properties!.ranges!.items!;
+    expect(range.additionalProperties).toBe(false);
+    expect(range.properties!.end!.description).toMatch(/>= start/);
+
+    const check = z.toJSONSchema(artifactKinds.multiple_choice.spec) as Node;
+    const option = check.properties!.options!.items!;
+    expect(option.additionalProperties).toBe(false);
+    expect(option.required).toEqual(["text"]);
+    expect(check.properties!.options!.description).toMatch(/distinct/);
+  });
+
   it("has unique tool names that map back to their kind", () => {
     const names = kinds.map((k) => artifactKinds[k].toolName);
     expect(new Set(names).size).toBe(names.length);
@@ -127,6 +146,16 @@ describe("multiple_choice", () => {
   it("rejects fewer than two options", () => {
     expect(MultipleChoiceSpec.safeParse({ ...binarySearchCheck, options: [{ text: "5" }], correctOptionIndex: 0 }).success).toBe(
       false,
+    );
+  });
+
+  it("rejects options that read the same after trimming, case and spacing", () => {
+    const dup = { ...binarySearchCheck, options: [{ text: "Five" }, { text: "  five " }, { text: "4" }], correctOptionIndex: 0 };
+    const result = MultipleChoiceSpec.safeParse(dup);
+    expect(result.success).toBe(false);
+    expect(result.error?.issues[0]?.path).toEqual(["options", 1, "text"]);
+    expect(MultipleChoiceSpec.safeParse({ ...dup, options: [{ text: "five comparisons" }, { text: "five" }, { text: "4" }] }).success).toBe(
+      true,
     );
   });
 
