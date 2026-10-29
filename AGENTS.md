@@ -1,5 +1,19 @@
 # AGENTS.md
 
+## Knowledge base
+
+Project design docs, decisions and the work backlog live in Notion: [Mivra | Project HQ](https://app.notion.com/p/408fb102b9b68185823dc5c90dc17f7f) (reach it through the Notion MCP server).
+
+- Read **Architecture Decisions & Open Questions** first. It is the source of truth for what is decided and what is still open. Accepted so far: ADR-001 (standalone local-first app with a client/server split), ADR-002 (SQLite), ADR-003 (web UI first, Electron later), ADR-004 (Hono server framework), ADR-005 (Node.js, Drizzle, Vercel AI SDK, React + Vite).
+- Treat confirmed decisions as requirements. Treat anything marked proposed as a suggestion, not a requirement.
+- Don't mark a decision as accepted, change a major decision, or delete pages unless a human approves it.
+- Backlog items live in the **Mivra Work Board** database. When you finish a task, update its item with what changed, how it was tested, and the PR link.
+- Code, tests and executable config belong in this repo, not in Notion.
+
+## Development
+
+pnpm monorepo: `packages/server` (Hono, Drizzle + better-sqlite3, Vercel AI SDK) and `packages/web` (React + Vite). See `README.md` for commands. Before finishing a change, run `pnpm typecheck` and `pnpm test`. After editing `packages/server/src/db/schema.ts`, run `pnpm --filter @mivra/server db:generate` and commit the generated migration.
+
 ## Agent skills
 
 ### Issue tracker
