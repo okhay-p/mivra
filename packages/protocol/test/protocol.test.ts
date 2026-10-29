@@ -149,14 +149,27 @@ describe("multiple_choice", () => {
     );
   });
 
-  it("rejects options that read the same after trimming, case and spacing", () => {
-    const dup = { ...binarySearchCheck, options: [{ text: "Five" }, { text: "  five " }, { text: "4" }], correctOptionIndex: 0 };
+  it("rejects options that are identical after trimming", () => {
+    const dup = { ...binarySearchCheck, options: [{ text: "five" }, { text: "  five " }, { text: "4" }], correctOptionIndex: 0 };
     const result = MultipleChoiceSpec.safeParse(dup);
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toEqual(["options", 1, "text"]);
-    expect(MultipleChoiceSpec.safeParse({ ...dup, options: [{ text: "five comparisons" }, { text: "five" }, { text: "4" }] }).success).toBe(
-      true,
-    );
+  });
+
+  it("treats Unicode spellings that render identically as duplicates", () => {
+    const composed = "caf\u00e9"; // é as one code point
+    const decomposed = "cafe\u0301"; // e + combining accent
+    const options = [{ text: composed }, { text: decomposed }];
+    expect(MultipleChoiceSpec.safeParse({ ...binarySearchCheck, options, correctOptionIndex: 0 }).success).toBe(false);
+  });
+
+  it.each([
+    ["case", "A", "a"],
+    ["inner spacing", '"a b"', '"a  b"'],
+    ["number formatting", "5", "5.0"],
+  ])("keeps options that differ only by %s, since that can be what the question tests", (_label, first, second) => {
+    const options = [{ text: first }, { text: second }];
+    expect(MultipleChoiceSpec.safeParse({ ...binarySearchCheck, options, correctOptionIndex: 0 }).success).toBe(true);
   });
 
   it("grades deterministically, with per-option feedback", () => {

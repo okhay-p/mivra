@@ -45,10 +45,12 @@ export const MultipleChoiceSpec = z
         message: "correctOptionIndex must point at one of the options",
       });
     }
-    // Two options that read the same can't be told apart, but only one would be graded correct.
+    // Two identical options can't be told apart, but only one would be graded correct. Compare the
+    // trimmed text exactly: case and inner spacing can be the point of a question ("A" vs "a",
+    // "a b" vs "a  b"). NFC only merges Unicode spellings that render identically.
     const seen = new Map<string, number>();
     spec.options.forEach((option, i) => {
-      const key = option.text.toLowerCase().replace(/\s+/g, " ");
+      const key = option.text.normalize("NFC");
       const first = seen.get(key);
       if (first !== undefined) {
         ctx.addIssue({ code: "custom", path: ["options", i, "text"], message: `duplicates option ${first}` });
