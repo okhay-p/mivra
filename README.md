@@ -15,8 +15,10 @@ Requires Node.js 22.12+ and pnpm 10 (`npm i -g pnpm`, or prefix commands with `n
 
 ```sh
 pnpm install
-cp .env.example .env   # add ANTHROPIC_API_KEY or OPENAI_API_KEY
+cp .env.example .env   # add a provider key and set MIVRA_MODEL
 ```
+
+`MIVRA_MODEL` is `<provider>:<model-id>`. Providers: `anthropic`, `openai`, and `openrouter` (set `OPENROUTER_API_KEY`, then use an id from [openrouter.ai/models](https://openrouter.ai/models), e.g. `openrouter:<vendor>/<model>`). Mivra's learning tools need tool calling, so pick a model that lists tool support; many free models don't.
 
 ## Commands
 
