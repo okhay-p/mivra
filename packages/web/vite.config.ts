@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import react from "@vitejs/plugin-react";
-import { defineConfig, type Plugin } from "vite";
+import { defaultClientConditions, defineConfig, type Plugin } from "vite";
 
 const serverPort = Number(process.env.MIVRA_PORT ?? 4096);
 const dataDir = process.env.MIVRA_DATA_DIR ?? join(homedir(), ".mivra");
@@ -26,6 +26,8 @@ function injectToken(): Plugin {
 
 export default defineConfig({
   plugins: [react(), injectToken()],
+  // Resolve workspace packages (e.g. @mivra/protocol) to their TypeScript source; no prebuild needed.
+  resolve: { conditions: ["@mivra/source", ...defaultClientConditions] },
   server: {
     // Loopback by default. To reach it from other devices, use `tailscale serve 5173` rather than
     // binding all interfaces; set MIVRA_DEV_HOST only if you understand the exposure.

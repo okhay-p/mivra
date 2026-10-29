@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "pnpm --parallel --filter \"./packages/*\" dev",
-    "build": "pnpm --filter @mivra/web build && pnpm --filter @mivra/server build",
+    "build": "pnpm --filter @mivra/protocol build && pnpm --filter @mivra/web build && pnpm --filter @mivra/server build",
     "start": "pnpm --filter @mivra/server start",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck"
