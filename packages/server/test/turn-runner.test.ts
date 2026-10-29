@@ -9,7 +9,7 @@ const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
   outputTokens: { total: 1, text: 1, reasoning: 0 },
 };
-const model = () =>
+const mockModel = () =>
   new MockLanguageModelV4({
     doStream: async () => ({
       stream: simulateReadableStream({
@@ -26,11 +26,16 @@ const model = () =>
 const userMessage = (text: string): UIMessage => ({ id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text }] });
 
 describe("TurnRunner, used without HTTP", () => {
-  it("passes the stored conversation through assembleContext and records the reply", async () => {
+  it("sends the model what assembleContext returns, and records the reply", async () => {
     const store = createSessionStore(openDb(":memory:"));
     const session = store.createSession();
-    const assembleContext = vi.fn((conversation: UIMessage[]) => convertToModelMessages(conversation));
-    const runner = createTurnRunner({ store, model, assembleContext });
+    const llm = mockModel();
+    // Stands in for memory: adds a recalled fact ahead of the conversation.
+    const assembleContext = vi.fn(async (conversation: UIMessage[]) => [
+      { role: "user" as const, content: "RECALLED: learner already knows two pointers" },
+      ...(await convertToModelMessages(conversation)),
+    ]);
+    const runner = createTurnRunner({ store, model: () => llm, assembleContext });
 
     const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hello") });
     expect(result.ok).toBe(true);
@@ -38,12 +43,15 @@ describe("TurnRunner, used without HTTP", () => {
 
     expect(assembleContext).toHaveBeenCalledOnce();
     expect(assembleContext.mock.calls[0]?.[0].map((m) => m.role)).toEqual(["user"]);
+    const prompt = JSON.stringify(llm.doStreamCalls[0]?.prompt);
+    expect(prompt).toContain("RECALLED: learner already knows two pointers");
+    expect(prompt).toContain("hello");
     await vi.waitFor(() => expect(store.loadMessages(session.id).map((m) => m.role)).toEqual(["user", "assistant"]));
   });
 
   it("reports domain errors instead of HTTP statuses", async () => {
     const store = createSessionStore(openDb(":memory:"));
-    const runner = createTurnRunner({ store, model });
+    const runner = createTurnRunner({ store, model: mockModel });
     const session = store.createSession();
 
     expect(await runner.startTurn({ sessionId: "missing", message: userMessage("hi") })).toEqual({
@@ -60,7 +68,7 @@ describe("TurnRunner, used without HTTP", () => {
     const session = store.createSession();
     const runner = createTurnRunner({
       store,
-      model,
+      model: mockModel,
       assembleContext: async () => {
         throw new Error("memory unavailable");
       },
