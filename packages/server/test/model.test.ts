@@ -23,16 +23,16 @@ function chatCompletionStream(text: string) {
   );
 }
 
-/** A chat-completions SSE body in which the model calls one tool. */
+/** A chat-completions SSE body in which the model calls one tool, streaming its arguments in fragments. */
 function toolCallStream(name: string, args: object) {
+  const json = JSON.stringify(args);
+  const cut = Math.floor(json.length / 2);
   return (
     chunk(
-      {
-        role: "assistant",
-        tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name, arguments: JSON.stringify(args) } }],
-      },
+      { role: "assistant", tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name, arguments: json.slice(0, cut) } }] },
       null,
     ) +
+    chunk({ tool_calls: [{ index: 0, function: { arguments: json.slice(cut) } }] }, null) +
     chunk({}, "tool_calls", usageChunk) +
     "data: [DONE]\n\n"
   );
@@ -100,6 +100,13 @@ describe("openrouter provider", () => {
     expect(executedWith).toEqual({ question: "q?" });
     expect((await result.steps)[0]?.finishReason).toBe("tool-calls");
     expect(bodies).toHaveLength(2);
-    expect(JSON.stringify(bodies[1]?.messages)).toContain("shown");
+    // The second request carries the assistant's tool call and our result, linked by id.
+    const followUp = bodies[1]?.messages as { role: string; tool_calls?: { id: string }[]; tool_call_id?: string; content?: unknown }[];
+    expect(followUp.find((m) => m.role === "assistant")?.tool_calls?.[0]?.id).toBe("call_1");
+    const toolMessage = followUp.find((m) => m.role === "tool");
+    expect(toolMessage?.tool_call_id).toBe("call_1");
+    expect(JSON.stringify(toolMessage?.content)).toContain("shown");
+    // Usage stays numeric (the registry bug also mangled it).
+    expect((await result.totalUsage).inputTokens).toBe(6);
   });
 });
