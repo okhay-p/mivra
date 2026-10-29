@@ -1,0 +1,585 @@
+<!doctype html>
+<!--
+  PROTOTYPE — throwaway. Do not build on this file.
+
+  Builds on build-and-learn.html variant C (Drawer), which won.
+  Flow:  prompt → placement test → lesson plan → generated lesson → iterate via drawer.
+
+  Question: what should the placement test (the step before the lesson is generated) look like?
+  Three variants, switchable via `?variant=A|B|C`, the floating bottom bar, or ← / →:
+
+    A  Stepper    — a dedicated full-screen test, one question at a time, then a results + plan screen.
+    B  Interview  — the tutor asks the questions in a centred conversation, then proposes a plan.
+    C  Warm-up    — you land on the lesson page right away; the test is its first section and the
+                    rest of the lesson fills in below once you submit.
+
+  In every variant:
+    - Questions already answered by memory are skipped (and shown as skipped).
+    - "Skip test" falls back to memory only.
+    - The generated lesson is tailored to the answers (wrong on local minima → a local-minima section).
+    - After generation the drawer stays closed; the lesson is the focus.
+    - Each section has ✎ Change (edits the lesson, bumps the version) and ? Explain (the tutor answers
+      in the drawer without touching the lesson; "Add to lesson" if you want it kept).
+
+  Switching variants starts a fresh session. All in-memory, canned agent. Run: open this file, or
+    python3 -m http.server -d prototypes/workspace-ui 8000 → http://localhost:8000/lesson-flow.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mivra — lesson flow prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2330; background: #fff; }
+  button { font: inherit; cursor: pointer; }
+  input { font: inherit; }
+  #app { height: 100%; }
+  kbd { font: 11px ui-monospace, monospace; border: 1px solid #d6d8e1; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: #fff; color: #5b6070; }
+  .btn { border: 0; background: #4f46e5; color: #fff; border-radius: 10px; padding: 9px 18px; font-weight: 600; }
+  .btn.ghost { background: transparent; color: #5b6070; font-weight: 400; }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .link { border: 0; background: none; color: #6b7080; text-decoration: underline; padding: 0; }
+
+  /* ---------- viz ---------- */
+  .viz { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+  .viz canvas { width: 100%; flex: 1; min-height: 160px; display: block; border-radius: 8px; }
+  .viz-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+  .viz-controls input[type=range] { width: 130px; }
+  .viz-controls button { border: 1px solid #d6d8e1; background: #fff; border-radius: 6px; padding: 3px 10px; }
+  .viz-status { margin-left: auto; color: #5b6070; font-variant-numeric: tabular-nums; }
+
+  /* ---------- test pieces ---------- */
+  .opt { display: block; width: 100%; text-align: left; border: 1px solid #d6d8e1; background: #fff; border-radius: 10px; padding: 10px 14px; margin-bottom: 8px; }
+  .opt:hover { border-color: #a5a8f0; }
+  .opt.sel { border-color: #4f46e5; background: #eef0ff; }
+  .opt.unsure { color: #6b7080; border-style: dashed; }
+  .skipped { font-size: 13px; color: #0f766e; background: #f0fdf9; border: 1px solid #c7efe3; border-radius: 8px; padding: 8px 12px; }
+  .level { display: inline-block; font-size: 12px; border-radius: 999px; padding: 1px 9px; }
+  .level.known { background: #dcfce7; color: #166534; }
+  .level.partial { background: #fef9c3; color: #854d0e; }
+  .level.unknown { background: #fee2e2; color: #991b1b; }
+  .results { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .results td { padding: 8px 4px; border-bottom: 1px solid #f0f1f5; }
+  .results td.src { color: #a0a4b2; font-size: 12px; text-align: right; }
+  .plan { list-style: none; padding: 0; margin: 0; counter-reset: p; }
+  .plan li { counter-increment: p; padding: 8px 0 8px 34px; position: relative; border-bottom: 1px solid #f0f1f5; }
+  .plan li::before { content: counter(p); position: absolute; left: 0; top: 8px; width: 22px; height: 22px; border-radius: 50%; background: #eef0ff; color: #3730a3; font-size: 12px; text-align: center; line-height: 22px; }
+  .plan li small { display: block; color: #8a8fa0; }
+  .memdelta { display: inline-block; background: #eef0ff; color: #3730a3; border-radius: 6px; padding: 2px 8px; font-size: 12px; margin: 2px 4px 2px 0; }
+
+  /* ---------- prompt (hero) ---------- */
+  .hero { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; background: radial-gradient(circle at 50% 30%, #eef0ff, #fff 60%); }
+  .hero h1 { font: 700 36px/1.2 Georgia, serif; margin: 0 0 8px; }
+  .hero .mem { color: #0f766e; background: #f0fdf9; border: 1px solid #c7efe3; border-radius: 10px; padding: 8px 14px; font-size: 13px; margin-bottom: 20px; max-width: 620px; }
+  .hero form { width: min(680px, 100%); display: flex; gap: 8px; background: #fff; border: 1px solid #d6d8e1; border-radius: 14px; padding: 12px; box-shadow: 0 6px 24px rgba(31,35,48,.08); margin-bottom: 12px; }
+  .hero form input { flex: 1; border: 0; outline: 0; font-size: 16px; padding: 4px 8px; }
+  .hero .sugg { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+  .hero .sugg button { border: 1px solid #c7c9f5; background: #fff; color: #3730a3; border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+
+  /* ---------- A: stepper ---------- */
+  .stepper { height: 100%; display: flex; align-items: center; justify-content: center; background: #f6f6f9; padding: 24px; }
+  .stepper .card { width: min(600px, 100%); background: #fff; border: 1px solid #e3e4ea; border-radius: 16px; padding: 28px 32px; box-shadow: 0 10px 40px rgba(31,35,48,.06); }
+  .stepper .top { display: flex; align-items: center; gap: 8px; color: #8a8fa0; font-size: 13px; margin-bottom: 18px; }
+  .stepper .dots { display: flex; gap: 5px; margin-left: auto; }
+  .stepper .dots i { width: 22px; height: 5px; border-radius: 3px; background: #e3e4ea; }
+  .stepper .dots i.done { background: #4f46e5; }
+  .stepper .dots i.mem { background: #5eead4; }
+  .stepper .concept { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #4f46e5; }
+  .stepper .q { font: 600 21px/1.35 Georgia, serif; margin: 6px 0 18px; }
+  .stepper .foot { display: flex; align-items: center; justify-content: space-between; margin-top: 18px; }
+  .stepper h2 { font: 700 24px/1.2 Georgia, serif; margin: 0 0 4px; }
+  .stepper h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8a8fa0; margin: 22px 0 6px; }
+
+  /* ---------- B: interview ---------- */
+  .interview { height: 100%; overflow: auto; background: #f6f6f9; }
+  .interview .col { max-width: 640px; margin: 0 auto; padding: 32px 20px 120px; display: flex; flex-direction: column; gap: 12px; }
+  .interview .msg { max-width: 88%; }
+  .interview .msg.user { align-self: flex-end; background: #4f46e5; color: #fff; padding: 9px 13px; border-radius: 14px 14px 2px 14px; }
+  .interview .msg.agent { background: #fff; padding: 12px 16px; border-radius: 14px 14px 14px 2px; border: 1px solid #e3e4ea; }
+  .interview .choices { display: flex; flex-wrap: wrap; gap: 6px; align-self: flex-start; }
+  .interview .choices button { border: 1px solid #c7c9f5; background: #fff; color: #3730a3; border-radius: 999px; padding: 5px 12px; }
+  .interview .choices button.unsure { border-style: dashed; color: #6b7080; border-color: #d6d8e1; }
+
+  /* ---------- lesson page + drawer ---------- */
+  .page-wrap { height: 100%; position: relative; overflow: hidden; }
+  .page { height: 100%; overflow: auto; }
+  .bar { position: sticky; top: 0; z-index: 2; height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: rgba(255,255,255,.92); backdrop-filter: blur(6px); border-bottom: 1px solid #f0f1f5; }
+  .bar .grow { flex: 1; }
+  .bar .ver { font-size: 12px; background: #f1f2f6; border-radius: 6px; padding: 1px 7px; color: #5b6070; }
+  .tutor { border: 0; background: #4f46e5; color: #fff; border-radius: 999px; padding: 6px 14px; }
+  .toast { position: fixed; left: 50%; top: 64px; transform: translateX(-50%); background: #1f2330; color: #fff; padding: 8px 16px; border-radius: 999px; font-size: 13px; z-index: 3; box-shadow: 0 6px 20px rgba(0,0,0,.2); }
+  .doc { max-width: 740px; margin: 0 auto; padding: 36px 28px 140px; }
+  .doc .crumbs { color: #8a8fa0; font-size: 13px; }
+  .doc h1 { font: 700 32px/1.15 Georgia, serif; margin: 6px 0 4px; }
+  .doc .meta { color: #8a8fa0; font-size: 13px; margin-bottom: 24px; }
+  .cell { position: relative; margin: 14px -14px; padding: 10px 14px; border-radius: 10px; border-left: 3px solid transparent; }
+  .cell:hover { background: #fafafe; }
+  .cell.changed { background: #fefce8; border-left-color: #eab308; }
+  .cell .ctag { font-size: 11px; color: #a0a4b2; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; display: flex; gap: 8px; }
+  .cell .ctag .upd { color: #a16207; }
+  .cell .acts { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; opacity: 0; }
+  .cell:hover .acts { opacity: 1; }
+  .cell .acts button { border: 1px solid #d6d8e1; background: #fff; border-radius: 6px; padding: 1px 8px; font-size: 12px; color: #4f46e5; }
+  .cell h3 { font: 600 19px/1.3 Georgia, serif; margin: 0 0 6px; }
+  .cell p { font: 17px/1.65 Georgia, serif; margin: 0 0 10px; }
+  .cell.recap .box { background: #f0fdf9; border: 1px solid #c7efe3; border-radius: 10px; padding: 12px 14px; }
+  .cell.recap p, .cell.note p { font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; margin: 0 0 6px; }
+  .cell.note p { color: #4b5063; }
+  .cell .vizbox { border: 1px solid #e3e4ea; border-radius: 12px; padding: 12px; height: 320px; background: #fff; }
+  .cell .check { border: 1px solid #e3e4ea; border-radius: 12px; padding: 14px; background: #fff; }
+  .cell .check .q { font-weight: 600; margin-bottom: 10px; }
+  .cell .check button { display: block; width: 100%; text-align: left; border: 1px solid #d6d8e1; background: #fff; border-radius: 8px; padding: 7px 12px; margin-bottom: 6px; }
+  .cell .check button.right { border-color: #16a34a; background: #f0fdf4; }
+  .cell .check button.wrong { border-color: #dc2626; background: #fef2f2; }
+  .pending { margin: 14px 0; padding: 14px; border-radius: 10px; background: repeating-linear-gradient(-45deg, #fafafe, #fafafe 8px, #f3f4f8 8px, #f3f4f8 16px); color: #a0a4b2; }
+  .warmup { border: 1px solid #c7c9f5; border-radius: 14px; padding: 18px 20px; background: #fbfbff; }
+  .warmup .wq { margin: 16px 0 6px; font-weight: 600; }
+  .warmup .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .warmup .opts .opt { width: auto; margin: 0; padding: 6px 12px; }
+  .warmup .foot { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+  .warmup-done { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #5b6070; background: #f6f6f9; border-radius: 10px; padding: 8px 12px; }
+
+  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 400px; background: #f6f6f9; border-left: 1px solid #e3e4ea; box-shadow: -12px 0 32px rgba(31,35,48,.12); transform: translateX(105%); transition: transform .2s; z-index: 5; display: flex; flex-direction: column; }
+  .drawer.open { transform: none; }
+  .drawer header { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid #e3e4ea; background: #fff; }
+  .drawer header b { flex: 1; }
+  .drawer header button { border: 0; background: none; font-size: 18px; color: #8a8fa0; }
+  .chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .chat .msgs { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .chat .msg { max-width: 100%; }
+  .chat .msg.user { align-self: flex-end; background: #4f46e5; color: #fff; padding: 8px 12px; border-radius: 14px 14px 2px 14px; }
+  .chat .msg.agent { background: #fff; padding: 10px 14px; border-radius: 14px 14px 14px 2px; border: 1px solid #e3e4ea; }
+  .chat .msg.working { color: #6b7080; font-style: italic; }
+  .chat .chip { display: inline-block; font-size: 11px; border-radius: 999px; padding: 0 8px; margin: 0 4px 4px 0; background: #eef0ff; color: #3730a3; }
+  .chat .chip.edit { background: #fef9c3; color: #854d0e; }
+  .chat .add { margin-top: 8px; border: 1px solid #c7c9f5; background: #fff; color: #3730a3; border-radius: 8px; padding: 2px 10px; font-size: 12px; }
+  .chat .sugg { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 8px; }
+  .chat .sugg button { border: 1px solid #c7c9f5; background: #fff; color: #3730a3; border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+  .chat form { margin: 0 16px 16px; display: flex; gap: 8px; background: #fff; border: 1px solid #d6d8e1; border-radius: 12px; padding: 8px; }
+  .chat form input { flex: 1; border: 0; outline: 0; padding: 4px 8px; }
+  .chat form button { border: 0; background: #4f46e5; color: #fff; border-radius: 8px; padding: 4px 12px; }
+
+  /* ---------- switcher ---------- */
+  #proto-switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 9999; display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px; background: #111; color: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.35); font: 13px ui-sans-serif, system-ui, sans-serif; border: 2px solid #facc15; }
+  #proto-switcher button { background: transparent; color: #fff; border: 0; width: 30px; height: 30px; border-radius: 999px; font-size: 16px; }
+  #proto-switcher button:hover { background: #333; }
+  #proto-switcher span { padding: 0 10px; min-width: 170px; text-align: center; }
+  #proto-switcher small { color: #facc15; font-weight: 600; margin-right: 6px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="proto-switcher">
+  <button id="sw-prev" title="Previous variant (←)">‹</button>
+  <span id="sw-label"></span>
+  <button id="sw-next" title="Next variant (→)">›</button>
+</div>
+
+<script>
+/* ================= learner memory (mock) ================= */
+const MEMORY = {
+  course: "ML foundations",
+  concepts: { "Derivative": 0.9, "Loss function": 0.75, "Learning rate": 0.35, "Local minima": 0.1 },
+  misconception: "A bigger learning rate always reaches the minimum faster",
+};
+const STARTER = "Teach me gradient descent. I already know derivatives.";
+
+/* ================= placement test ================= */
+const QUESTIONS = [
+  { id: "deriv", concept: "Derivative", fromMemory: true, q: "What does the derivative of a function at a point tell you?" },
+  { id: "slope", concept: "Slope of the loss", q: "On a loss curve, the slope at a point tells you…",
+    options: ["How far you are from the minimum", "Which way is downhill, and how steep it is", "What the learning rate should be"], correct: 1 },
+  { id: "lr", concept: "Learning rate", q: "You double the learning rate. Each step becomes…",
+    options: ["About twice as large", "About half as large", "The same size — it only changes speed"], correct: 0 },
+  { id: "big", concept: "Learning rate", q: "Is a bigger learning rate always faster at reaching the minimum?",
+    options: ["Yes", "No — it can overshoot"], correct: 1 },
+  { id: "minima", concept: "Local minima", q: "True or false: gradient descent always finds the lowest point of the loss.",
+    options: ["True", "False"], correct: 1 },
+];
+const ASKED = QUESTIONS.filter(q => !q.fromMemory);
+const UNSURE = -1;
+// What we'd assume from memory alone (used for "Skip test").
+const MEMORY_GUESS = { slope: 1, lr: 0, big: 0, minima: UNSURE };
+
+// Pure: answers → per-concept level.
+function assess(answers) {
+  const by = {};
+  QUESTIONS.forEach(q => {
+    const lvl = q.fromMemory ? "known" : answers[q.id] === q.correct ? "known" : answers[q.id] === UNSURE || answers[q.id] == null ? "unknown" : "wrong";
+    (by[q.concept] = by[q.concept] || []).push(lvl);
+  });
+  return Object.entries(by).map(([concept, ls]) => ({
+    concept, source: concept === "Derivative" ? "memory" : "test",
+    level: ls.every(l => l === "known") ? "known" : ls.some(l => l === "known") ? "partial" : "unknown",
+  }));
+}
+// Pure: answers → ordered lesson plan, each step with the reason it's included.
+function planFor(answers) {
+  const ok = id => answers[id] === QUESTIONS.find(q => q.id === id).correct;
+  const p = [{ key: "recap", why: "What you already know, so we skip it" }];
+  p.push(ok("slope") ? { key: "explain", why: "You know slopes — a short version" } : { key: "explainSimple", why: "Slope-as-direction was shaky — from scratch" });
+  p.push({ key: "viz", why: "Interactive: feel the learning rate" });
+  if (!ok("big")) p.push({ key: "check1", why: "You think bigger is faster — let's test that" });
+  if (!ok("minima")) p.push({ key: "minima", why: "Local minima was new to you" }, { key: "check2", why: "Check you've got local minima" });
+  if (ok("big") && ok("minima")) p.push({ key: "further", why: "You aced the test — a stretch topic" });
+  return p;
+}
+
+/* ================= lesson content (canned) ================= */
+const CELLS = {
+  recap: a => ({ id: "recap", type: "recap", title: "Where you're starting",
+    body: `<p>From memory, you're solid on <b>derivatives</b>. From the warm-up: ${assess(a).filter(r => r.source === "test").map(r => `${r.concept.toLowerCase()} <i>(${r.level})</i>`).join(", ")}.</p>` }),
+  explain: () => ({ id: "explain", type: "text", title: "The idea",
+    body: `<p>Gradient descent repeatedly steps downhill. Each step moves the parameter by <b>learning rate × slope</b>, so steps shrink near the bottom — unless the learning rate is too large.</p>` }),
+  explainSimple: () => ({ id: "explain", type: "text", title: "The idea",
+    body: `<p>Imagine a ball on a hill. The <b>slope</b> under the ball tells you which way is downhill and how steep it is.</p><p>Gradient descent: look at the slope, roll a little downhill, repeat. The <b>learning rate</b> is how far you roll each time.</p>` }),
+  viz: () => ({ id: "viz", type: "viz", title: "Try it", body: `<p>Set the learning rate to 0.1 and press Run. Then try 0.9.</p>` }),
+  check1: () => ({ id: "check1", type: "check", title: "Test your guess", q: "At learning rate 0.9, what happens?", correct: 1,
+    options: ["It reaches the bottom faster than at 0.1", "It overshoots and bounces, or lands in a different valley", "Nothing changes"] }),
+  minima: () => ({ id: "minima", type: "text", title: "Two valleys",
+    body: `<p>This curve has two valleys. Gradient descent only feels the local slope, so it settles in whichever valley it rolls into — a <b>local minimum</b>, not necessarily the lowest point.</p>` }),
+  check2: () => ({ id: "check2", type: "check", title: "Check", q: "The ball settles at x ≈ 2.2. Is that the lowest point on the curve?", correct: 1,
+    options: ["Yes — the slope there is zero", "No — it's a local minimum; the left valley is deeper"] }),
+  further: () => ({ id: "further", type: "text", title: "Going further: momentum",
+    body: `<p>You've got the basics. Momentum lets the ball keep some speed from previous steps, so it can roll through small bumps instead of getting stuck.</p>` }),
+  analogy: () => ({ id: "analogy", type: "text", title: "An analogy",
+    body: `<p>You're walking down a mountain in fog and can only feel the slope under your feet. Feel, step downhill, repeat. The learning rate is your stride length.</p>` }),
+};
+const EXPLAIN = {
+  recap: "This is based on two things: what memory already knew about you, and your warm-up answers. It decides which sections you get.",
+  explain: "Another angle: the slope is a signpost. Its sign says which way is downhill, its size says how steep. Multiply by the learning rate and you get the step.",
+  viz: "The ball is the model's parameter. Each dot is one step. If the dots zig-zag across the valley, each step is overshooting the bottom.",
+  check1: "A big learning rate makes each step big. Near the bottom the slope is small, but a big multiplier still throws you past it.",
+  minima: "Think of a hiker who always walks downhill. They stop at the first dip they reach, even if a deeper valley is over the next ridge.",
+  check2: "At x ≈ 2.2 the slope is zero, so gradient descent stops. But the curve is lower around x ≈ −2.5 — that's the global minimum.",
+};
+
+/* ================= session state ================= */
+const S = {};
+function resetSession() {
+  Object.assign(S, { sid: (S.sid || 0) + 1, phase: "prompt", topic: "", answers: {}, skipped: false, lesson: null, version: 0,
+    changed: new Set(), messages: [], busy: false, drawer: false, toast: "", listeners: new Set() });
+  viz.path = [X0];
+}
+const emit = () => S.listeners.forEach(fn => fn());
+let redraw = () => {};
+function setPhase(p) { S.phase = p; S.listeners.clear(); viz.draws.clear(); redraw(); }
+
+function generate() {
+  const plan = planFor(S.answers), sid = S.sid;
+  S.lesson = { title: "Gradient descent", cells: [], pending: plan.length };
+  setPhase("lesson");
+  plan.forEach((step, i) => setTimeout(() => {
+    if (sid !== S.sid) return;
+    S.lesson.cells.push(CELLS[step.key](S.answers)); S.lesson.pending--;
+    if (!S.lesson.pending) { S.version = 1; S.toast = "Lesson ready · ✦ Tutor for changes or questions"; setTimeout(() => { if (sid === S.sid) { S.toast = ""; emit(); } }, 3500); }
+    emit();
+  }, 450 * (i + 1)));
+}
+
+/* ---------- drawer conversation: edits vs. questions ---------- */
+const EDITS = [
+  { re: /simpl|easier|\bplainer\b/i, summary: "Rewrote “The idea” in plainer language", apply: L => { replaceCell(L, CELLS.explainSimple()); return ["explain"]; } },
+  { re: /analog|metaphor/i, summary: "Added an analogy", apply: L => { insertAfter(L, "explain", CELLS.analogy()); return ["analogy"]; } },
+  { re: /harder|quiz|add .*question/i, summary: "Added a check on local minima", apply: L => { if (!L.cells.some(c => c.id === "check2")) L.cells.push(CELLS.check2()); return ["check2"]; } },
+  { re: /remove|drop|delete/i, summary: "Removed the recap", apply: L => { L.cells = L.cells.filter(c => c.id !== "recap"); return []; } },
+];
+const replaceCell = (L, cell) => { L.cells = L.cells.map(c => c.id === cell.id ? cell : c); };
+const insertAfter = (L, id, cell) => { if (L.cells.some(c => c.id === cell.id)) return; const i = L.cells.findIndex(c => c.id === id); L.cells.splice(i < 0 ? L.cells.length : i + 1, 0, cell); };
+
+function sendToTutor(text, cellId) {
+  if (!text.trim() || S.busy) return;
+  S.messages.push({ who: "user", text: esc(text) });
+  const edit = cellId ? null : EDITS.find(e => e.re.test(text)); // ? Explain is always a question
+  S.busy = true; S.messages.push({ who: "agent", working: true, text: edit ? "Editing the lesson…" : "Thinking…" }); emit();
+  const sid = S.sid;
+  setTimeout(() => {
+    if (sid !== S.sid) return;
+    S.messages.pop(); S.busy = false;
+    if (edit) {
+      const ids = edit.apply(S.lesson); S.version++; S.changed = new Set(ids);
+      S.messages.push({ who: "agent", kind: "edit", text: `${edit.summary}. <b>v${S.version}</b>` });
+    } else {
+      const id = cellId || (/bounce|oscillat|overshoot/i.test(text) ? "check1" : "viz");
+      S.messages.push({ who: "agent", kind: "answer", text: EXPLAIN[id] || EXPLAIN.viz, add: id });
+    }
+    emit();
+  }, 600);
+}
+function addAnswerToLesson(msg) {
+  const id = "more-" + msg.add + "-" + S.version;
+  insertAfter(S.lesson, msg.add, { id, type: "note", title: "Another way to see it", body: `<p>${msg.text}</p>` });
+  msg.added = true; S.version++; S.changed = new Set([id]); emit();
+}
+
+/* ================= viz ================= */
+const f = x => 0.05 * x ** 4 - 0.6 * x ** 2 + 0.3 * x;
+const df = x => 0.2 * x ** 3 - 1.2 * x + 0.3;
+const X0 = 3.6;
+const viz = { lr: 0.1, path: [X0], timer: null, draws: new Set() };
+function vizPhase() {
+  const p = viz.path, x = p.at(-1);
+  if (!isFinite(x) || Math.abs(x) > 4.5) return "diverged";
+  if (p.length < 2) return "ready";
+  if (Math.abs(df(x)) < 0.02) return "converged";
+  if (p.length >= 3 && (p.at(-1) - p.at(-2)) * (p.at(-2) - p.at(-3)) < 0) return "oscillating";
+  return "descending";
+}
+const vizNotify = () => viz.draws.forEach(d => d());
+function vizStep() { if (vizPhase() === "diverged") return; const x = viz.path.at(-1); viz.path.push(x - viz.lr * df(x)); vizNotify(); }
+function vizStop() { clearInterval(viz.timer); viz.timer = null; }
+function vizRun() { vizStop(); viz.timer = setInterval(() => { const ph = vizPhase(); if (ph === "converged" || ph === "diverged" || viz.path.length > 60) return vizStop(); vizStep(); }, 110); }
+function vizReset() { vizStop(); viz.path = [X0]; vizNotify(); }
+function mountViz(el) {
+  el.innerHTML = `<div class="viz"><canvas></canvas><div class="viz-controls">
+    <label>Learning rate <input type="range" min="0.01" max="1" step="0.01" value="${viz.lr}"></label><b class="lrv">${viz.lr.toFixed(2)}</b>
+    <button data-a="step">Step</button><button data-a="run">Run</button><button data-a="reset">Reset</button><span class="viz-status"></span></div></div>`;
+  const cv = el.querySelector("canvas"), ctx = cv.getContext("2d"), status = el.querySelector(".viz-status");
+  el.querySelector("input").oninput = e => { viz.lr = +e.target.value; el.querySelector(".lrv").textContent = viz.lr.toFixed(2); vizReset(); };
+  el.querySelector("[data-a=step]").onclick = () => { vizStop(); vizStep(); };
+  el.querySelector("[data-a=run]").onclick = vizRun;
+  el.querySelector("[data-a=reset]").onclick = vizReset;
+  const ro = new ResizeObserver(() => draw());
+  function draw() {
+    if (!cv.isConnected) { viz.draws.delete(draw); ro.disconnect(); return; }
+    const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight; if (!w || !h) return;
+    cv.width = w * dpr; cv.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const pad = 28, sx = x => pad + (x + 4.5) / 9 * (w - 2 * pad), sy = y => h - pad - (y + 3.2) / 13.2 * (h - 2 * pad);
+    ctx.fillStyle = "#fafafe"; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "#ebecf2"; for (let g = -4; g <= 4; g++) { ctx.beginPath(); ctx.moveTo(sx(g), 10); ctx.lineTo(sx(g), h - pad); ctx.stroke(); }
+    ctx.fillStyle = "#8a8fa0"; ctx.font = "11px ui-sans-serif, system-ui"; ctx.fillText("loss", 6, 14); ctx.fillText("parameter x →", w - 100, h - 8);
+    ctx.strokeStyle = "#1f2330"; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = 0; i <= 300; i++) { const x = -4.5 + 9 * i / 300; i ? ctx.lineTo(sx(x), sy(f(x))) : ctx.moveTo(sx(x), sy(f(x))); } ctx.stroke();
+    const pts = viz.path.filter(x => isFinite(x) && Math.abs(x) <= 4.5);
+    ctx.strokeStyle = "#4f46e5"; ctx.globalAlpha = .5; ctx.lineWidth = 1.5; ctx.beginPath();
+    pts.forEach((x, i) => i ? ctx.lineTo(sx(x), sy(f(x))) : ctx.moveTo(sx(x), sy(f(x)))); ctx.stroke(); ctx.globalAlpha = 1;
+    pts.forEach((x, i) => { ctx.fillStyle = "#4f46e5"; ctx.beginPath(); ctx.arc(sx(x), sy(f(x)), i === pts.length - 1 ? 7 : 3, 0, 7); ctx.fill(); });
+    if (vizPhase() === "diverged") { ctx.fillStyle = "#dc2626"; ctx.font = "600 14px ui-sans-serif, system-ui"; ctx.fillText("Diverged — the step jumped off the chart", pad + 8, pad + 8); }
+    status.textContent = `lr ${viz.lr.toFixed(2)} · ${viz.path.length - 1} steps · ${vizPhase()}`;
+  }
+  ro.observe(cv); viz.draws.add(draw);
+}
+
+/* ================= shared views ================= */
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const levelChip = l => `<span class="level ${l}">${{ known: "knows it", partial: "partly", unknown: "new" }[l]}</span>`;
+function resultsHtml() {
+  return `<table class="results">${assess(S.answers).map(r => `<tr><td>${r.concept}</td><td>${levelChip(r.level)}</td><td class="src">${r.source === "memory" ? "from memory" : S.skipped ? "guessed from memory" : "from test"}</td></tr>`).join("")}</table>`;
+}
+function memoryDeltaHtml() {
+  return assess(S.answers).filter(r => r.source === "test").map(r => `<span class="memdelta">memory: ${r.concept} → ${r.level}</span>`).join("");
+}
+const planHtml = () => `<ol class="plan">${planFor(S.answers).map(s => `<li>${CELLS[s.key](S.answers).title}<small>${s.why}</small></li>`).join("")}</ol>`;
+
+function promptView(root, { onSubmit }) {
+  root.innerHTML = `<div class="hero">
+    <h1>What do you want to learn?</h1>
+    <div class="mem">I remember: you're solid on derivatives and loss functions, still building intuition for learning rate.</div>
+    <form><input placeholder="e.g. ${STARTER}"><button class="btn">Start</button></form>
+    <div class="sugg"><button>${STARTER}</button><button>Explain backprop with a visual</button></div></div>`;
+  const input = root.querySelector("input"); input.focus();
+  const go = t => { if (!t.trim()) return; S.topic = t; onSubmit(); };
+  root.querySelector("form").onsubmit = e => { e.preventDefault(); go(input.value); };
+  root.querySelectorAll(".sugg button").forEach(b => b.onclick = () => go(b.textContent));
+}
+function skipTest() { S.answers = { ...MEMORY_GUESS }; S.skipped = true; }
+
+// Lesson page: doc + drawer. `top(docEl)` lets a variant render something above the sections (C's warm-up).
+function lessonPage(root, { top } = {}) {
+  root.innerHTML = `<div class="page-wrap">
+    <div class="page"><div class="bar"><b>◆ mivra</b><span style="color:#8a8fa0">${MEMORY.course}</span><span class="ver"></span><span class="grow"></span>
+      <span style="color:#8a8fa0;font-size:12px"><kbd>Ctrl</kbd> + <kbd>K</kbd></span><button class="tutor">✦ Tutor</button></div>
+      <div class="doc"><div class="crumbs">${MEMORY.course}</div><h1>Gradient descent</h1><div class="meta"></div><div class="top"></div><div class="cells"></div></div></div>
+    <div class="toast" style="display:none"></div>
+    <div class="drawer"><header><b>Tutor</b><span style="color:#8a8fa0;font-size:12px;margin-right:8px">ask a question, or ask for a change</span><button title="Close">×</button></header>
+      <div class="chat"><div class="msgs"></div><div class="sugg"></div><form><input placeholder="Ask, or ask for a change…"><button>Send</button></form></div></div></div>`;
+  const $ = s => root.querySelector(s);
+  const drawer = $(".drawer"), input = $(".chat input"), cellsEl = $(".cells");
+  const setDrawer = o => { S.drawer = o; drawer.classList.toggle("open", o); if (o) input.focus(); };
+  const ask = text => { setDrawer(true); input.value = text; input.focus(); };
+  $(".tutor").onclick = () => setDrawer(!S.drawer);
+  $(".drawer header button").onclick = () => setDrawer(false);
+  $(".chat form").onsubmit = e => { e.preventDefault(); const v = input.value; input.value = ""; sendToTutor(v, input.dataset.cell); delete input.dataset.cell; };
+  root._key = e => { if (e.ctrlKey && e.key.toLowerCase() === "k") { e.preventDefault(); setDrawer(!S.drawer); } };
+  if (top) top($(".top"));
+
+  let shown = "";
+  const renderCells = () => {
+    const L = S.lesson;
+    $(".ver").textContent = S.version ? `v${S.version}` : ""; $(".ver").style.display = S.version ? "" : "none";
+    $(".meta").textContent = !L ? "Waiting for the warm-up" : L.pending ? "Generating — tailored to your answers…" : `v${S.version} · tailored to your warm-up`;
+    const t = $(".toast"); t.textContent = S.toast; t.style.display = S.toast ? "" : "none";
+    if (!L) { cellsEl.innerHTML = planFor(MEMORY_GUESS).map(() => `<div class="pending">Section will be tailored to your answers</div>`).join(""); return; }
+    const sig = S.version + "|" + L.cells.map(c => c.id + (c.answer ?? "")).join(",") + "|" + L.pending;
+    if (sig === shown) return; shown = sig;
+    cellsEl.innerHTML = L.cells.map(cellHtml).join("") + Array.from({ length: L.pending }, () => `<div class="pending">Writing…</div>`).join("");
+    cellsEl.querySelectorAll(".cell").forEach(node => {
+      const c = L.cells.find(c => c.id === node.dataset.id);
+      node.querySelector("[data-act=change]").onclick = () => ask(`Change “${c.title}”: `);
+      node.querySelector("[data-act=explain]").onclick = () => { ask(`Explain “${c.title}” another way`); input.dataset.cell = c.id; };
+      if (c.type === "viz") mountViz(node.querySelector(".vizbox"));
+      if (c.type === "check") node.querySelectorAll(".check button").forEach((b, i) => b.onclick = () => { c.answer = i; renderCells(); });
+    });
+  };
+  const renderChat = () => {
+    const msgs = $(".chat .msgs");
+    msgs.innerHTML = S.messages.length ? S.messages.map((m, i) => `<div class="msg ${m.who} ${m.working ? "working" : ""}">${m.kind ? `<span class="chip ${m.kind}">${m.kind === "edit" ? "changed the lesson" : "answer · lesson unchanged"}</span><br>` : ""}${m.text}${m.kind === "answer" ? `<br><button class="add" data-i="${i}" ${m.added ? "disabled" : ""}>${m.added ? "✓ Added to lesson" : "+ Add to lesson"}</button>` : ""}</div>`).join("")
+      : `<div style="color:#8a8fa0;font-size:13px">Questions don't change the lesson. Ask for a change (“make it simpler”, “add an analogy”) and it will update.</div>`;
+    msgs.querySelectorAll(".add").forEach(b => b.onclick = () => addAnswerToLesson(S.messages[+b.dataset.i]));
+    msgs.scrollTop = 1e6;
+    const sugg = $(".chat .sugg");
+    sugg.innerHTML = S.busy || !S.version ? "" : ["Why does it bounce at high learning rates?", "Make the explanation simpler", "Add an analogy"].map(s => `<button>${s}</button>`).join("");
+    sugg.querySelectorAll("button").forEach(b => b.onclick = () => sendToTutor(b.textContent));
+  };
+  S.listeners.add(renderCells); S.listeners.add(renderChat);
+  renderCells(); renderChat(); setDrawer(S.drawer);
+}
+function cellHtml(c) {
+  const ch = S.changed.has(c.id) && S.version > 1;
+  const tag = `<div class="ctag"><span>${{ recap: "from memory + warm-up", text: "explain", viz: "interactive", check: "check", note: "added from tutor" }[c.type]}</span>${ch ? `<span class="upd">● updated in v${S.version}</span>` : ""}</div>`;
+  const acts = `<div class="acts"><button data-act="explain">? Explain</button><button data-act="change">✎ Change</button></div>`;
+  let inner = "";
+  if (c.type === "recap") inner = `<div class="box">${c.body}</div>`;
+  if (c.type === "text" || c.type === "note") inner = `<h3>${c.title}</h3>${c.body}`;
+  if (c.type === "viz") inner = `<h3>${c.title}</h3>${c.body}<div class="vizbox"></div>`;
+  if (c.type === "check") {
+    const a = c.answer, ok = a === c.correct;
+    inner = `<div class="check"><div class="q">${c.q}</div>${c.options.map((o, i) => `<button class="${a === i ? (ok ? "right" : "wrong") : ""}">${o}</button>`).join("")}
+      ${a == null ? "" : ok ? `<div>Correct.</div>` : `<div>Not quite — try it on the chart, then look again.</div>`}</div>`;
+  }
+  return `<div class="cell ${c.type} ${ch ? "changed" : ""}" data-id="${c.id}">${tag}${acts}${inner}</div>`;
+}
+
+/* ================= Variant A: Stepper ================= */
+function VariantA(root) {
+  let i = 0;
+  redraw = () => {
+    root._key = null;
+    if (S.phase === "prompt") return promptView(root, { onSubmit: () => setPhase("test") });
+    if (S.phase === "lesson") return lessonPage(root);
+    if (S.phase === "plan") {
+      root.innerHTML = `<div class="stepper"><div class="card">
+        <div class="top">Placement · done</div>
+        <h2>Here's where you are</h2><div style="color:#6b7080">${S.skipped ? "Test skipped — this is my best guess from memory." : "Based on your answers and what I already remember."}</div>
+        <h4>Knowledge</h4>${resultsHtml()}
+        <div style="margin-top:8px">${S.skipped ? "" : memoryDeltaHtml()}</div>
+        <h4>Lesson plan</h4>${planHtml()}
+        <div class="foot"><button class="btn ghost" data-a="redo">Retake test</button><button class="btn" data-a="gen">Generate lesson →</button></div></div></div>`;
+      root.querySelector("[data-a=gen]").onclick = generate;
+      root.querySelector("[data-a=redo]").onclick = () => { S.answers = {}; S.skipped = false; i = 0; setPhase("test"); };
+      return;
+    }
+    // test
+    const q = ASKED[i], a = S.answers[q.id];
+    root.innerHTML = `<div class="stepper"><div class="card">
+      <div class="top">Quick placement · ${i + 1} of ${ASKED.length}
+        <div class="dots">${QUESTIONS.map(x => `<i class="${x.fromMemory ? "mem" : S.answers[x.id] != null ? "done" : ""}" title="${x.concept}"></i>`).join("")}</div></div>
+      ${i === 0 ? `<div class="skipped" style="margin-bottom:18px">✓ Skipped <b>derivatives</b> — memory says you know them (90%).</div>` : ""}
+      <div class="concept">${q.concept}</div><div class="q">${q.q}</div>
+      ${q.options.map((o, k) => `<button class="opt ${a === k ? "sel" : ""}" data-k="${k}">${o}</button>`).join("")}
+      <button class="opt unsure ${a === UNSURE ? "sel" : ""}" data-k="${UNSURE}">I'm not sure</button>
+      <div class="foot"><button class="link" data-a="skip">Skip test — use memory only</button>
+        <span>${i ? `<button class="btn ghost" data-a="back">Back</button>` : ""}<button class="btn" data-a="next" ${a == null ? "disabled" : ""}>${i === ASKED.length - 1 ? "See results" : "Next"}</button></span></div></div></div>`;
+    root.querySelectorAll(".opt").forEach(b => b.onclick = () => { S.answers[q.id] = +b.dataset.k; redraw(); });
+    root.querySelector("[data-a=next]").onclick = () => { if (i < ASKED.length - 1) { i++; redraw(); } else setPhase("plan"); };
+    const back = root.querySelector("[data-a=back]"); if (back) back.onclick = () => { i--; redraw(); };
+    root.querySelector("[data-a=skip]").onclick = () => { skipTest(); setPhase("plan"); };
+  };
+  redraw();
+}
+VariantA.label = "Stepper · dedicated test";
+
+/* ================= Variant B: Interview ================= */
+function VariantB(root) {
+  let log = [];
+  const nextQ = () => ASKED.find(q => !(q.id in S.answers));
+  redraw = () => {
+    root._key = null;
+    if (S.phase === "prompt") return promptView(root, { onSubmit: () => {
+      log = [{ who: "user", text: esc(S.topic) },
+        { who: "agent", text: `Happy to. Before I write the lesson, a few quick questions so I don't waste your time on what you already know.<br><br><span class="skipped" style="display:inline-block">✓ I'll skip derivatives — memory says you know them.</span>` }];
+      ask(); setPhase("test");
+    } });
+    if (S.phase === "lesson") return lessonPage(root);
+    root.innerHTML = `<div class="interview"><div class="col">${log.map(m => `<div class="msg ${m.who}">${m.text}</div>`).join("")}<div class="choices"></div></div></div>`;
+    const ch = root.querySelector(".choices"), q = nextQ();
+    if (S.phase === "test" && q) {
+      ch.innerHTML = q.options.map((o, k) => `<button data-k="${k}">${o}</button>`).join("") + `<button class="unsure" data-k="${UNSURE}">Not sure</button><button class="unsure" data-k="skip">Skip the questions</button>`;
+      ch.querySelectorAll("button").forEach(b => b.onclick = () => {
+        if (b.dataset.k === "skip") { skipTest(); log.push({ who: "user", text: "Skip the questions" }); return finish(); }
+        const k = +b.dataset.k; S.answers[q.id] = k;
+        log.push({ who: "user", text: k === UNSURE ? "Not sure" : q.options[k] });
+        nextQ() ? (ask(), redraw()) : finish();
+      });
+    }
+    if (S.phase === "plan") {
+      ch.innerHTML = `<button data-a="gen" style="background:#4f46e5;color:#fff;border-color:#4f46e5">Sounds good — write the lesson</button><button class="unsure" data-a="redo">Ask me again</button>`;
+      ch.querySelector("[data-a=gen]").onclick = () => { log.push({ who: "user", text: "Sounds good — write the lesson" }); generate(); };
+      ch.querySelector("[data-a=redo]").onclick = () => { S.answers = {}; S.skipped = false; log.push({ who: "user", text: "Ask me again" }); ask(); setPhase("test"); };
+    }
+    root.querySelector(".interview").scrollTop = 1e6;
+  };
+  const ask = () => { const q = nextQ(); log.push({ who: "agent", text: `<div style="font-size:12px;color:#4f46e5;text-transform:uppercase;letter-spacing:.06em">${q.concept}</div>${q.q}` }); };
+  const finish = () => {
+    log.push({ who: "agent", text: `${S.skipped ? "No problem — going from memory." : "Thanks, that's enough."} Here's where you are:<div style="margin:10px 0">${resultsHtml()}</div>${S.skipped ? "" : memoryDeltaHtml()}<div style="margin-top:12px"><b>My plan:</b></div>${planHtml()}` });
+    setPhase("plan");
+  };
+  redraw();
+}
+VariantB.label = "Interview · tutor asks";
+
+/* ================= Variant C: Warm-up in the lesson ================= */
+function VariantC(root) {
+  let collapsed = false;
+  redraw = () => {
+    root._key = null;
+    if (S.phase === "prompt") return promptView(root, { onSubmit: () => setPhase("test") });
+    lessonPage(root, { top: el => {
+      if (S.lesson) {
+        el.innerHTML = `<div class="warmup-done">✓ Warm-up ${S.skipped ? "skipped — using memory" : "done"} · ${assess(S.answers).filter(r => r.source === "test").map(r => `${r.concept} ${levelChip(r.level)}`).join(" ")}
+          <span style="flex:1"></span><button class="link">${collapsed ? "hide" : "details"}</button></div>${collapsed ? `<div style="padding:12px 4px">${resultsHtml()}<div style="margin-top:8px">${memoryDeltaHtml()}</div></div>` : ""}`;
+        el.querySelector(".link").onclick = () => { collapsed = !collapsed; redraw(); };
+        return;
+      }
+      el.innerHTML = `<div class="warmup">
+        <div style="font-size:12px;color:#4f46e5;text-transform:uppercase;letter-spacing:.06em">Warm-up · ${ASKED.length} questions · ~1 min</div>
+        <div style="color:#5b6070;margin-top:4px">Your answers decide what this lesson covers.</div>
+        <div class="skipped" style="margin-top:12px">✓ Skipped derivatives — memory says you know them.</div>
+        ${ASKED.map(q => `<div class="wq">${q.q}</div><div class="opts">${q.options.map((o, k) => `<button class="opt ${S.answers[q.id] === k ? "sel" : ""}" data-q="${q.id}" data-k="${k}">${o}</button>`).join("")}<button class="opt unsure ${S.answers[q.id] === UNSURE ? "sel" : ""}" data-q="${q.id}" data-k="${UNSURE}">Not sure</button></div>`).join("")}
+        <div class="foot"><button class="btn" ${ASKED.every(q => q.id in S.answers) ? "" : "disabled"}>Build my lesson</button><button class="link">Skip — use memory only</button></div></div>`;
+      el.querySelectorAll(".opt").forEach(b => b.onclick = () => { S.answers[b.dataset.q] = +b.dataset.k; const sc = root.querySelector(".page").scrollTop; redraw(); root.querySelector(".page").scrollTop = sc; });
+      el.querySelector(".btn").onclick = generate;
+      el.querySelector(".link").onclick = () => { skipTest(); generate(); };
+    } });
+  };
+  redraw();
+}
+VariantC.label = "Warm-up · inside the lesson";
+
+/* ================= switcher ================= */
+const VARIANTS = { A: VariantA, B: VariantB, C: VariantC };
+const KEYS = Object.keys(VARIANTS);
+const current = () => { const v = new URLSearchParams(location.search).get("variant"); return KEYS.includes(v) ? v : "A"; };
+function render() {
+  vizStop(); resetSession(); viz.draws.clear();
+  const k = current(), app = document.getElementById("app");
+  app.innerHTML = ""; app._key = null; VARIANTS[k](app);
+  document.getElementById("sw-label").innerHTML = `<small>PROTOTYPE</small>${k} (${VARIANTS[k].label})`;
+}
+function go(d) {
+  const k = KEYS[(KEYS.indexOf(current()) + d + KEYS.length) % KEYS.length];
+  const u = new URL(location.href); u.searchParams.set("variant", k); history.replaceState(null, "", u); render();
+}
+document.getElementById("sw-prev").onclick = () => go(-1);
+document.getElementById("sw-next").onclick = () => go(1);
+addEventListener("keydown", e => {
+  const app = document.getElementById("app"); if (app._key) app._key(e); if (e.defaultPrevented) return;
+  if (e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
+  if (e.key === "ArrowLeft") go(-1); if (e.key === "ArrowRight") go(1);
+});
+render();
+</script>
+</body>
+</html>

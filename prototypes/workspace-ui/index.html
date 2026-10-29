@@ -1,0 +1,505 @@
+<!doctype html>
+<!--
+  PROTOTYPE — throwaway. Do not build on this file.
+
+  Question: what should mivra's main learning workspace look like?
+  Plan: four structurally different variants of the core screen (agent conversation +
+  interactive visualization + learning memory + agent context), switchable via `?variant=A|B|C|D`
+  and the floating bottom bar (or ← / → keys). All data is in-memory mock data.
+
+    A  Studio    — three-pane, chat-first (closest to an OpenCode/IDE layout)
+    B  Canvas    — visualization-first, the agent annotates the canvas
+    C  Notebook  — a living lesson document; the agent writes cells
+    D  Terminal  — keyboard-driven TUI, slash commands
+
+  Run: open this file in a browser (double-click), or
+       python3 -m http.server -d prototypes/workspace-ui 8000  →  http://localhost:8000/?variant=A
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mivra — workspace prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2330; background: #f6f6f9; }
+  button { font: inherit; cursor: pointer; }
+  input, textarea { font: inherit; }
+  #app { height: 100%; }
+
+  /* ---------- shared viz ---------- */
+  .viz { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+  .viz canvas { width: 100%; flex: 1; min-height: 160px; display: block; border-radius: 8px; }
+  .viz-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+  .viz-controls input[type=range] { width: 140px; }
+  .viz-controls button { border: 1px solid #d6d8e1; background: #fff; border-radius: 6px; padding: 3px 10px; }
+  .viz-status { margin-left: auto; color: #5b6070; font-variant-numeric: tabular-nums; }
+  .viz.term canvas { border-radius: 0; }
+  .viz.term .viz-controls { font-family: ui-monospace, monospace; color: #a3e6b5; }
+  .viz.term .viz-controls button { background: #0b0f0b; border-color: #2f5c3b; color: #a3e6b5; border-radius: 0; }
+  .viz.term .viz-status { color: #6fbf87; }
+
+  .mastery { height: 6px; background: #e6e7ee; border-radius: 3px; overflow: hidden; }
+  .mastery > i { display: block; height: 100%; background: #4f46e5; }
+
+  /* ---------- switcher ---------- */
+  #proto-switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 9999;
+    display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px;
+    background: #111; color: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.35); font: 13px ui-sans-serif, system-ui, sans-serif;
+    border: 2px solid #facc15; }
+  #proto-switcher button { background: transparent; color: #fff; border: 0; width: 30px; height: 30px; border-radius: 999px; font-size: 16px; }
+  #proto-switcher button:hover { background: #333; }
+  #proto-switcher span { padding: 0 10px; min-width: 190px; text-align: center; }
+  #proto-switcher small { color: #facc15; font-weight: 600; margin-right: 6px; }
+
+  /* ---------- A: Studio ---------- */
+  .A { display: grid; grid-template-columns: 250px 1fr 420px; height: 100%; }
+  .A aside, .A main, .A section { min-height: 0; overflow: auto; }
+  .A aside { background: #fff; border-right: 1px solid #e3e4ea; padding: 16px; }
+  .A .brand { font-weight: 700; letter-spacing: .02em; margin-bottom: 16px; }
+  .A h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8a8fa0; margin: 18px 0 8px; }
+  .A .sess { padding: 6px 8px; border-radius: 6px; color: #3a3f4f; }
+  .A .sess.on { background: #eef0ff; color: #3730a3; font-weight: 600; }
+  .A .concept { margin-bottom: 10px; font-size: 13px; }
+  .A .concept div:first-child { display: flex; justify-content: space-between; }
+  .A .due { font-size: 13px; padding: 6px 8px; background: #fff7e6; border-radius: 6px; margin-bottom: 6px; }
+  .A main { display: flex; flex-direction: column; background: #f6f6f9; }
+  .A .msgs { flex: 1; overflow: auto; padding: 24px 32px; display: flex; flex-direction: column; gap: 14px; }
+  .A .msg { max-width: 640px; }
+  .A .msg.user { align-self: flex-end; background: #4f46e5; color: #fff; padding: 10px 14px; border-radius: 14px 14px 2px 14px; }
+  .A .msg.agent { background: #fff; padding: 12px 16px; border-radius: 14px 14px 14px 2px; border: 1px solid #e3e4ea; }
+  .A .chip { display: inline-block; font-size: 12px; background: #eef0ff; color: #3730a3; border-radius: 999px; padding: 1px 8px; margin-right: 4px; }
+  .A .compose { padding: 12px 32px 72px; }
+  .A .compose form { display: flex; gap: 8px; background: #fff; border: 1px solid #d6d8e1; border-radius: 12px; padding: 8px; }
+  .A .compose input { flex: 1; border: 0; outline: 0; padding: 4px 8px; }
+  .A .compose button { border: 0; background: #4f46e5; color: #fff; border-radius: 8px; padding: 4px 14px; }
+  .A section { background: #fff; border-left: 1px solid #e3e4ea; display: flex; flex-direction: column; }
+  .A .tabs { display: flex; border-bottom: 1px solid #e3e4ea; }
+  .A .tabs button { flex: 1; border: 0; background: none; padding: 12px; color: #6b7080; border-bottom: 2px solid transparent; }
+  .A .tabs button.on { color: #1f2330; border-bottom-color: #4f46e5; font-weight: 600; }
+  .A .pane { flex: 1; padding: 16px; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+  .A .ctx-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px dashed #e3e4ea; font-size: 13px; }
+  .A .ctx-row b { font-weight: 600; }
+  .A .ctx-row span { color: #8a8fa0; font-variant-numeric: tabular-nums; }
+
+  /* ---------- B: Canvas ---------- */
+  .B { height: 100%; background: #fbfaf6; position: relative; overflow: hidden; }
+  .B .stage { position: absolute; inset: 70px 300px 110px 220px; }
+  .B .topline { position: absolute; top: 18px; left: 220px; right: 300px; display: flex; align-items: baseline; gap: 12px; }
+  .B .topline h1 { margin: 0; font: 600 24px/1.2 Georgia, serif; }
+  .B .topline span { color: #8a8170; }
+  .B .map { position: absolute; left: 0; top: 0; bottom: 0; width: 200px; padding: 20px 16px; border-right: 1px solid #ebe6d9; }
+  .B .map h4, .B .notes h4 { margin: 0 0 12px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8a8170; }
+  .B .node { display: block; width: 100%; text-align: left; border: 1px solid #e0d9c6; background: #fff; border-radius: 10px; padding: 8px 10px; margin-bottom: 18px; position: relative; }
+  .B .node:not(:last-child)::after { content: ""; position: absolute; left: 20px; bottom: -19px; height: 18px; border-left: 2px dotted #c9bfa5; }
+  .B .node.cur { border-color: #c2410c; box-shadow: 0 0 0 3px #fde3d3; }
+  .B .node small { display: block; color: #8a8170; }
+  .B .notes { position: absolute; right: 0; top: 0; bottom: 0; width: 280px; padding: 20px 16px 90px; border-left: 1px solid #ebe6d9; overflow: auto; }
+  .B .note { background: #fff; border: 1px solid #ebe6d9; border-left: 3px solid #c2410c; border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; font-size: 13px; }
+  .B .note.mem { border-left-color: #0f766e; }
+  .B .note .who { font-size: 11px; color: #8a8170; text-transform: uppercase; letter-spacing: .06em; }
+  .B .callout { position: absolute; background: #c2410c; color: #fff; font-size: 13px; padding: 8px 12px; border-radius: 10px; max-width: 240px; box-shadow: 0 4px 14px rgba(194,65,12,.25); pointer-events: none; }
+  .B .callout::after { content: ""; position: absolute; left: 18px; bottom: -6px; width: 12px; height: 12px; background: #c2410c; transform: rotate(45deg); }
+  .B .bar { position: absolute; left: 220px; right: 300px; bottom: 64px; display: flex; gap: 8px; }
+  .B .bar input { flex: 1; border: 1px solid #e0d9c6; background: #fff; border-radius: 999px; padding: 10px 18px; outline: 0; }
+  .B .bar button { border: 0; background: #1f2330; color: #fff; border-radius: 999px; padding: 0 16px; }
+  .B .viz-controls button { border-color: #e0d9c6; }
+
+  /* ---------- C: Notebook ---------- */
+  .C { height: 100%; overflow: auto; background: #fff; }
+  .C .doc { max-width: 760px; margin: 0 auto; padding: 48px 24px 120px; position: relative; }
+  .C .crumbs { color: #8a8fa0; font-size: 13px; }
+  .C h1 { font: 700 34px/1.15 Georgia, serif; margin: 6px 0 4px; }
+  .C .meta { color: #8a8fa0; font-size: 13px; margin-bottom: 28px; }
+  .C .cell { position: relative; margin: 18px 0; }
+  .C .cell .tag { position: absolute; left: -118px; top: 2px; width: 100px; text-align: right; font-size: 11px; color: #a0a4b2; text-transform: uppercase; letter-spacing: .06em; }
+  .C .recap { background: #f0fdf9; border: 1px solid #c7efe3; border-radius: 10px; padding: 14px 16px; }
+  .C .recap b { color: #0f766e; }
+  .C p { font: 17px/1.65 Georgia, serif; margin: 0 0 12px; }
+  .C .vizcell { border: 1px solid #e3e4ea; border-radius: 12px; padding: 12px; height: 340px; }
+  .C .check { border: 1px solid #e3e4ea; border-radius: 12px; padding: 16px; }
+  .C .check .q { font-weight: 600; margin-bottom: 10px; }
+  .C .check button { display: block; width: 100%; text-align: left; border: 1px solid #d6d8e1; background: #fff; border-radius: 8px; padding: 8px 12px; margin-bottom: 6px; }
+  .C .check button.right { border-color: #16a34a; background: #f0fdf4; }
+  .C .check button.wrong { border-color: #dc2626; background: #fef2f2; }
+  .C .fb { font-size: 13px; margin-top: 8px; }
+  .C .memdelta { display: inline-block; background: #eef0ff; color: #3730a3; border-radius: 6px; padding: 2px 8px; font-size: 12px; margin-top: 6px; }
+  .C .agentcell { border-left: 3px solid #4f46e5; padding: 4px 0 4px 16px; }
+  .C .agentcell p { font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; }
+  .C .ask { display: flex; gap: 8px; border: 1px dashed #c8cad6; border-radius: 10px; padding: 8px; }
+  .C .ask input { flex: 1; border: 0; outline: 0; padding: 4px 8px; }
+  .C .ask button { border: 0; background: #1f2330; color: #fff; border-radius: 6px; padding: 4px 12px; }
+  .C .margin { position: fixed; right: 24px; top: 48px; width: 220px; font-size: 13px; }
+  .C .margin h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8a8fa0; margin: 0 0 8px; }
+  .C .margin .concept { margin-bottom: 10px; }
+  @media (max-width: 1300px) { .C .margin { display: none; } .C .cell .tag { display: none; } }
+
+  /* ---------- D: Terminal ---------- */
+  .D { height: 100%; background: #0b0f0b; color: #c8f5d3; font: 13px/1.5 ui-monospace, "JetBrains Mono", Menlo, monospace; display: grid; grid-template-rows: auto 1fr auto auto; }
+  .D .hdr { display: flex; gap: 16px; padding: 6px 12px; background: #13261a; color: #6fbf87; }
+  .D .hdr b { color: #c8f5d3; }
+  .D .body { display: grid; grid-template-columns: 1fr 1fr; min-height: 0; }
+  .D .log, .D .side { padding: 12px; overflow: auto; min-height: 0; }
+  .D .log { border-right: 1px solid #1f3b28; }
+  .D .side { display: grid; grid-template-rows: 1fr auto; gap: 12px; }
+  .D .line { white-space: pre-wrap; }
+  .D .you { color: #facc15; }
+  .D .sys { color: #6fbf87; }
+  .D .dim { color: #4b7a5a; }
+  .D .box { border: 1px solid #2f5c3b; padding: 8px; position: relative; }
+  .D .box > label { position: absolute; top: -10px; left: 8px; background: #0b0f0b; padding: 0 4px; color: #6fbf87; }
+  .D .prompt { display: flex; gap: 8px; padding: 8px 12px; border-top: 1px solid #1f3b28; }
+  .D .prompt input { flex: 1; background: transparent; border: 0; outline: 0; color: #c8f5d3; font: inherit; }
+  .D .keys { padding: 4px 12px 60px; color: #4b7a5a; }
+  .D .keys b { color: #0b0f0b; background: #6fbf87; padding: 0 4px; margin-right: 4px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="proto-switcher">
+  <button id="sw-prev" title="Previous variant (←)">‹</button>
+  <span id="sw-label"></span>
+  <button id="sw-next" title="Next variant (→)">›</button>
+</div>
+
+<script>
+/* ================= mock data ================= */
+const DATA = {
+  course: "ML foundations",
+  goal: "Understand how neural nets are trained, by December",
+  lesson: "Gradient descent",
+  sessions: ["Gradient descent", "Derivatives refresher", "What is a loss function?", "Vectors & dot products"],
+  concepts: [
+    { name: "Derivative", mastery: 0.9, status: "solid" },
+    { name: "Loss function", mastery: 0.75, status: "solid" },
+    { name: "Gradient descent", mastery: 0.45, status: "learning" },
+    { name: "Learning rate", mastery: 0.35, status: "learning" },
+    { name: "Local minima", mastery: 0.1, status: "new" },
+    { name: "Momentum", mastery: 0, status: "not started" },
+  ],
+  misconceptions: ["A bigger learning rate always reaches the minimum faster (seen Oct 24)"],
+  reviews: [{ name: "Chain rule", due: "today" }, { name: "Loss function", due: "in 2 days" }],
+  messages: [
+    { who: "agent", text: "Welcome back. Last session you said a bigger learning rate is always faster. Let's test that on a real loss curve — I've loaded one on the right." },
+    { who: "user", text: "ok. what's the ball?" },
+    { who: "agent", text: "The ball is the model's current parameter <b>x</b>. Each <i>step</i> moves it downhill by <code>learning rate × slope</code>. Try a learning rate of 0.1, then 0.9, and press Run each time." },
+  ],
+};
+const REPLIES = [
+  s => `I can see your chart: ${s}. Notice how the step size depends on the slope, not just the learning rate.`,
+  s => `Right now: ${s}. Try nudging the learning rate up until it starts bouncing between the walls — that bouncing is called oscillation.`,
+  s => `Good question. With ${s}, which valley do you think it ends in if you start further left?`,
+];
+let replyIdx = 0;
+
+/* ================= shared viz: gradient descent on a 1-D loss ================= */
+const f = x => 0.05 * x ** 4 - 0.6 * x ** 2 + 0.3 * x;
+const df = x => 0.2 * x ** 3 - 1.2 * x + 0.3;
+const X0 = 3.6;
+const viz = { lr: 0.1, path: [X0], timer: null, listeners: new Set() };
+
+function vizPhase() {
+  const p = viz.path, x = p[p.length - 1];
+  if (!isFinite(x) || Math.abs(x) > 4.5) return "diverged";
+  if (p.length < 2) return "ready";
+  if (Math.abs(df(x)) < 0.02) return "converged";
+  if (p.length >= 3) {
+    const a = p[p.length - 1] - p[p.length - 2], b = p[p.length - 2] - p[p.length - 3];
+    if (a * b < 0) return "oscillating";
+  }
+  return "descending";
+}
+function vizSummary() {
+  const x = viz.path[viz.path.length - 1];
+  return `learning rate ${viz.lr.toFixed(2)} · ${viz.path.length - 1} steps · ${vizPhase()}${isFinite(x) && Math.abs(x) <= 4.5 ? ` · x = ${x.toFixed(2)}` : ""}`;
+}
+function vizNotify() { viz.listeners.forEach(fn => fn()); }
+function vizStep() { const x = viz.path[viz.path.length - 1]; if (vizPhase() === "diverged") return; viz.path.push(x - viz.lr * df(x)); vizNotify(); }
+function vizStop() { clearInterval(viz.timer); viz.timer = null; }
+function vizRun() { vizStop(); viz.timer = setInterval(() => { const ph = vizPhase(); if (ph === "converged" || ph === "diverged" || viz.path.length > 60) return vizStop(); vizStep(); }, 110); }
+function vizReset() { vizStop(); viz.path = [X0]; vizNotify(); }
+
+function mountViz(el, { theme = "light" } = {}) {
+  const T = {
+    light: { bg: "#fafafe", curve: "#1f2330", grid: "#ebecf2", path: "#4f46e5", ball: "#4f46e5", text: "#8a8fa0" },
+    paper: { bg: "#fffdf7", curve: "#3d3528", grid: "#efe9da", path: "#c2410c", ball: "#c2410c", text: "#8a8170" },
+    term:  { bg: "#0b0f0b", curve: "#6fbf87", grid: "#15281b", path: "#facc15", ball: "#facc15", text: "#4b7a5a" },
+  }[theme];
+  el.innerHTML = `<div class="viz ${theme}">
+    <canvas></canvas>
+    <div class="viz-controls">
+      <label>Learning rate <input type="range" min="0.01" max="1" step="0.01" value="${viz.lr}"></label>
+      <b class="lrv">${viz.lr.toFixed(2)}</b>
+      <button data-a="step">Step</button><button data-a="run">Run</button><button data-a="reset">Reset</button>
+      <span class="viz-status"></span>
+    </div></div>`;
+  const cv = el.querySelector("canvas"), ctx = cv.getContext("2d");
+  const status = el.querySelector(".viz-status"), lrv = el.querySelector(".lrv");
+  el.querySelector("input").oninput = e => { viz.lr = +e.target.value; lrv.textContent = viz.lr.toFixed(2); vizReset(); };
+  el.querySelector('[data-a=step]').onclick = () => { vizStop(); vizStep(); };
+  el.querySelector('[data-a=run]').onclick = vizRun;
+  el.querySelector('[data-a=reset]').onclick = vizReset;
+
+  function draw() {
+    const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+    if (!w || !h) return;
+    cv.width = w * dpr; cv.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const xmin = -4.5, xmax = 4.5, ymin = -3.2, ymax = 10, pad = 28;
+    const sx = x => pad + (x - xmin) / (xmax - xmin) * (w - 2 * pad);
+    const sy = y => h - pad - (y - ymin) / (ymax - ymin) * (h - 2 * pad);
+    ctx.fillStyle = T.bg; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = T.grid; ctx.lineWidth = 1;
+    for (let gx = -4; gx <= 4; gx++) { ctx.beginPath(); ctx.moveTo(sx(gx), pad / 2); ctx.lineTo(sx(gx), h - pad); ctx.stroke(); }
+    ctx.fillStyle = T.text; ctx.font = "11px ui-sans-serif, system-ui"; ctx.fillText("loss", 6, 14); ctx.fillText("parameter x →", w - 100, h - 8);
+    ctx.strokeStyle = T.curve; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = 0; i <= 300; i++) { const x = xmin + (xmax - xmin) * i / 300; i ? ctx.lineTo(sx(x), sy(f(x))) : ctx.moveTo(sx(x), sy(f(x))); }
+    ctx.stroke();
+    const pts = viz.path.filter(x => isFinite(x) && Math.abs(x) <= 4.5);
+    ctx.strokeStyle = T.path; ctx.globalAlpha = .55; ctx.lineWidth = 1.5; ctx.beginPath();
+    pts.forEach((x, i) => i ? ctx.lineTo(sx(x), sy(f(x))) : ctx.moveTo(sx(x), sy(f(x)))); ctx.stroke();
+    ctx.globalAlpha = 1;
+    pts.forEach((x, i) => { ctx.fillStyle = T.path; ctx.beginPath(); ctx.arc(sx(x), sy(f(x)), i === pts.length - 1 ? 7 : 3, 0, 7); ctx.fill(); });
+    if (vizPhase() === "diverged") { ctx.fillStyle = "#dc2626"; ctx.font = "600 14px ui-sans-serif, system-ui"; ctx.fillText("Diverged — the step jumped off the chart", pad + 8, pad + 8); }
+    status.textContent = vizSummary();
+  }
+  const ro = new ResizeObserver(draw); ro.observe(cv);
+  viz.listeners.add(draw);
+  return { sx: null };
+}
+
+/* ================= helpers ================= */
+const esc = s => s.replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const masteryBar = m => `<div class="mastery"><i style="width:${Math.round(m * 100)}%"></i></div>`;
+function contextItems() {
+  return [
+    ["System: tutor persona + pedagogy rules", 820],
+    [`Learner goal: “${DATA.goal}”`, 40],
+    [`Current lesson: ${DATA.lesson}`, 310],
+    [`Memory: mastery of ${DATA.concepts.length} related concepts`, 160],
+    [`Memory: misconception — “${DATA.misconceptions[0].split(" (")[0]}”`, 30],
+    [`Live visualization state: ${vizSummary()}`, 45],
+    [`Conversation (${DATA.messages.length} messages)`, DATA.messages.length * 60],
+  ];
+}
+
+/* ================= Variant A: Studio ================= */
+function VariantA(root) {
+  let tab = "visual";
+  root.innerHTML = `<div class="A">
+    <aside>
+      <div class="brand">◆ mivra</div>
+      <h4>${DATA.course}</h4>
+      ${DATA.sessions.map((s, i) => `<div class="sess ${i ? "" : "on"}">${s}</div>`).join("")}
+      <h4>What you know</h4>
+      ${DATA.concepts.map(c => `<div class="concept"><div><span>${c.name}</span><span style="color:#8a8fa0">${c.status}</span></div>${masteryBar(c.mastery)}</div>`).join("")}
+      <h4>Reviews due</h4>
+      ${DATA.reviews.map(r => `<div class="due">↻ ${r.name} <span style="color:#a16207">· ${r.due}</span></div>`).join("")}
+    </aside>
+    <main>
+      <div class="msgs"></div>
+      <div class="compose"><form><input placeholder="Ask, or describe what you see in the chart…"><button>Send</button></form></div>
+    </main>
+    <section>
+      <div class="tabs"><button data-t="visual">Visual</button><button data-t="context">Context</button><button data-t="memory">Memory</button></div>
+      <div class="pane"></div>
+    </section></div>`;
+  const msgs = root.querySelector(".msgs"), pane = root.querySelector(".pane");
+  const renderMsgs = () => { msgs.innerHTML = DATA.messages.map(m => `<div class="msg ${m.who}">${m.who === "agent" ? `<div style="margin-bottom:4px"><span class="chip">tutor</span></div>` : ""}${m.text}</div>`).join(""); msgs.scrollTop = 1e6; };
+  const renderPane = () => {
+    root.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === tab));
+    if (tab === "visual") return mountViz(pane);
+    if (tab === "context") {
+      const items = contextItems(), total = items.reduce((a, [, n]) => a + n, 0);
+      pane.innerHTML = `<div style="color:#6b7080;font-size:13px;margin-bottom:8px">What the tutor sees right now — ${total} tokens</div>` +
+        items.map(([k, n]) => `<div class="ctx-row"><b>${esc(k)}</b><span>${n}</span></div>`).join("");
+      return;
+    }
+    pane.innerHTML = `<h4 style="margin-top:0">Misconceptions</h4>${DATA.misconceptions.map(m => `<div class="due" style="background:#fef2f2">⚠ ${m}</div>`).join("")}
+      <h4>Concept mastery</h4>${DATA.concepts.map(c => `<div class="concept"><div><span>${c.name}</span><span>${Math.round(c.mastery * 100)}%</span></div>${masteryBar(c.mastery)}</div>`).join("")}`;
+  };
+  root.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { tab = b.dataset.t; renderPane(); });
+  viz.listeners.add(() => { if (tab === "context") renderPane(); });
+  root.querySelector("form").onsubmit = e => {
+    e.preventDefault(); const inp = e.target.querySelector("input"); if (!inp.value.trim()) return;
+    DATA.messages.push({ who: "user", text: esc(inp.value) }, { who: "agent", text: REPLIES[replyIdx++ % REPLIES.length](vizSummary()) });
+    inp.value = ""; renderMsgs();
+  };
+  renderMsgs(); renderPane();
+}
+VariantA.label = "Studio · chat-first";
+
+/* ================= Variant B: Canvas ================= */
+function VariantB(root) {
+  const path = ["Derivative", "Loss function", "Gradient descent", "Learning rate", "Local minima", "Momentum"];
+  root.innerHTML = `<div class="B">
+    <div class="map"><h4>Concept path</h4>
+      ${path.map(n => { const c = DATA.concepts.find(c => c.name === n); return `<button class="node ${n === "Learning rate" ? "cur" : ""}">${n}<small>${c.status}</small>${masteryBar(c.mastery)}</button>`; }).join("")}
+    </div>
+    <div class="topline"><h1>Why does a big learning rate overshoot?</h1><span>${DATA.course} › ${DATA.lesson}</span></div>
+    <div class="stage"></div>
+    <div class="callout"></div>
+    <div class="notes"><h4>Margin</h4><div class="feed"></div></div>
+    <form class="bar"><input placeholder="Ask about what you see…  (the tutor can see the chart)"><button>Ask</button></form>
+  </div>`;
+  const stage = root.querySelector(".stage"), callout = root.querySelector(".callout"), feed = root.querySelector(".feed");
+  mountViz(stage, { theme: "paper" });
+  const notes = [
+    { who: "memory", mem: true, text: `Last time: “${DATA.misconceptions[0].split(" (")[0]}”. This canvas is set up to test it.` },
+    { who: "tutor", text: "Drag the learning rate to 0.1 and press Run. Then try 0.9. Watch where the ball lands." },
+  ];
+  const renderFeed = () => feed.innerHTML = notes.map(n => `<div class="note ${n.mem ? "mem" : ""}"><div class="who">${n.who}</div>${n.text}</div>`).join("");
+  const comment = () => ({
+    ready: "Press Run — I'll comment on what happens.",
+    descending: "Rolling downhill. Steps shrink as the slope flattens.",
+    oscillating: "See it bouncing across the valley? Each step overshoots the bottom.",
+    converged: viz.lr > 0.5 ? "It settled — but did it land in the deeper valley?" : "Converged. Count how many steps that took.",
+    diverged: "Too big! Each step overshot by more than the last, so it flew off.",
+  }[vizPhase()]);
+  const place = () => {
+    const r = stage.getBoundingClientRect(), root_r = root.getBoundingClientRect();
+    const x = viz.path[viz.path.length - 1], ok = isFinite(x) && Math.abs(x) <= 4.5;
+    const px = ok ? 28 + (x + 4.5) / 9 * (r.width - 56) : r.width / 2;
+    const ch = r.height - 40, py = ok ? (ch - 28 - (f(x) + 3.2) / 13.2 * (ch - 56)) : 40;
+    callout.textContent = comment();
+    callout.style.left = (r.left - root_r.left + px - 18) + "px";
+    callout.style.top = (r.top - root_r.top + py - callout.offsetHeight - 16) + "px";
+  };
+  viz.listeners.add(place); new ResizeObserver(place).observe(stage);
+  root.querySelector("form").onsubmit = e => {
+    e.preventDefault(); const inp = e.target.querySelector("input"); if (!inp.value.trim()) return;
+    notes.push({ who: "you", text: esc(inp.value) }, { who: "tutor", text: REPLIES[replyIdx++ % REPLIES.length](vizSummary()) });
+    inp.value = ""; renderFeed(); feed.parentElement.scrollTop = 1e6;
+  };
+  renderFeed(); setTimeout(place, 50);
+}
+VariantB.label = "Canvas · visual-first";
+
+/* ================= Variant C: Notebook ================= */
+function VariantC(root) {
+  root.innerHTML = `<div class="C"><div class="doc">
+    <div class="crumbs">${DATA.course} / Lesson 4</div>
+    <h1>${DATA.lesson}</h1>
+    <div class="meta">Living lesson · written with your tutor · last edited just now</div>
+
+    <div class="cell"><div class="tag">from memory</div><div class="recap">
+      <b>Picking up where you left off.</b> You're solid on <b>derivatives</b> and <b>loss functions</b>.
+      Last session you guessed that <i>a bigger learning rate always gets to the minimum faster</i>. This lesson tests that guess.
+    </div></div>
+
+    <div class="cell"><div class="tag">explain</div>
+      <p>Gradient descent finds the bottom of a loss curve by repeatedly stepping downhill. The size of each step is the <b>learning rate</b> times the slope where you're standing.</p>
+      <p>Steep ground means a big step, flat ground means a small one. That's why the steps shrink as you get close to the bottom — unless the learning rate is too big.</p>
+    </div>
+
+    <div class="cell"><div class="tag">interactive</div><div class="vizcell"></div></div>
+
+    <div class="cell"><div class="tag">check</div><div class="check">
+      <div class="q">Set the learning rate to 0.9 and press Run. What happens?</div>
+      <button data-ok="0">It reaches the bottom faster than at 0.1</button>
+      <button data-ok="1">It overshoots and bounces, or lands in a different valley</button>
+      <button data-ok="0">Nothing changes — learning rate only affects speed</button>
+      <div class="fb"></div>
+    </div></div>
+
+    <div class="cell agentcells"></div>
+
+    <div class="cell"><div class="tag">you</div><form class="ask"><input placeholder="Ask a question — the tutor will add a cell"><button>Add</button></form></div>
+  </div>
+  <div class="margin">
+    <h4>This lesson touches</h4>
+    ${DATA.concepts.slice(1, 5).map(c => `<div class="concept">${c.name}${masteryBar(c.mastery)}</div>`).join("")}
+    <h4 style="margin-top:20px">Up next</h4>
+    <div>↻ Review: ${DATA.reviews[0].name} (${DATA.reviews[0].due})</div>
+    <div style="color:#8a8fa0">→ Local minima</div>
+  </div></div>`;
+  mountViz(root.querySelector(".vizcell"));
+  const cells = root.querySelector(".agentcells"), fb = root.querySelector(".fb");
+  const addCell = (tag, html) => cells.insertAdjacentHTML("beforeend", `<div class="cell"><div class="tag">${tag}</div><div class="agentcell">${html}</div></div>`);
+  root.querySelectorAll(".check button").forEach(b => b.onclick = () => {
+    root.querySelectorAll(".check button").forEach(x => x.className = "");
+    if (b.dataset.ok === "1") {
+      b.className = "right";
+      fb.innerHTML = `Yes. A step that's too big jumps past the bottom.<br><span class="memdelta">memory: Learning rate 35% → 55% · misconception “bigger is faster” resolved</span>`;
+      if (!cells.children.length) addCell("tutor", `<p>Nice — that was the guess from last time, now overturned by evidence. Next I'd like you to see <b>why</b> it lands in the left valley sometimes. That's the idea of a <b>local minimum</b>.</p>`);
+    } else {
+      b.className = "wrong";
+      fb.innerHTML = `Try it on the chart first, then look at where the ball ends up.<br><span class="memdelta">memory: misconception “bigger is faster” still active</span>`;
+    }
+  });
+  root.querySelector("form").onsubmit = e => {
+    e.preventDefault(); const inp = e.target.querySelector("input"); if (!inp.value.trim()) return;
+    addCell("you asked", `<p style="color:#6b7080"><i>${esc(inp.value)}</i></p><p>${REPLIES[replyIdx++ % REPLIES.length](vizSummary())}</p>`);
+    inp.value = "";
+  };
+}
+VariantC.label = "Notebook · lesson-first";
+
+/* ================= Variant D: Terminal ================= */
+function VariantD(root) {
+  root.innerHTML = `<div class="D">
+    <div class="hdr"><span><b>mivra</b> v0.0.1</span><span>course: <b>${DATA.course}</b></span><span>lesson: <b>${DATA.lesson}</b></span><span class="ctxh"></span></div>
+    <div class="body">
+      <div class="log"></div>
+      <div class="side">
+        <div class="box" style="min-height:0;display:flex;flex-direction:column"><label>viz: loss curve</label><div class="vz" style="flex:1;min-height:0;padding-top:6px"></div></div>
+        <div class="box"><label>memory</label><div class="mem"></div></div>
+      </div>
+    </div>
+    <form class="prompt"><span class="you">learn ›</span><input placeholder="type a question or /help" autofocus></form>
+    <div class="keys"><b>/help</b>commands <b>/memory</b>what I know <b>/context</b>tutor context <b>/review</b>due reviews <b>/lr 0.9</b>set learning rate <b>/run</b></div>
+  </div>`;
+  const log = root.querySelector(".log"), mem = root.querySelector(".mem"), ctxh = root.querySelector(".ctxh");
+  mountViz(root.querySelector(".vz"), { theme: "term" });
+  const out = (cls, s) => { log.insertAdjacentHTML("beforeend", `<div class="line ${cls}">${s}</div>`); log.scrollTop = 1e6; };
+  const bar = m => "█".repeat(Math.round(m * 10)) + "░".repeat(10 - Math.round(m * 10));
+  mem.innerHTML = DATA.concepts.map(c => `<div class="line">${c.name.padEnd(18, " ")} ${bar(c.mastery)} <span class="dim">${c.status}</span></div>`).join("") +
+    `<div class="line" style="color:#f87171">! ${DATA.misconceptions[0]}</div>`;
+  const updHdr = () => ctxh.innerHTML = `ctx: <b>${contextItems().reduce((a, [, n]) => a + n, 0)}</b> tok`;
+  viz.listeners.add(updHdr); updHdr();
+  out("dim", "── session resumed · memory loaded (6 concepts, 1 misconception, 2 reviews) ──");
+  DATA.messages.forEach(m => out(m.who === "user" ? "you" : "", (m.who === "user" ? "› " : "tutor: ") + m.text.replace(/<[^>]+>/g, "")));
+  const cmds = {
+    help: () => out("sys", "/memory  /context  /review  /lr <n>  /run  /reset  /step"),
+    memory: () => DATA.concepts.forEach(c => out("sys", `${c.name.padEnd(18)} ${bar(c.mastery)} ${Math.round(c.mastery * 100)}%`)),
+    context: () => contextItems().forEach(([k, n]) => out("sys", `${String(n).padStart(5)}  ${esc(k)}`)),
+    review: () => DATA.reviews.forEach(r => out("sys", `↻ ${r.name} — due ${r.due}`)),
+    lr: a => { const v = parseFloat(a); if (!(v > 0)) return out("sys", "usage: /lr 0.5"); viz.lr = v; vizReset(); mountViz(root.querySelector(".vz"), { theme: "term" }); out("sys", `learning rate = ${v}`); },
+    run: () => { vizRun(); out("sys", "running…"); },
+    step: () => { vizStep(); out("sys", vizSummary()); },
+    reset: () => { vizReset(); out("sys", "reset"); },
+  };
+  root.querySelector("form").onsubmit = e => {
+    e.preventDefault(); const inp = e.target.querySelector("input"), v = inp.value.trim(); if (!v) return; inp.value = "";
+    out("you", "› " + esc(v));
+    if (v.startsWith("/")) { const [c, a] = v.slice(1).split(/\s+/); return (cmds[c] || (() => out("sys", `unknown command /${c}`)))(a); }
+    out("", "tutor: " + REPLIES[replyIdx++ % REPLIES.length](vizSummary()));
+  };
+}
+VariantD.label = "Terminal · keyboard-first";
+
+/* ================= switcher ================= */
+const VARIANTS = { A: VariantA, B: VariantB, C: VariantC, D: VariantD };
+const KEYS = Object.keys(VARIANTS);
+function current() { const v = new URLSearchParams(location.search).get("variant"); return KEYS.includes(v) ? v : "A"; }
+function render() {
+  vizStop(); viz.listeners.clear();
+  const k = current(), app = document.getElementById("app");
+  app.innerHTML = ""; VARIANTS[k](app);
+  document.getElementById("sw-label").innerHTML = `<small>PROTOTYPE</small>${k} (${VARIANTS[k].label})`;
+}
+function go(d) {
+  const k = KEYS[(KEYS.indexOf(current()) + d + KEYS.length) % KEYS.length];
+  const u = new URL(location.href); u.searchParams.set("variant", k);
+  history.replaceState(null, "", u); render();
+}
+document.getElementById("sw-prev").onclick = () => go(-1);
+document.getElementById("sw-next").onclick = () => go(1);
+addEventListener("keydown", e => {
+  const t = e.target; if (t.closest && t.closest("input, textarea, [contenteditable]")) return;
+  if (e.key === "ArrowLeft") go(-1); if (e.key === "ArrowRight") go(1);
+});
+render();
+</script>
+</body>
+</html>

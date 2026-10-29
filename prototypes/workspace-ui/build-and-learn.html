@@ -1,0 +1,472 @@
+<!doctype html>
+<!--
+  PROTOTYPE — throwaway. Do not build on this file.
+
+  Question: the user builds a lesson by chatting with an agent (variant A of index.html), then
+  learns from the generated lesson (variant C). How should those two surfaces relate, and how
+  does the user switch between them while iterating?
+
+  Three variants, switchable via `?variant=A|B|C`, the floating bottom bar, or ← / →:
+
+    A  Toggle  — two full-screen modes, Build (chat + outline) ⇄ Learn (lesson doc). Ctrl+. flips.
+    B  Split   — chat and lesson side by side; collapse either side.
+    C  Drawer  — starts as a "what do you want to learn?" prompt; once generated, the lesson is
+                 the page and the chat is a slide-over drawer. Ctrl+K opens it.
+
+  Loop to try in each variant:
+    1. Send the suggested prompt — the lesson generates section by section.
+    2. Ask for changes ("make the explanation simpler", "add an analogy", "add a harder question",
+       "cover local minima", "remove the recap"), or use ✎ on any section.
+    3. Changed sections are highlighted and the version bumps.
+
+  Switching variants starts a fresh session. All in-memory, canned agent. Run: open this file, or
+    python3 -m http.server -d prototypes/workspace-ui 8000 → http://localhost:8000/build-and-learn.html
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mivra — build & learn prototype</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2330; background: #f6f6f9; }
+  button { font: inherit; cursor: pointer; }
+  input { font: inherit; }
+  #app { height: 100%; }
+  kbd { font: 11px ui-monospace, monospace; border: 1px solid #d6d8e1; border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: #fff; color: #5b6070; }
+
+  /* ---------- viz ---------- */
+  .viz { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+  .viz canvas { width: 100%; flex: 1; min-height: 160px; display: block; border-radius: 8px; }
+  .viz-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+  .viz-controls input[type=range] { width: 130px; }
+  .viz-controls button { border: 1px solid #d6d8e1; background: #fff; border-radius: 6px; padding: 3px 10px; }
+  .viz-status { margin-left: auto; color: #5b6070; font-variant-numeric: tabular-nums; }
+  .mastery { height: 6px; background: #e6e7ee; border-radius: 3px; overflow: hidden; }
+  .mastery > i { display: block; height: 100%; background: #4f46e5; }
+
+  /* ---------- chat (from index.html variant A) ---------- */
+  .chat { display: flex; flex-direction: column; height: 100%; min-height: 0; background: #f6f6f9; }
+  .chat .msgs { flex: 1; overflow: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; }
+  .chat .msg { max-width: 600px; }
+  .chat .msg.user { align-self: flex-end; background: #4f46e5; color: #fff; padding: 9px 13px; border-radius: 14px 14px 2px 14px; }
+  .chat .msg.agent { background: #fff; padding: 11px 15px; border-radius: 14px 14px 14px 2px; border: 1px solid #e3e4ea; }
+  .chat .msg.agent.working { color: #6b7080; font-style: italic; }
+  .chat .chip { display: inline-block; font-size: 12px; background: #eef0ff; color: #3730a3; border-radius: 999px; padding: 1px 8px; margin: 2px 4px 2px 0; }
+  .chat .chip.ver { background: #fef9c3; color: #854d0e; }
+  .chat .sugg { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 24px 8px; }
+  .chat .sugg button { border: 1px solid #c7c9f5; background: #fff; color: #3730a3; border-radius: 999px; padding: 3px 10px; font-size: 13px; }
+  .chat form { margin: 0 24px 20px; display: flex; gap: 8px; background: #fff; border: 1px solid #d6d8e1; border-radius: 12px; padding: 8px; }
+  .chat form input { flex: 1; border: 0; outline: 0; padding: 4px 8px; }
+  .chat form button { border: 0; background: #4f46e5; color: #fff; border-radius: 8px; padding: 4px 14px; }
+
+  /* ---------- lesson doc (from index.html variant C) ---------- */
+  .doc { max-width: 740px; margin: 0 auto; padding: 40px 28px 120px; }
+  .doc .crumbs { color: #8a8fa0; font-size: 13px; }
+  .doc h1 { font: 700 32px/1.15 Georgia, serif; margin: 6px 0 4px; }
+  .doc .meta { color: #8a8fa0; font-size: 13px; margin-bottom: 24px; }
+  .doc .empty { color: #a0a4b2; border: 2px dashed #e3e4ea; border-radius: 12px; padding: 48px; text-align: center; }
+  .cell { position: relative; margin: 14px -14px; padding: 10px 14px; border-radius: 10px; border-left: 3px solid transparent; transition: background .3s; }
+  .cell:hover { background: #fafafe; }
+  .cell.changed { background: #fefce8; border-left-color: #eab308; }
+  .cell .ctag { font-size: 11px; color: #a0a4b2; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; display: flex; gap: 8px; }
+  .cell .ctag .upd { color: #a16207; }
+  .cell .edit { position: absolute; top: 8px; right: 8px; opacity: 0; border: 1px solid #d6d8e1; background: #fff; border-radius: 6px; padding: 1px 8px; font-size: 12px; color: #4f46e5; }
+  .cell:hover .edit { opacity: 1; }
+  .cell h3 { font: 600 19px/1.3 Georgia, serif; margin: 0 0 6px; }
+  .cell p { font: 17px/1.65 Georgia, serif; margin: 0 0 10px; }
+  .cell.recap .box { background: #f0fdf9; border: 1px solid #c7efe3; border-radius: 10px; padding: 12px 14px; }
+  .cell.recap p { font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; margin: 0; }
+  .cell .vizbox { border: 1px solid #e3e4ea; border-radius: 12px; padding: 12px; height: 320px; background: #fff; }
+  .cell .check { border: 1px solid #e3e4ea; border-radius: 12px; padding: 14px; background: #fff; }
+  .cell .check .q { font-weight: 600; margin-bottom: 10px; }
+  .cell .check button { display: block; width: 100%; text-align: left; border: 1px solid #d6d8e1; background: #fff; border-radius: 8px; padding: 7px 12px; margin-bottom: 6px; }
+  .cell .check button.right { border-color: #16a34a; background: #f0fdf4; }
+  .cell .check button.wrong { border-color: #dc2626; background: #fef2f2; }
+  .cell .memdelta { display: inline-block; background: #eef0ff; color: #3730a3; border-radius: 6px; padding: 2px 8px; font-size: 12px; margin-top: 6px; }
+  .cell.note p { font: 15px/1.6 ui-sans-serif, system-ui, sans-serif; color: #5b6070; }
+
+  /* ---------- switcher ---------- */
+  #proto-switcher { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 9999; display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 999px; background: #111; color: #fff; box-shadow: 0 6px 24px rgba(0,0,0,.35); font: 13px ui-sans-serif, system-ui, sans-serif; border: 2px solid #facc15; }
+  #proto-switcher button { background: transparent; color: #fff; border: 0; width: 30px; height: 30px; border-radius: 999px; font-size: 16px; }
+  #proto-switcher button:hover { background: #333; }
+  #proto-switcher span { padding: 0 10px; min-width: 170px; text-align: center; }
+  #proto-switcher small { color: #facc15; font-weight: 600; margin-right: 6px; }
+
+  /* ---------- shared header ---------- */
+  .hdr { height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 16px; background: #fff; border-bottom: 1px solid #e3e4ea; }
+  .hdr .brand { font-weight: 700; }
+  .hdr .title { color: #5b6070; }
+  .hdr .ver { font-size: 12px; background: #f1f2f6; border-radius: 6px; padding: 1px 7px; color: #5b6070; }
+  .hdr .grow { flex: 1; }
+  .seg { display: inline-flex; background: #f1f2f6; border-radius: 10px; padding: 3px; }
+  .seg button { border: 0; background: transparent; padding: 5px 16px; border-radius: 8px; color: #5b6070; }
+  .seg button.on { background: #fff; color: #1f2330; font-weight: 600; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+
+  /* ---------- A: Toggle ---------- */
+  .VA { height: 100%; display: flex; flex-direction: column; }
+  .VA .build { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px 1fr 320px; }
+  .VA .build aside { background: #fff; border-right: 1px solid #e3e4ea; padding: 16px; overflow: auto; }
+  .VA h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #8a8fa0; margin: 4px 0 8px; }
+  .VA .concept { margin-bottom: 10px; font-size: 13px; }
+  .VA .outline { background: #fff; border-left: 1px solid #e3e4ea; padding: 16px; overflow: auto; }
+  .VA .oitem { display: flex; gap: 8px; align-items: baseline; padding: 7px 8px; border-radius: 6px; font-size: 13px; border-left: 3px solid transparent; }
+  .VA .oitem.changed { background: #fefce8; border-left-color: #eab308; }
+  .VA .oitem span { color: #a0a4b2; font-size: 11px; text-transform: uppercase; width: 62px; flex: none; }
+  .VA .open { width: 100%; margin-top: 12px; border: 0; background: #1f2330; color: #fff; border-radius: 8px; padding: 8px; }
+  .VA .learn { flex: 1; min-height: 0; overflow: auto; background: #fff; }
+  .VA .fab { position: fixed; right: 24px; bottom: 72px; border: 0; background: #4f46e5; color: #fff; border-radius: 999px; padding: 10px 18px; box-shadow: 0 6px 18px rgba(79,70,229,.35); }
+
+  /* ---------- B: Split ---------- */
+  .VB { height: 100%; display: flex; flex-direction: column; }
+  .VB .panes { flex: 1; min-height: 0; display: grid; }
+  .VB .panes > div { min-height: 0; min-width: 0; }
+  .VB .lesson { overflow: auto; background: #fff; border-left: 1px solid #e3e4ea; }
+  .VB .memchip { font-size: 12px; color: #0f766e; background: #f0fdf9; border-radius: 999px; padding: 2px 10px; }
+
+  /* ---------- C: Drawer ---------- */
+  .VC { height: 100%; position: relative; overflow: hidden; background: #fff; }
+  .VC .hero { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; background: radial-gradient(circle at 50% 30%, #eef0ff, #fff 60%); }
+  .VC .hero h1 { font: 700 36px/1.2 Georgia, serif; margin: 0 0 8px; }
+  .VC .hero .mem { color: #0f766e; background: #f0fdf9; border: 1px solid #c7efe3; border-radius: 10px; padding: 8px 14px; font-size: 13px; margin-bottom: 20px; max-width: 620px; }
+  .VC .hero .chat { width: min(680px, 100%); height: auto; background: transparent; }
+  .VC .hero .chat .msgs { display: none; }
+  .VC .hero .chat form { margin: 0 0 12px; padding: 12px; font-size: 16px; box-shadow: 0 6px 24px rgba(31,35,48,.08); }
+  .VC .hero .chat .sugg { padding: 0; justify-content: center; }
+  .VC .page { height: 100%; overflow: auto; }
+  .VC .bar { position: sticky; top: 0; z-index: 2; height: 52px; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: rgba(255,255,255,.92); backdrop-filter: blur(6px); border-bottom: 1px solid #f0f1f5; }
+  .VC .bar .grow { flex: 1; }
+  .VC .tutor { border: 0; background: #4f46e5; color: #fff; border-radius: 999px; padding: 6px 14px; }
+  .VC .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 400px; background: #f6f6f9; border-left: 1px solid #e3e4ea; box-shadow: -12px 0 32px rgba(31,35,48,.12); transform: translateX(105%); transition: transform .2s; z-index: 5; display: flex; flex-direction: column; }
+  .VC .drawer.open { transform: none; }
+  .VC .drawer header { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid #e3e4ea; background: #fff; }
+  .VC .drawer header b { flex: 1; }
+  .VC .drawer header button { border: 0; background: none; font-size: 18px; color: #8a8fa0; }
+  .VC .drawer .chat { flex: 1; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="proto-switcher">
+  <button id="sw-prev" title="Previous variant (←)">‹</button>
+  <span id="sw-label"></span>
+  <button id="sw-next" title="Next variant (→)">›</button>
+</div>
+
+<script>
+/* ================= mock learner memory ================= */
+const MEMORY = {
+  course: "ML foundations",
+  concepts: [
+    { name: "Derivative", mastery: 0.9 }, { name: "Loss function", mastery: 0.75 },
+    { name: "Gradient descent", mastery: 0.45 }, { name: "Learning rate", mastery: 0.35 },
+    { name: "Local minima", mastery: 0.1 },
+  ],
+  misconception: "A bigger learning rate always reaches the minimum faster",
+};
+const STARTER = "Teach me gradient descent. I already know derivatives.";
+
+/* ================= session model: lesson + conversation ================= */
+const S = { sid: 0, lesson: null, version: 0, changed: new Set(), messages: [], busy: false, listeners: new Set() };
+const emit = () => S.listeners.forEach(fn => fn());
+
+const CELLS = {
+  recap: () => ({ id: "recap", type: "recap", title: "From your memory",
+    body: `You're solid on <b>derivatives</b> and <b>loss functions</b>. Last time you guessed that <i>${MEMORY.misconception.toLowerCase()}</i>. This lesson tests that guess.` }),
+  explain: () => ({ id: "explain", type: "text", title: "The idea",
+    body: `<p>Gradient descent finds the bottom of a loss curve by repeatedly stepping downhill. Each step moves the parameter by <b>learning rate × slope</b> at the current point.</p><p>Steep ground gives a big step and flat ground a small one, so steps shrink near the bottom — unless the learning rate is too large.</p>` }),
+  explainSimple: () => ({ id: "explain", type: "text", title: "The idea",
+    body: `<p>Imagine a ball on a hill. Look at which way is downhill, roll a little that way, and repeat.</p><p>The <b>learning rate</b> is how far you roll each time. Too small and it takes forever. Too big and you roll right past the bottom.</p>` }),
+  analogy: () => ({ id: "analogy", type: "text", title: "An analogy",
+    body: `<p>You're walking down a mountain in thick fog. You can only feel the slope under your feet. Gradient descent is: feel the slope, take a step downhill, repeat. The learning rate is your stride length.</p>` }),
+  viz: () => ({ id: "viz", type: "viz", title: "Try it",
+    body: `<p>Set the learning rate to 0.1 and press Run. Then try 0.9.</p>` }),
+  check1: () => ({ id: "check1", type: "check", title: "Check",
+    q: "At learning rate 0.9, what happens?", correct: 1,
+    options: ["It reaches the bottom faster than at 0.1", "It overshoots and bounces, or lands in a different valley", "Nothing changes — learning rate only affects speed"] }),
+  check2: () => ({ id: "check2", type: "check", title: "Harder check",
+    q: "The ball converges at x ≈ 2.2 with learning rate 0.1. Is that the lowest point on the curve?", correct: 2,
+    options: ["Yes — gradient descent always finds the lowest point", "Yes, because the slope there is zero", "No — it's a local minimum; the left valley is deeper"] }),
+  minima: () => ({ id: "minima", type: "text", title: "Two valleys",
+    body: `<p>This curve has two valleys. Gradient descent only sees the local slope, so it settles in whichever valley it rolls into first — a <b>local minimum</b>. Starting point and learning rate decide which one.</p>` }),
+};
+
+const EDITS = [
+  { re: /simpl|easier|eli5|plain/i, summary: "Rewrote “The idea” in plainer language", apply: L => { replace(L, CELLS.explainSimple()); return ["explain"]; } },
+  { re: /analog|metaphor/i, summary: "Added an analogy after “The idea”", apply: L => { insertAfter(L, "explain", CELLS.analogy()); return ["analogy"]; } },
+  { re: /hard|quiz|question|test me/i, summary: "Added a harder check question", apply: L => { L.cells.push(CELLS.check2()); return ["check2"]; } },
+  { re: /local|minim|valley/i, summary: "Added a section on local minima", apply: L => { insertAfter(L, "viz", CELLS.minima()); return ["minima"]; } },
+  { re: /remove|drop|delete|skip/i, summary: "Removed the recap", apply: L => { L.cells = L.cells.filter(c => c.id !== "recap"); return []; } },
+];
+const replace = (L, cell) => { L.cells = L.cells.map(c => c.id === cell.id ? cell : c); };
+const insertAfter = (L, id, cell) => { if (L.cells.some(c => c.id === cell.id)) return; const i = L.cells.findIndex(c => c.id === id); L.cells.splice(i + 1, 0, cell); };
+
+function send(text) {
+  if (!text.trim() || S.busy) return;
+  S.messages.push({ who: "user", text: esc(text) });
+  S.lesson ? edit(text) : generate(text);
+}
+function generate() {
+  S.busy = true;
+  S.lesson = { title: "Gradient descent", cells: [] };
+  S.messages.push({ who: "agent", working: true, text: `Planning a lesson. Using your memory: strong on derivatives, shaky on learning rate, and one misconception to test.` });
+  emit();
+  const order = ["recap", "explain", "viz", "check1"], sid = S.sid;
+  order.forEach((k, i) => setTimeout(() => {
+    if (sid !== S.sid) return;
+    S.lesson.cells.push(CELLS[k]()); S.changed = new Set([k]);
+    if (i === order.length - 1) {
+      S.version = 1; S.busy = false;
+      S.messages.push({ who: "agent", text: `Lesson ready — 4 sections: a recap, the idea, an interactive chart, and a check.`, chips: ["v1", "created"], sugg: true });
+    }
+    emit();
+  }, 450 * (i + 1)));
+}
+function edit(text) {
+  const e = EDITS.find(e => e.re.test(text));
+  S.busy = true;
+  S.messages.push({ who: "agent", working: true, text: "Editing the lesson…" }); emit();
+  const sid = S.sid;
+  setTimeout(() => {
+    if (sid !== S.sid) return;
+    S.messages.pop();
+    let ids, summary;
+    if (e) { ids = e.apply(S.lesson); summary = e.summary; }
+    else {
+      const id = "note" + S.version; S.lesson.cells.push({ id, type: "note", title: "Note", body: `<p>(Prototype: the real agent would rewrite sections here for “${esc(text)}”.)</p>` });
+      ids = [id]; summary = "Added a note (prototype can't handle this request)";
+    }
+    S.version++; S.changed = new Set(ids); S.busy = false;
+    const names = ids.map(id => S.lesson.cells.find(c => c.id === id)?.title).filter(Boolean);
+    S.messages.push({ who: "agent", text: summary + ".", chips: [`v${S.version}`, ...names], sugg: true });
+    emit();
+  }, 600);
+}
+const SUGGESTIONS = () => S.lesson
+  ? ["Make the explanation simpler", "Add an analogy", "Add a harder question", "Cover local minima", "Remove the recap"]
+  : [STARTER, "Explain backprop with a visual", "Quiz me on what I learned last week"];
+
+/* ================= viz (gradient descent on a 1-D loss) ================= */
+const f = x => 0.05 * x ** 4 - 0.6 * x ** 2 + 0.3 * x;
+const df = x => 0.2 * x ** 3 - 1.2 * x + 0.3;
+const X0 = 3.6;
+const viz = { lr: 0.1, path: [X0], timer: null, draws: new Set() };
+function vizPhase() {
+  const p = viz.path, x = p[p.length - 1];
+  if (!isFinite(x) || Math.abs(x) > 4.5) return "diverged";
+  if (p.length < 2) return "ready";
+  if (Math.abs(df(x)) < 0.02) return "converged";
+  if (p.length >= 3 && (p.at(-1) - p.at(-2)) * (p.at(-2) - p.at(-3)) < 0) return "oscillating";
+  return "descending";
+}
+const vizSummary = () => `lr ${viz.lr.toFixed(2)} · ${viz.path.length - 1} steps · ${vizPhase()}`;
+const vizNotify = () => viz.draws.forEach(d => d());
+function vizStep() { if (vizPhase() === "diverged") return; const x = viz.path.at(-1); viz.path.push(x - viz.lr * df(x)); vizNotify(); }
+function vizStop() { clearInterval(viz.timer); viz.timer = null; }
+function vizRun() { vizStop(); viz.timer = setInterval(() => { const ph = vizPhase(); if (ph === "converged" || ph === "diverged" || viz.path.length > 60) return vizStop(); vizStep(); }, 110); }
+function vizReset() { vizStop(); viz.path = [X0]; vizNotify(); }
+function mountViz(el) {
+  el.innerHTML = `<div class="viz"><canvas></canvas><div class="viz-controls">
+    <label>Learning rate <input type="range" min="0.01" max="1" step="0.01" value="${viz.lr}"></label><b class="lrv">${viz.lr.toFixed(2)}</b>
+    <button data-a="step">Step</button><button data-a="run">Run</button><button data-a="reset">Reset</button><span class="viz-status"></span></div></div>`;
+  const cv = el.querySelector("canvas"), ctx = cv.getContext("2d"), status = el.querySelector(".viz-status");
+  el.querySelector("input").oninput = e => { viz.lr = +e.target.value; el.querySelector(".lrv").textContent = viz.lr.toFixed(2); vizReset(); };
+  el.querySelector("[data-a=step]").onclick = () => { vizStop(); vizStep(); };
+  el.querySelector("[data-a=run]").onclick = vizRun;
+  el.querySelector("[data-a=reset]").onclick = vizReset;
+  const ro = new ResizeObserver(() => draw());
+  function draw() {
+    if (!cv.isConnected) { viz.draws.delete(draw); ro.disconnect(); return; }
+    const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight; if (!w || !h) return;
+    cv.width = w * dpr; cv.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const pad = 28, sx = x => pad + (x + 4.5) / 9 * (w - 2 * pad), sy = y => h - pad - (y + 3.2) / 13.2 * (h - 2 * pad);
+    ctx.fillStyle = "#fafafe"; ctx.fillRect(0, 0, w, h);
+    ctx.strokeStyle = "#ebecf2"; for (let g = -4; g <= 4; g++) { ctx.beginPath(); ctx.moveTo(sx(g), 10); ctx.lineTo(sx(g), h - pad); ctx.stroke(); }
+    ctx.fillStyle = "#8a8fa0"; ctx.font = "11px ui-sans-serif, system-ui"; ctx.fillText("loss", 6, 14); ctx.fillText("parameter x →", w - 100, h - 8);
+    ctx.strokeStyle = "#1f2330"; ctx.lineWidth = 2; ctx.beginPath();
+    for (let i = 0; i <= 300; i++) { const x = -4.5 + 9 * i / 300; i ? ctx.lineTo(sx(x), sy(f(x))) : ctx.moveTo(sx(x), sy(f(x))); } ctx.stroke();
+    const pts = viz.path.filter(x => isFinite(x) && Math.abs(x) <= 4.5);
+    ctx.strokeStyle = "#4f46e5"; ctx.globalAlpha = .5; ctx.lineWidth = 1.5; ctx.beginPath();
+    pts.forEach((x, i) => i ? ctx.lineTo(sx(x), sy(f(x))) : ctx.moveTo(sx(x), sy(f(x)))); ctx.stroke(); ctx.globalAlpha = 1;
+    pts.forEach((x, i) => { ctx.fillStyle = "#4f46e5"; ctx.beginPath(); ctx.arc(sx(x), sy(f(x)), i === pts.length - 1 ? 7 : 3, 0, 7); ctx.fill(); });
+    if (vizPhase() === "diverged") { ctx.fillStyle = "#dc2626"; ctx.font = "600 14px ui-sans-serif, system-ui"; ctx.fillText("Diverged — the step jumped off the chart", pad + 8, pad + 8); }
+    status.textContent = vizSummary();
+  }
+  ro.observe(cv); viz.draws.add(draw);
+}
+
+/* ================= shared components ================= */
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const masteryBar = m => `<div class="mastery"><i style="width:${Math.round(m * 100)}%"></i></div>`;
+
+// Chat: built once; only the message list and suggestions re-render, so the input keeps its text.
+function mountChat(el, { placeholder } = {}) {
+  el.innerHTML = `<div class="chat"><div class="msgs"></div><div class="sugg"></div>
+    <form><input placeholder="${placeholder || "Ask for a lesson, or ask for changes…"}"><button>Send</button></form></div>`;
+  const msgs = el.querySelector(".msgs"), sugg = el.querySelector(".sugg"), input = el.querySelector("input");
+  const update = () => {
+    msgs.innerHTML = S.messages.map(m => `<div class="msg ${m.who} ${m.working ? "working" : ""}">${m.chips ? `<div>${m.chips.map((c, i) => `<span class="chip ${i ? "" : "ver"}">${c}</span>`).join("")}</div>` : ""}${m.text}</div>`).join("");
+    msgs.scrollTop = 1e6;
+    sugg.innerHTML = S.busy ? "" : SUGGESTIONS().map(s => `<button type="button">${s}</button>`).join("");
+    sugg.querySelectorAll("button").forEach(b => b.onclick = () => send(b.textContent));
+  };
+  el.querySelector("form").onsubmit = e => { e.preventDefault(); const v = input.value; input.value = ""; send(v); };
+  S.listeners.add(update); update();
+  return { prefill(t) { input.value = t; input.focus(); input.setSelectionRange(t.length, t.length); }, focus() { input.focus(); } };
+}
+
+// Lesson doc. onEdit(cell) is called by the ✎ button on each section.
+function mountDoc(el, { onEdit } = {}) {
+  const update = () => {
+    const L = S.lesson;
+    if (!L) { el.innerHTML = `<div class="doc"><div class="empty">No lesson yet. Ask the tutor for one.</div></div>`; return; }
+    const keep = el.firstElementChild?.scrollTop;
+    el.innerHTML = `<div class="doc"><div class="crumbs">${MEMORY.course}</div><h1>${L.title}</h1>
+      <div class="meta">${S.version ? `v${S.version} · generated with your tutor` : "generating…"}</div>
+      ${L.cells.map(c => cellHtml(c)).join("")}</div>`;
+    el.querySelectorAll(".cell").forEach(node => {
+      const c = L.cells.find(c => c.id === node.dataset.id);
+      node.querySelector(".edit").onclick = () => onEdit && onEdit(c);
+      if (c.type === "viz") mountViz(node.querySelector(".vizbox"));
+      if (c.type === "check") node.querySelectorAll(".check button").forEach((b, i) => b.onclick = () => { c.answer = i; update(); });
+    });
+  };
+  S.listeners.add(update); update();
+}
+function cellHtml(c) {
+  const tag = `<div class="ctag"><span>${{ recap: "from memory", text: "explain", viz: "interactive", check: "check", note: "note" }[c.type]}</span>${S.changed.has(c.id) && S.version > 1 ? `<span class="upd">● updated in v${S.version}</span>` : ""}</div>`;
+  const edit = `<button class="edit" title="Ask the tutor to change this section">✎ change</button>`;
+  let inner = "";
+  if (c.type === "recap") inner = `<div class="box"><p>${c.body}</p></div>`;
+  if (c.type === "text" || c.type === "note") inner = `<h3>${c.title}</h3>${c.body}`;
+  if (c.type === "viz") inner = `<h3>${c.title}</h3>${c.body}<div class="vizbox"></div>`;
+  if (c.type === "check") {
+    const a = c.answer, ok = a === c.correct;
+    inner = `<div class="check"><div class="q">${c.q}</div>${c.options.map((o, i) => `<button class="${a === i ? (ok ? "right" : "wrong") : ""}">${o}</button>`).join("")}
+      ${a == null ? "" : ok ? `<div>Correct.</div><span class="memdelta">memory: Learning rate 35% → 55%${c.id === "check1" ? " · misconception resolved" : ""}</span>` : `<div>Not quite — try it on the chart, then look again.</div>`}</div>`;
+  }
+  return `<div class="cell ${c.type} ${S.changed.has(c.id) && S.version > 1 ? "changed" : ""}" data-id="${c.id}">${tag}${edit}${inner}</div>`;
+}
+const editPrompt = c => `Change “${c.title}”: `;
+
+/* ================= Variant A: Toggle ================= */
+function VariantA(root) {
+  let mode = S.lesson ? "learn" : "build";
+  const draw = () => {
+    root.innerHTML = `<div class="VA">
+      <div class="hdr"><span class="brand">◆ mivra</span><span class="title">${S.lesson ? S.lesson.title : "New lesson"}</span>${S.version ? `<span class="ver">v${S.version}</span>` : ""}
+        <span class="grow"></span>
+        <div class="seg"><button data-m="build">💬 Build</button><button data-m="learn">📖 Learn</button></div>
+        <span class="grow"></span><span style="color:#8a8fa0;font-size:12px"><kbd>Ctrl</kbd> + <kbd>.</kbd> to switch</span></div>
+      ${mode === "build" ? `<div class="build">
+        <aside><h4>What you know</h4>${MEMORY.concepts.map(c => `<div class="concept">${c.name}${masteryBar(c.mastery)}</div>`).join("")}
+          <h4 style="margin-top:16px">Misconception</h4><div style="font-size:13px;color:#b91c1c">⚠ ${MEMORY.misconception}</div></aside>
+        <div class="chatwrap" style="min-height:0"></div>
+        <div class="outline"><h4>Lesson outline</h4><div class="items"></div></div></div>`
+      : `<div class="learn"></div><button class="fab">✎ Ask for changes</button>`}</div>`;
+    root.querySelectorAll(".seg button").forEach(b => { b.classList.toggle("on", b.dataset.m === mode); b.onclick = () => setMode(b.dataset.m); });
+    if (mode === "build") {
+      chat = mountChat(root.querySelector(".chatwrap"));
+      const items = root.querySelector(".items");
+      const outline = () => {
+        const L = S.lesson;
+        items.innerHTML = !L ? `<div style="color:#a0a4b2;font-size:13px">Empty — ask for a lesson.</div>`
+          : L.cells.map(c => `<div class="oitem ${S.changed.has(c.id) && S.version > 1 ? "changed" : ""}"><span>${c.type}</span>${c.title}</div>`).join("") +
+            (S.version ? `<button class="open">Open lesson →</button>` : "");
+        const o = items.querySelector(".open"); if (o) o.onclick = () => setMode("learn");
+      };
+      S.listeners.add(outline); outline(); chat.focus();
+    } else {
+      mountDoc(root.querySelector(".learn"), { onEdit: c => { setMode("build"); chat.prefill(editPrompt(c)); } });
+      root.querySelector(".fab").onclick = () => setMode("build");
+    }
+  };
+  let chat;
+  const setMode = m => { mode = m; S.listeners.clear(); viz.draws.clear(); draw(); };
+  root._key = e => { if (e.ctrlKey && e.key === ".") { e.preventDefault(); setMode(mode === "build" ? "learn" : "build"); } };
+  draw();
+}
+VariantA.label = "Toggle · Build ⇄ Learn";
+
+/* ================= Variant B: Split ================= */
+function VariantB(root) {
+  let layout = "both";
+  root.innerHTML = `<div class="VB">
+    <div class="hdr"><span class="brand">◆ mivra</span><span class="title hdrtitle"></span><span class="ver hdrver"></span>
+      <span class="memchip">memory: 5 concepts · 1 misconception</span><span class="grow"></span>
+      <div class="seg"><button data-l="chat">Chat</button><button data-l="both">Both</button><button data-l="lesson">Lesson</button></div></div>
+    <div class="panes"><div class="c"></div><div class="lesson"></div></div></div>`;
+  const panes = root.querySelector(".panes"), cpane = root.querySelector(".c"), lpane = root.querySelector(".lesson");
+  const apply = () => {
+    panes.style.gridTemplateColumns = { chat: "1fr 0", both: "420px 1fr", lesson: "0 1fr" }[layout];
+    cpane.style.display = layout === "lesson" ? "none" : ""; lpane.style.display = layout === "chat" ? "none" : "";
+    root.querySelectorAll(".seg button").forEach(b => b.classList.toggle("on", b.dataset.l === layout));
+    vizNotify();
+  };
+  root.querySelectorAll(".seg button").forEach(b => b.onclick = () => { layout = b.dataset.l; apply(); });
+  const chat = mountChat(cpane);
+  mountDoc(lpane, { onEdit: c => { if (layout === "lesson") { layout = "both"; apply(); } chat.prefill(editPrompt(c)); } });
+  const hdr = () => { root.querySelector(".hdrtitle").textContent = S.lesson ? S.lesson.title : "New lesson"; const v = root.querySelector(".hdrver"); v.textContent = S.version ? `v${S.version}` : ""; v.style.display = S.version ? "" : "none"; };
+  S.listeners.add(hdr); hdr(); apply();
+}
+VariantB.label = "Split · side by side";
+
+/* ================= Variant C: Drawer ================= */
+function VariantC(root) {
+  let open = false, chat;
+  const draw = () => {
+    S.listeners.clear(); viz.draws.clear();
+    if (!S.lesson) {
+      root.innerHTML = `<div class="VC"><div class="hero">
+        <h1>What do you want to learn?</h1>
+        <div class="mem">I remember: you're solid on derivatives and loss functions, still building intuition for learning rate.</div>
+        <div class="c" style="width:min(680px,100%)"></div></div></div>`;
+      chat = mountChat(root.querySelector(".c"), { placeholder: "e.g. " + STARTER });
+      chat.focus();
+      // Leave the hero as soon as a lesson starts generating.
+      S.listeners.add(() => { if (S.lesson) { open = true; draw(); } });
+      return;
+    }
+    root.innerHTML = `<div class="VC">
+      <div class="page"><div class="bar"><b>◆ mivra</b><span style="color:#8a8fa0">${MEMORY.course}</span><span class="grow"></span>
+        <span style="color:#8a8fa0;font-size:12px"><kbd>Ctrl</kbd> + <kbd>K</kbd></span><button class="tutor">✦ Tutor</button></div><div class="docwrap"></div></div>
+      <div class="drawer ${open ? "open" : ""}"><header><b>Tutor</b><span style="color:#8a8fa0;font-size:12px;margin-right:8px">editing this lesson</span><button title="Close">×</button></header><div class="c" style="flex:1;min-height:0"></div></div></div>`;
+    const drawer = root.querySelector(".drawer");
+    const setOpen = o => { open = o; drawer.classList.toggle("open", o); if (o) chat.focus(); };
+    root.querySelector(".tutor").onclick = () => setOpen(!open);
+    root.querySelector(".drawer header button").onclick = () => setOpen(false);
+    chat = mountChat(root.querySelector(".c"));
+    mountDoc(root.querySelector(".docwrap"), { onEdit: c => { setOpen(true); chat.prefill(editPrompt(c)); } });
+    root._key = e => { if (e.ctrlKey && e.key.toLowerCase() === "k") { e.preventDefault(); setOpen(!open); } };
+  };
+  draw();
+}
+VariantC.label = "Drawer · lesson-first";
+
+/* ================= switcher ================= */
+const VARIANTS = { A: VariantA, B: VariantB, C: VariantC };
+const KEYS = Object.keys(VARIANTS);
+const current = () => { const v = new URLSearchParams(location.search).get("variant"); return KEYS.includes(v) ? v : "A"; };
+function resetSession() { Object.assign(S, { sid: S.sid + 1, lesson: null, version: 0, changed: new Set(), messages: [], busy: false }); viz.path = [X0]; }
+function render() {
+  resetSession(); vizStop(); S.listeners.clear(); viz.draws.clear();
+  const k = current(), app = document.getElementById("app");
+  app.innerHTML = ""; app._key = null; VARIANTS[k](app);
+  document.getElementById("sw-label").innerHTML = `<small>PROTOTYPE</small>${k} (${VARIANTS[k].label})`;
+}
+function go(d) {
+  const k = KEYS[(KEYS.indexOf(current()) + d + KEYS.length) % KEYS.length];
+  const u = new URL(location.href); u.searchParams.set("variant", k); history.replaceState(null, "", u); render();
+}
+document.getElementById("sw-prev").onclick = () => go(-1);
+document.getElementById("sw-next").onclick = () => go(1);
+addEventListener("keydown", e => {
+  const app = document.getElementById("app"); if (app._key) app._key(e); if (e.defaultPrevented) return;
+  if (e.target.closest && e.target.closest("input, textarea, [contenteditable]")) return;
+  if (e.key === "ArrowLeft") go(-1); if (e.key === "ArrowRight") go(1);
+});
+render();
+</script>
+</body>
+</html>
