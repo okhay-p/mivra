@@ -8,7 +8,7 @@
     }
   },
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "dev": "tsx watch --conditions=@mivra/source --env-file-if-exists=../../.env src/main.ts",
     "build": "tsc -p tsconfig.build.json",
     "start": "node --env-file-if-exists=../../.env dist/main.js",
     "db:generate": "drizzle-kit generate",
@@ -20,6 +20,7 @@
     "@ai-sdk/openai": "^4.0.104",
     "@hono/node-server": "^2.1.5",
     "@hono/zod-openapi": "^1.6.3",
+    "@mivra/protocol": "workspace:*",
     "@openrouter/ai-sdk-provider": "^3.1.0",
     "ai": "^7.0.156",
     "better-sqlite3": "^13.0.3",
@@ -33,6 +34,7 @@
     "drizzle-kit": "^0.31.11",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
+    "vite": "8.3.5",
     "vitest": "^5.0.5"
   }
 }

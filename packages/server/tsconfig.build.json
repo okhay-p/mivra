@@ -4,7 +4,12 @@
     "rootDir": "src",
     "outDir": "dist",
     "noEmit": false,
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "customConditions": []
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

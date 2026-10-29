@@ -8,6 +8,7 @@ An open-source, local-first AI agent harness for learning. Design docs and decis
 |---|---|
 | `packages/server` | Hono API server (Node.js). Owns the agent runtime, the SQLite database (Drizzle + better-sqlite3) and model access (Vercel AI SDK). Binds to `127.0.0.1` only. |
 | `packages/web` | React + Vite web UI. Talks to the server only through its API. |
+| `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `multiple_choice`), their tool definitions and the deterministic grader. Shared by server and web. |
 
 ## Setup
 
@@ -29,6 +30,8 @@ cp .env.example .env   # add a provider key and set MIVRA_MODEL
 | `pnpm test` | Server API tests (uses a mock model, no API key needed) |
 | `pnpm typecheck` | Type-check all packages |
 | `pnpm --filter @mivra/server db:generate` | Generate a migration after editing `src/db/schema.ts` |
+
+Workspace packages resolve to their TypeScript source in dev, tests and type-checking through the `@mivra/source` export condition, so `pnpm dev` needs no prebuild. `pnpm build` compiles `packages/protocol` first; the production server loads its `dist`.
 
 Data is stored in `~/.mivra/mivra.db` (override with `MIVRA_DATA_DIR`). The API's OpenAPI document is at `/api/doc`.
 
