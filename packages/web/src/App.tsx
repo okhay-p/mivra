@@ -1,7 +1,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { api } from "./api.js";
+import { api, authHeaders, errorMessage, token } from "./api.js";
 
 interface Session {
   id: string;
@@ -11,10 +11,17 @@ interface Session {
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>();
+  const [error, setError] = useState<string>();
 
   const refreshSessions = async () => {
-    const res = await api.sessions.$get();
-    setSessions(await res.json());
+    try {
+      const res = await api.sessions.$get();
+      if (!res.ok) return setError(await errorMessage(res));
+      setSessions(await res.json());
+      setError(undefined);
+    } catch {
+      setError("Can't reach the Mivra server.");
+    }
   };
 
   useEffect(() => {
@@ -22,10 +29,15 @@ export function App() {
   }, []);
 
   const newSession = async () => {
-    const res = await api.sessions.$post({ json: {} });
-    const session = await res.json();
-    setSessions((prev) => [session, ...prev]);
-    setActiveId(session.id);
+    try {
+      const res = await api.sessions.$post({ json: {} });
+      if (!res.ok) return setError(await errorMessage(res));
+      const session = await res.json();
+      setSessions((prev) => [session, ...prev]);
+      setActiveId(session.id);
+    } catch {
+      setError("Can't reach the Mivra server.");
+    }
   };
 
   return (
@@ -46,7 +58,11 @@ export function App() {
         </ul>
       </aside>
       <main>
-        {activeId ? (
+        {!token ? (
+          <p className="empty error">No API token found. Start the server, then reload this page.</p>
+        ) : error ? (
+          <p className="empty error">{error}</p>
+        ) : activeId ? (
           <SessionLoader key={activeId} sessionId={activeId} onReply={refreshSessions} />
         ) : (
           <p className="empty">Start a new session to begin learning.</p>
@@ -58,13 +74,19 @@ export function App() {
 
 function SessionLoader({ sessionId, onReply }: { sessionId: string; onReply: () => void }) {
   const [initial, setInitial] = useState<UIMessage[]>();
+  const [error, setError] = useState<string>();
 
   useEffect(() => {
-    void api.sessions[":id"].messages.$get({ param: { id: sessionId } }).then(async (res) => {
-      setInitial(res.ok ? ((await res.json()) as UIMessage[]) : []);
-    });
+    api.sessions[":id"].messages
+      .$get({ param: { id: sessionId } })
+      .then(async (res) => {
+        if (res.ok) setInitial((await res.json()) as UIMessage[]);
+        else setError(await errorMessage(res));
+      })
+      .catch(() => setError("Can't reach the Mivra server."));
   }, [sessionId]);
 
+  if (error) return <p className="empty error">Couldn't load this session: {error}</p>;
   return initial ? <Chat sessionId={sessionId} initialMessages={initial} onReply={onReply} /> : null;
 }
 
@@ -84,6 +106,7 @@ function Chat({
     messages: initialMessages,
     transport: new DefaultChatTransport({
       api: `/api/sessions/${sessionId}/chat`,
+      headers: authHeaders,
       // The server owns history, so send only the new message.
       prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1) } }),
     }),
@@ -110,7 +133,7 @@ function Chat({
           </div>
         ))}
         {status === "submitted" && <div className="message assistant pending">Thinking…</div>}
-        {error && <div className="error">{error.message}</div>}
+        {error && <div className="error">{readableError(error)}</div>}
         <div ref={bottom} />
       </div>
       <form onSubmit={submit}>
@@ -126,4 +149,15 @@ function Chat({
       </form>
     </div>
   );
+}
+
+/** The transport surfaces the raw response body; unwrap the server's `{ error }` JSON when present. */
+function readableError(error: Error): string {
+  try {
+    const body = JSON.parse(error.message) as { error?: string };
+    if (body.error) return body.error;
+  } catch {
+    // Not JSON.
+  }
+  return error.message;
 }
