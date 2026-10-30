@@ -108,7 +108,7 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
           ))}
         </ul>
         <div className="overflow-x-auto pb-1" aria-hidden="true">
-          <div className="inline-grid gap-1" style={{ gridTemplateColumns: `repeat(${n}, minmax(2.5rem, max-content))` }}>
+          <div className="inline-grid w-max gap-1 wrap-normal" style={{ gridTemplateColumns: `repeat(${n}, minmax(2.5rem, max-content))` }}>
             {ranges.map((r, i) => (
               <div
                 key={`range-${i}`}
