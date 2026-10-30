@@ -27,7 +27,7 @@ cp .env.example .env   # add a provider key and set MIVRA_MODEL
 |---|---|
 | `pnpm dev` | Server on :4096 with reload, plus Vite on :5173 proxying `/api` to it |
 | `pnpm build && pnpm start` | Production: the server serves the built web UI on :4096 |
-| `pnpm test` | Server API tests (uses a mock model, no API key needed) |
+| `pnpm test` | Protocol, server API (mock model, no API key needed) and web component tests (Vitest + jsdom) |
 | `pnpm typecheck` | Type-check all packages |
 | `pnpm --filter @mivra/server db:generate` | Generate a migration after editing `src/db/schema.ts` |
 
@@ -55,4 +55,5 @@ The agent shows interactive artifacts through tool calls (ADR-006): `show_algori
 - Each tool call's input is validated against its `packages/protocol` schema and stored in `artifacts` with the full spec. Client output fails closed: the live stream and `GET /api/sessions/{id}/messages` pass only text and lifecycle parts plus `data-artifact` parts with the artifact's public view. Raw tool calls, model reasoning, sources and files never reach a client, so a check's answer key, explanation and feedback stay on the server.
 - `POST /api/artifacts/{id}/attempts` with `{ "answer": { "optionIndex": n } }` grades a check deterministically and returns the view with the grade. One attempt per check, accepted once the reply that asked it has finished.
 - On later turns, each check's tool result tells the model whether the learner answered and how they did.
+- The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. A trace is a stepper (prev/next, play/pause, arrow keys). A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered.
 
