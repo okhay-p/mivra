@@ -9,6 +9,8 @@ export interface ArtifactProps<K extends ArtifactKind> {
   replyInProgress: boolean;
   /** Replaces the artifact's view, e.g. with the graded view after an attempt. */
   onUpdate: (view: ArtifactView) => void;
+  /** Reloads the session's artifact views from the server, e.g. when a local view may be stale. */
+  onRefresh: () => Promise<void>;
 }
 
 /** One renderer per artifact kind. A new kind in `artifactKinds` fails type-checking here until it has one. */
@@ -25,11 +27,8 @@ export function ArtifactPart({
   data,
   replyInProgress,
   onUpdate,
-}: {
-  data: unknown;
-  replyInProgress: boolean;
-  onUpdate: (view: ArtifactView) => void;
-}) {
+  onRefresh,
+}: { data: unknown } & Omit<ArtifactProps<ArtifactKind>, "view">) {
   const parsed = ArtifactView.safeParse(data);
   if (!parsed.success) {
     return (
@@ -40,5 +39,5 @@ export function ArtifactPart({
   }
   const view = parsed.data;
   const Renderer = renderers[view.kind] as ComponentType<ArtifactProps<typeof view.kind>>;
-  return <Renderer view={view} replyInProgress={replyInProgress} onUpdate={onUpdate} />;
+  return <Renderer view={view} replyInProgress={replyInProgress} onUpdate={onUpdate} onRefresh={onRefresh} />;
 }

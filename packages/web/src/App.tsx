@@ -2,8 +2,9 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView } from "@mivra/protocol";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { api, authHeaders, errorMessage, token } from "./api.js";
+import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
+import { artifactData, artifactViewsIn, isReplyInProgress } from "./chat-artifacts.js";
 
 interface Session {
   id: string;
@@ -124,6 +125,10 @@ function Chat({
   }, [messages]);
 
   const busy = status === "submitted" || status === "streaming";
+  const refreshViews = async () => {
+    const messages = await loadMessages(sessionId);
+    if (messages) setUpdatedViews((prev) => ({ ...prev, ...artifactViewsIn(messages) }));
+  };
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const text = input.trim();
@@ -143,9 +148,10 @@ function Chat({
                 return (
                   <ArtifactPart
                     key={part.id ?? i}
-                    data={(part.id && updatedViews[part.id]) || part.data}
-                    replyInProgress={busy && mi === messages.length - 1}
+                    data={artifactData(part, updatedViews)}
+                    replyInProgress={isReplyInProgress(status, mi, messages.length)}
                     onUpdate={(view) => setUpdatedViews((prev) => ({ ...prev, [view.id]: view }))}
+                    onRefresh={refreshViews}
                   />
                 );
               }

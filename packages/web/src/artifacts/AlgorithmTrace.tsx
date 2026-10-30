@@ -75,7 +75,21 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
       onKeyDown={onKeyDown}
     >
       <h3>{spec.title}</h3>
-      <div className="trace-scroll">
+      {/* The grid relates pointers and ranges to cells only by position, so screen readers get this instead. */}
+      <ul className="sr-only" data-testid="trace-description">
+        <li>Values: {state.values.map((v, i) => `index ${i}: ${String(v)}`).join(", ")}</li>
+        {pointers.map((p, i) => (
+          <li key={`p-${i}`}>
+            {p.name} points to index {p.index}, value {String(state.values[p.index])}
+          </li>
+        ))}
+        {ranges.map((r, i) => (
+          <li key={`r-${i}`}>
+            {r.label ? `${r.label} covers` : "Highlighted:"} indices {r.start} through {r.end}
+          </li>
+        ))}
+      </ul>
+      <div className="trace-scroll" aria-hidden="true">
         <div className="trace-grid" style={{ gridTemplateColumns: `repeat(${n}, minmax(2.5rem, max-content))` }}>
           {ranges.map((r, i) => (
             <div

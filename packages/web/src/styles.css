@@ -148,6 +148,7 @@ form input {
 /* Learning artifacts */
 
 .artifact {
+  position: relative;
   margin: 0.6rem 0;
   padding: 0.8rem;
   border: 1px solid var(--border);
@@ -317,7 +318,7 @@ form input {
   opacity: 1;
 }
 
-.mc-option[aria-pressed="true"] {
+.mc-option.chosen {
   border-color: var(--accent);
 }
 
@@ -356,4 +357,17 @@ form input {
 
 .mc-verdict.incorrect {
   color: #e5484d;
+}
+
+/* Visually hidden, still read by screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

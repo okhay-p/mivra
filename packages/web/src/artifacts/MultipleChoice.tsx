@@ -2,7 +2,7 @@ import { useState } from "react";
 import { submitMultipleChoice } from "../api.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 
-export function MultipleChoice({ view, replyInProgress, onUpdate }: ArtifactProps<"multiple_choice">) {
+export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: ArtifactProps<"multiple_choice">) {
   const { spec, latestAttempt } = view;
   const [submitting, setSubmitting] = useState<number>();
   const [error, setError] = useState<string>();
@@ -18,14 +18,16 @@ export function MultipleChoice({ view, replyInProgress, onUpdate }: ArtifactProp
     setError(undefined);
     const result = await submitMultipleChoice(view.id, optionIndex);
     setSubmitting(undefined);
-    if (result.ok) onUpdate(result.view);
-    else setError(result.error);
+    if (result.ok) return onUpdate(result.view);
+    setError(result.error);
+    // The answer may have been saved anyway (lost response, another tab); if so, show its grade.
+    await onRefresh();
   };
 
   const optionClass = (i: number) => {
-    if (!grade) return "mc-option";
+    if (!grade) return submitting === i ? "mc-option chosen" : "mc-option";
     if (i === grade.correctOptionIndex) return "mc-option correct";
-    if (i === chosen) return "mc-option incorrect";
+    if (i === chosen) return "mc-option chosen incorrect";
     return "mc-option";
   };
   const optionMark = (i: number) => {
@@ -46,7 +48,6 @@ export function MultipleChoice({ view, replyInProgress, onUpdate }: ArtifactProp
             type="button"
             className={optionClass(i)}
             disabled={disabled}
-            aria-pressed={chosen === i || submitting === i}
             onClick={() => void answer(i)}
           >
             {option.text}

@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ArtifactPart } from "../src/artifacts/ArtifactPart.js";
 import { trace } from "./fixtures.js";
 
-const renderTrace = () => render(<ArtifactPart data={trace} replyInProgress={false} onUpdate={() => {}} />);
+const renderTrace = () => render(<ArtifactPart data={trace} replyInProgress={false} onUpdate={() => {}} onRefresh={async () => {}} />);
 const cells = () => screen.getAllByTestId("trace-cell").map((c) => c.firstChild?.textContent);
 const next = () => fireEvent.click(screen.getByRole("button", { name: /next/i }));
 const prev = () => fireEvent.click(screen.getByRole("button", { name: /prev/i }));
@@ -29,6 +29,18 @@ describe("AlgorithmTrace", () => {
     const pointer = screen.getByTestId("trace-pointer");
     expect(pointer.style.gridColumn).toBe("2");
     expect(screen.getByText("Move on.")).toBeTruthy();
+  });
+
+  it("describes pointers and ranges by position for screen readers", () => {
+    renderTrace();
+    const description = () => screen.getByTestId("trace-description").textContent;
+    expect(description()).toContain("index 0: 3, index 1: 1, index 2: 2");
+    expect(description()).toContain("i points to index 0, value 3");
+    expect(description()).toContain("pair covers indices 0 through 1");
+    next();
+    next();
+    expect(description()).toContain("i points to index 1, value 3");
+    expect(description()).not.toContain("covers");
   });
 
   it("keeps prev and next within bounds", () => {

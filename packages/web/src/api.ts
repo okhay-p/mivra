@@ -1,5 +1,6 @@
 import { ArtifactView } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
+import type { UIMessage } from "ai";
 import { hc } from "hono/client";
 
 /** API token the server (or Vite in dev) embeds in index.html. */
@@ -32,5 +33,15 @@ export async function submitMultipleChoice(artifactId: string, optionIndex: numb
     return view.success ? { ok: true, view: view.data } : { ok: false, error: "The server sent a reply this page can't display." };
   } catch {
     return { ok: false, error: "Can't reach the Mivra server." };
+  }
+}
+
+/** A session's stored messages, or undefined if they can't be loaded. */
+export async function loadMessages(sessionId: string): Promise<UIMessage[] | undefined> {
+  try {
+    const res = await api.sessions[":id"].messages.$get({ param: { id: sessionId } });
+    return res.ok ? ((await res.json()) as UIMessage[]) : undefined;
+  } catch {
+    return undefined;
   }
 }
