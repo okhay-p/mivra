@@ -17,11 +17,15 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
     setSubmitting(optionIndex);
     setError(undefined);
     const result = await submitMultipleChoice(view.id, optionIndex);
-    setSubmitting(undefined);
-    if (result.ok) return onUpdate(result.view);
+    if (result.ok) {
+      setSubmitting(undefined);
+      return onUpdate(result.view);
+    }
     setError(result.error);
     // The answer may have been saved anyway (lost response, another tab); if so, show its grade.
+    // Answering stays disabled until that's known.
     await onRefresh();
+    setSubmitting(undefined);
   };
 
   const optionClass = (i: number) => {

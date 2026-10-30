@@ -4,7 +4,7 @@ import type { ArtifactView } from "@mivra/protocol";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
-import { artifactData, artifactViewsIn, isReplyInProgress } from "./chat-artifacts.js";
+import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 
 interface Session {
   id: string;
@@ -80,13 +80,7 @@ function SessionLoader({ sessionId, onReply }: { sessionId: string; onReply: () 
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    api.sessions[":id"].messages
-      .$get({ param: { id: sessionId } })
-      .then(async (res) => {
-        if (res.ok) setInitial((await res.json()) as UIMessage[]);
-        else setError(await errorMessage(res));
-      })
-      .catch(() => setError("Can't reach the Mivra server."));
+    void loadMessages(sessionId).then((result) => (result.ok ? setInitial(result.messages) : setError(result.error)));
   }, [sessionId]);
 
   if (error) return <p className="empty error">Couldn't load this session: {error}</p>;
@@ -126,8 +120,8 @@ function Chat({
 
   const busy = status === "submitted" || status === "streaming";
   const refreshViews = async () => {
-    const messages = await loadMessages(sessionId);
-    if (messages) setUpdatedViews((prev) => ({ ...prev, ...artifactViewsIn(messages) }));
+    const result = await loadMessages(sessionId);
+    if (result.ok) setUpdatedViews((prev) => mergeViews(prev, artifactViewsIn(result.messages)));
   };
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -150,7 +144,7 @@ function Chat({
                     key={part.id ?? i}
                     data={artifactData(part, updatedViews)}
                     replyInProgress={isReplyInProgress(status, mi, messages.length)}
-                    onUpdate={(view) => setUpdatedViews((prev) => ({ ...prev, [view.id]: view }))}
+                    onUpdate={(view) => setUpdatedViews((prev) => mergeViews(prev, { [view.id]: view }))}
                     onRefresh={refreshViews}
                   />
                 );

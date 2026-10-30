@@ -36,12 +36,15 @@ export async function submitMultipleChoice(artifactId: string, optionIndex: numb
   }
 }
 
-/** A session's stored messages, or undefined if they can't be loaded. */
-export async function loadMessages(sessionId: string): Promise<UIMessage[] | undefined> {
+/** A session's stored messages, or the reason they couldn't be loaded. */
+export async function loadMessages(
+  sessionId: string,
+): Promise<{ ok: true; messages: UIMessage[] } | { ok: false; error: string }> {
   try {
     const res = await api.sessions[":id"].messages.$get({ param: { id: sessionId } });
-    return res.ok ? ((await res.json()) as UIMessage[]) : undefined;
+    if (!res.ok) return { ok: false, error: await errorMessage(res) };
+    return { ok: true, messages: (await res.json()) as UIMessage[] };
   } catch {
-    return undefined;
+    return { ok: false, error: "Can't reach the Mivra server." };
   }
 }

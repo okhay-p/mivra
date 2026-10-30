@@ -23,3 +23,21 @@ export function artifactViewsIn(messages: UIMessage[]): Record<string, ArtifactV
   }
   return views;
 }
+
+const isGraded = (view: ArtifactView | undefined) => view?.kind === "multiple_choice" && view.latestAttempt !== undefined;
+
+/**
+ * Merges views into the local overrides. Grading is one-way, so a graded view is never replaced by
+ * an ungraded one (e.g. a refresh that started before the answer was saved but returned after).
+ */
+export function mergeViews(
+  current: Record<string, ArtifactView>,
+  incoming: Record<string, ArtifactView>,
+): Record<string, ArtifactView> {
+  const merged = { ...current };
+  for (const [id, view] of Object.entries(incoming)) {
+    if (isGraded(current[id]) && !isGraded(view)) continue;
+    merged[id] = view;
+  }
+  return merged;
+}

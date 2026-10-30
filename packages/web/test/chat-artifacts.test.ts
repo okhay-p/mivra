@@ -1,6 +1,6 @@
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vitest";
-import { artifactData, artifactViewsIn, isReplyInProgress } from "../src/chat-artifacts.js";
+import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "../src/chat-artifacts.js";
 import { answered, question, trace } from "./fixtures.js";
 
 const part = (data: unknown, id?: string) => ({ type: "data-artifact" as const, id, data });
@@ -32,5 +32,16 @@ describe("artifactViewsIn", () => {
       message("a1", [part(trace, "art-trace"), part({ kind: "mystery" }, "x"), part(answered, "art-mc")]),
     ];
     expect(artifactViewsIn(messages)).toEqual({ "art-trace": trace, "art-mc": answered });
+  });
+});
+
+describe("mergeViews", () => {
+  it("never replaces a graded check with an ungraded one", () => {
+    // A refresh that started before the answer was saved returns after the graded view arrived.
+    expect(mergeViews({ "art-mc": answered }, { "art-mc": question, "art-trace": trace })).toEqual({
+      "art-mc": answered,
+      "art-trace": trace,
+    });
+    expect(mergeViews({ "art-mc": question }, { "art-mc": answered })).toEqual({ "art-mc": answered });
   });
 });

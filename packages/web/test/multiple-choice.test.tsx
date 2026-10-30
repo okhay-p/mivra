@@ -14,11 +14,12 @@ function Harness({
   data: unknown;
   replyInProgress?: boolean;
   /** What the chat's refresh would load from the server. */
-  refreshed?: ArtifactView;
+  refreshed?: ArtifactView | Promise<never>;
 }) {
   const [view, setView] = useState<ArtifactView>();
   const onRefresh = async () => {
-    if (refreshed) setView(refreshed);
+    const next = await refreshed;
+    if (next) setView(next);
   };
   return <ArtifactPart data={view ?? data} replyInProgress={replyInProgress} onUpdate={setView} onRefresh={onRefresh} />;
 }
@@ -70,6 +71,16 @@ describe("MultipleChoice", () => {
     fireEvent.click(option(/^Never/));
 
     await screen.findByText("Not quite.");
+    expect(options().every((b) => b.disabled)).toBe(true);
+  });
+
+  it("keeps answering disabled until the refresh after a failed answer finishes", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(json({ error: "Can't save" }, 500));
+    render(<Harness data={question} refreshed={new Promise<never>(() => {})} />);
+
+    fireEvent.click(option(/^Never/));
+
+    await screen.findByText("Can't save");
     expect(options().every((b) => b.disabled)).toBe(true);
   });
 
