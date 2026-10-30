@@ -57,3 +57,49 @@ export const runs = sqliteTable(
       .where(sql`${t.status} = 'running'`),
   ],
 );
+
+/**
+ * A learning artifact produced by an agent tool call (ADR-006). `spec` is the full, validated tool
+ * input, including private fields such as a check's answer key; clients only ever see a view of it.
+ */
+export const artifacts = sqliteTable(
+  "artifacts",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    runId: text("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    toolCallId: text("tool_call_id").notNull(),
+    kind: text("kind").notNull(),
+    version: integer("version").notNull(),
+    spec: text("spec", { mode: "json" }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [index("artifacts_session_idx").on(t.sessionId, t.createdAt), uniqueIndex("artifacts_tool_call_idx").on(t.runId, t.toolCallId)],
+);
+
+/**
+ * A learner's graded answer to a check artifact. One attempt per artifact (the grade reveals the
+ * answer). `concept` and `correct` double as the first progress evidence (ADR-006).
+ */
+export const attempts = sqliteTable(
+  "attempts",
+  {
+    id: text("id").primaryKey(),
+    artifactId: text("artifact_id")
+      .notNull()
+      .references(() => artifacts.id, { onDelete: "cascade" }),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    answer: text("answer", { mode: "json" }).notNull(),
+    grade: text("grade", { mode: "json" }).notNull(),
+    correct: integer("correct", { mode: "boolean" }).notNull(),
+    concept: text("concept"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("attempts_one_per_artifact_idx").on(t.artifactId), index("attempts_session_idx").on(t.sessionId, t.createdAt)],
+);

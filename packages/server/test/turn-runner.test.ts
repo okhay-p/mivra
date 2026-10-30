@@ -2,6 +2,8 @@ import { convertToModelMessages, simulateReadableStream, type UIMessage } from "
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db/client.js";
+import { coreLearning } from "../src/plugins/core-learning.js";
+import { createCapabilityRegistry } from "../src/runtime/capabilities.js";
 import { createTurnRunner } from "../src/runtime/turn-runner.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
@@ -23,6 +25,8 @@ const mockModel = () =>
     }),
   });
 
+const registry = createCapabilityRegistry([coreLearning]);
+
 const userMessage = (text: string): UIMessage => ({ id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text }] });
 
 describe("TurnRunner, used without HTTP", () => {
@@ -35,7 +39,7 @@ describe("TurnRunner, used without HTTP", () => {
       { role: "user" as const, content: "RECALLED: learner already knows two pointers" },
       ...(await convertToModelMessages(conversation)),
     ]);
-    const runner = createTurnRunner({ store, model: () => llm, assembleContext });
+    const runner = createTurnRunner({ store, registry, model: () => llm, assembleContext });
 
     const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hello") });
     expect(result.ok).toBe(true);
@@ -51,7 +55,7 @@ describe("TurnRunner, used without HTTP", () => {
 
   it("reports domain errors instead of HTTP statuses", async () => {
     const store = createSessionStore(openDb(":memory:"));
-    const runner = createTurnRunner({ store, model: mockModel });
+    const runner = createTurnRunner({ store, registry, model: mockModel });
     const session = store.createSession();
 
     expect(await runner.startTurn({ sessionId: "missing", message: userMessage("hi") })).toEqual({
@@ -68,6 +72,7 @@ describe("TurnRunner, used without HTTP", () => {
     const session = store.createSession();
     const runner = createTurnRunner({
       store,
+      registry,
       model: mockModel,
       assembleContext: async () => {
         throw new Error("memory unavailable");

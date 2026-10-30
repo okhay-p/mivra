@@ -47,3 +47,12 @@ For scripts: `curl -H "Authorization: Bearer $(cat ~/.mivra/auth-token)" http://
 ## Chat turns
 
 Each reply is a *run* (`runs` table). A session has at most one running run, so a second send while a reply streams gets `409`. Message ids are single-use, so a retried request is rejected rather than generating twice. Only completed replies are saved: if the learner stops a reply or disconnects, the model call is aborted and the run is recorded as `cancelled`; provider errors are recorded as `failed` with the error. Runs left running when the server stops are marked `failed` on the next start.
+
+## Learning artifacts
+
+The agent shows interactive artifacts through tool calls (ADR-006): `show_algorithm_trace` and `ask_multiple_choice`, registered by the first-party `core-learning` plugin (`packages/server/src/plugins/`) through the capability registry (ADR-007).
+
+- Each tool call's input is validated against its `packages/protocol` schema and stored in `artifacts` with the full spec. Clients never receive raw tool calls: the live stream and `GET /api/sessions/{id}/messages` carry `data-artifact` parts with the artifact's public view, so a check's answer key, explanation and feedback stay on the server.
+- `POST /api/artifacts/{id}/attempts` with `{ "answer": { "optionIndex": n } }` grades a check deterministically (one attempt per check) and returns the view with the grade.
+- On later turns, each check's tool result tells the model whether the learner answered and how they did.
+

@@ -1,6 +1,11 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { LanguageModel } from "ai";
+import { ArtifactView } from "@mivra/protocol";
 import type { Db } from "./db/client.js";
+import { coreLearning } from "./plugins/core-learning.js";
+import { presentMessages } from "./runtime/artifacts.js";
+import { submitAttempt } from "./runtime/attempts.js";
+import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
 import { createSessionStore, type SessionRow } from "./store/session-store.js";
@@ -9,6 +14,8 @@ export interface AppDeps {
   db: Db;
   model: () => LanguageModel;
   security: SecurityConfig;
+  /** Defaults to the first-party core-learning plugin. */
+  plugins?: Plugin[];
 }
 
 const Session = z
@@ -94,10 +101,29 @@ const chat = createRoute({
   },
 });
 
+const submitAttemptRoute = createRoute({
+  method: "post",
+  path: "/artifacts/{id}/attempts",
+  description:
+    "Submit the learner's answer to a check artifact. The server grades it deterministically and returns the artifact view with the grade, which reveals the correct answer. One attempt per check.",
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { "application/json": { schema: z.object({ answer: z.unknown() }) } } },
+  },
+  responses: {
+    201: { description: "Graded; the artifact view including latestAttempt", content: { "application/json": { schema: ArtifactView } } },
+    400: errorResponse("Invalid answer, or the artifact isn't a check"),
+    404: errorResponse("Unknown artifact"),
+    409: errorResponse("Already answered, or the check was discarded"),
+  },
+});
+
 const turnErrorStatus = { not_found: 404, invalid: 400, conflict: 409, unavailable: 500 } as const satisfies Record<
   TurnError["kind"],
   number
 >;
+
+const attemptErrorStatus = { not_found: 404, invalid: 400, conflict: 409 } as const;
 
 function toSessionJson(row: SessionRow) {
   return {
@@ -108,10 +134,11 @@ function toSessionJson(row: SessionRow) {
   };
 }
 
-export function createApp({ db, model, security }: AppDeps) {
+export function createApp({ db, model, security, plugins = [coreLearning] }: AppDeps) {
   const store = createSessionStore(db);
   store.recoverInterruptedRuns();
-  const turns = createTurnRunner({ store, model });
+  const registry = createCapabilityRegistry(plugins);
+  const turns = createTurnRunner({ store, registry, model });
 
   const api = new OpenAPIHono()
     .openapi(health, (c) => c.json({ ok: true as const }, 200))
@@ -124,7 +151,8 @@ export function createApp({ db, model, security }: AppDeps) {
       const { id } = c.req.valid("param");
       if (!store.findSession(id)) return c.json({ error: "Session not found" }, 404);
       // Cast to the documented wire shape: hono's JSON typing recurses too deeply on the AI SDK's UIMessage type.
-      return c.json(store.loadMessages(id) as unknown as z.infer<typeof Message>[], 200);
+      const messages = presentMessages(store.loadMessages(id), registry, store);
+      return c.json(messages as unknown as z.infer<typeof Message>[], 200);
     })
     .openapi(chat, async (c) => {
       const result = await turns.startTurn({
@@ -134,6 +162,12 @@ export function createApp({ db, model, security }: AppDeps) {
       });
       if (!result.ok) return c.json({ error: result.error.message }, turnErrorStatus[result.error.kind]);
       return result.response;
+    })
+    .openapi(submitAttemptRoute, (c) => {
+      const result = submitAttempt({ artifactId: c.req.valid("param").id, answer: c.req.valid("json").answer }, { registry, store });
+      if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
+      // Cast for the same reason as messages: hono's JSON typing recurses too deeply on the view type.
+      return c.json(result.view as never, 201);
     });
 
   api.doc("/doc", {

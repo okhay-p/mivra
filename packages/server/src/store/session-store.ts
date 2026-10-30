@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
 import { and, asc, desc, eq, max } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { messages, runs, sessions, type RunStatus } from "../db/schema.js";
+import { artifacts, attempts, messages, runs, sessions, type RunStatus } from "../db/schema.js";
 
 export type { RunStatus };
 
 export type SessionRow = typeof sessions.$inferSelect;
+export type ArtifactRow = typeof artifacts.$inferSelect;
+export type AttemptRow = typeof attempts.$inferSelect;
 
 /** A write was refused because it would break an invariant (reused message id, overlapping run). */
 export class Conflict extends Error {}
@@ -116,6 +118,40 @@ export function createSessionStore(db: Db) {
           .set({ status, assistantMessageId, error, endedAt: now })
           .where(and(eq(runs.id, runId), eq(runs.status, "running")))
           .run();
+      });
+    },
+
+    /** Saves a validated artifact produced by a tool call in a run. */
+    createArtifact(input: { sessionId: string; runId: string; toolCallId: string; kind: string; version: number; spec: unknown }): ArtifactRow {
+      const row = { id: randomUUID(), ...input, createdAt: new Date() };
+      db.insert(artifacts).values(row).run();
+      return row;
+    },
+
+    /** The artifact plus the status of the run that produced it. */
+    findArtifact(id: string): (ArtifactRow & { runStatus: RunStatus }) | undefined {
+      const row = db
+        .select({ artifact: artifacts, runStatus: runs.status })
+        .from(artifacts)
+        .innerJoin(runs, eq(runs.id, artifacts.runId))
+        .where(eq(artifacts.id, id))
+        .get();
+      return row && { ...row.artifact, runStatus: row.runStatus };
+    },
+
+    findAttempt(artifactId: string): AttemptRow | undefined {
+      return db.select().from(attempts).where(eq(attempts.artifactId, artifactId)).get();
+    },
+
+    /** Records the learner's single graded attempt. Throws Conflict if one already exists. */
+    createAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string }): AttemptRow {
+      return db.transaction((tx) => {
+        if (tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, input.artifactId)).get()) {
+          throw new Conflict("This check has already been answered");
+        }
+        const row = { id: randomUUID(), ...input, concept: input.concept ?? null, createdAt: new Date() };
+        tx.insert(attempts).values(row).run();
+        return row;
       });
     },
   };
