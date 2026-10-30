@@ -58,9 +58,24 @@ const wideCheck = {
 
 type Step = { tool: string; input: unknown } | { text: string; hold?: boolean };
 
-/** Held steps wait for POST /e2e/release. */
-let releaseHeld = () => {};
-const held = () => new Promise<void>((resolve) => (releaseHeld = resolve));
+/**
+ * Held steps wait for POST /e2e/release. A release that arrives first is remembered, because a test
+ * can see the check before the model has reached the step after it.
+ */
+let waiting: (() => void) | undefined;
+let released = false;
+function releaseHeld() {
+  if (waiting) waiting();
+  else released = true;
+  waiting = undefined;
+}
+function held() {
+  if (released) {
+    released = false;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => (waiting = resolve));
+}
 
 const SCRIPTS: Record<string, Step[]> = {
   teach: [
