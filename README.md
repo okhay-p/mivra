@@ -7,7 +7,7 @@ An open-source, local-first AI agent harness for learning. Design docs and decis
 | Package | What it is |
 |---|---|
 | `packages/server` | Hono API server (Node.js). Owns the agent runtime, the SQLite database (Drizzle + better-sqlite3) and model access (Vercel AI SDK). Binds to `127.0.0.1` only. |
-| `packages/web` | React + Vite web UI. Talks to the server only through its API. |
+| `packages/web` | React + Vite web UI (shadcn/ui on Tailwind v4). Talks to the server only through its API. |
 | `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `multiple_choice`), their tool definitions and the deterministic grader. Shared by server and web. |
 
 ## Setup
@@ -34,6 +34,10 @@ cp .env.example .env   # add a provider key and set MIVRA_MODEL
 Workspace packages resolve to their TypeScript source in dev, tests and type-checking through the `@mivra/source` export condition, so `pnpm dev` needs no prebuild. `pnpm build` compiles `packages/protocol` first; the production server loads its `dist`.
 
 Data is stored in `~/.mivra/mivra.db` (override with `MIVRA_DATA_DIR`). The API's OpenAPI document is at `/api/doc`.
+
+## Web UI
+
+The UI uses [shadcn/ui](https://ui.shadcn.com) with the Paper & Amber theme (ADR-008). Components are copied into `packages/web/src/components/ui`, and theme tokens live in `src/styles.css`. To add a component, run `pnpm dlx shadcn@latest add <name>` from `packages/web`, then check that it didn't overwrite the tokens in `styles.css`. Fonts are bundled through `@fontsource`, so the app needs no network for them. The theme follows the OS until the learner picks Light or Dark in the sidebar; the choice is saved in the browser.
 
 ## Access and security
 

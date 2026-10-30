@@ -4,9 +4,26 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "types": ["vite/client", "node"],
-    "noEmit": true
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "vite/client",
+      "node"
+    ],
+    "noEmit": true,
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ]
+    }
   },
-  "include": ["src", "test", "vite.config.ts", "vitest.config.ts"]
+  "include": [
+    "src",
+    "test",
+    "vite.config.ts",
+    "vitest.config.ts"
+  ]
 }
