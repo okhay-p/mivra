@@ -7,7 +7,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useTheme, type ThemeChoice } from "./theme.js";
+import type { ThemeChoice } from "./theme.js";
 
 const OPTIONS = [
   { value: "system", label: "System", Icon: Monitor },
@@ -15,8 +15,7 @@ const OPTIONS = [
   { value: "dark", label: "Dark", Icon: Moon },
 ] as const;
 
-export function ThemeToggle() {
-  const [choice, setChoice] = useTheme();
+export function ThemeToggle({ choice, onChange }: { choice: ThemeChoice; onChange: (choice: ThemeChoice) => void }) {
   const { label, Icon } = OPTIONS.find((o) => o.value === choice) ?? OPTIONS[0];
 
   return (
@@ -30,7 +29,7 @@ export function ThemeToggle() {
             </SidebarMenuButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start">
-            <DropdownMenuRadioGroup value={choice} onValueChange={(value) => setChoice(value as ThemeChoice)}>
+            <DropdownMenuRadioGroup value={choice} onValueChange={(value) => onChange(value as ThemeChoice)}>
               {OPTIONS.map(({ value, label, Icon }) => (
                 <DropdownMenuRadioItem key={value} value={value}>
                   <Icon />

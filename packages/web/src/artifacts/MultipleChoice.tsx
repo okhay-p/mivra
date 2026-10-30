@@ -66,7 +66,7 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 variant="outline"
                 data-result={result}
                 className={cn(
-                  "h-auto justify-between gap-3 py-2 text-left font-normal whitespace-normal",
+                  "h-auto flex-wrap justify-between gap-x-3 gap-y-1 py-2 text-left font-normal whitespace-normal",
                   answered && "disabled:opacity-100",
                   submitting === i && "border-primary dark:border-primary",
                   // The dark: variants beat the outline button's own dark border and background.
@@ -76,7 +76,7 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 disabled={disabled}
                 onClick={() => void answer(i)}
               >
-                <span>{option.text}</span>
+                <span className="min-w-0 flex-[1_1_12rem] wrap-anywhere">{option.text}</span>
                 {optionMark(i) && (
                   <span className={cn("shrink-0 text-xs font-medium", result === "incorrect" ? "text-destructive" : "text-success")}>
                     {optionMark(i)}

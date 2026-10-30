@@ -7,6 +7,7 @@ import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { ThemeToggle } from "./ThemeToggle.js";
+import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -68,15 +69,24 @@ export function App() {
   };
 
   const active = sessions.find((s) => s.id === activeId);
+  // Lives here because the mobile sidebar unmounts its content when closed, and the theme must keep following the OS.
+  const [theme, setTheme] = useTheme();
 
   return (
     <SidebarProvider>
-      <SessionSidebar sessions={sessions} activeId={activeId} onSelect={setActiveId} onNew={newSession} />
+      <SessionSidebar
+        sessions={sessions}
+        activeId={activeId}
+        theme={theme}
+        onThemeChange={setTheme}
+        onSelect={setActiveId}
+        onNew={newSession}
+      />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
         <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
           <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-          <span className="truncate text-sm font-medium">{active?.title ?? "Mivra"}</span>
+          <h1 className="truncate text-base font-medium">{active?.title ?? "Mivra"}</h1>
         </header>
         {!token ? (
           <Notice error>No API token found. Start the server, then reload this page.</Notice>
@@ -99,11 +109,15 @@ function Notice({ error, children }: { error?: boolean; children: ReactNode }) {
 function SessionSidebar({
   sessions,
   activeId,
+  theme,
+  onThemeChange,
   onSelect,
   onNew,
 }: {
   sessions: Session[];
   activeId: string | undefined;
+  theme: ThemeChoice;
+  onThemeChange: (theme: ThemeChoice) => void;
   onSelect: (id: string) => void;
   onNew: () => void;
 }) {
@@ -120,7 +134,7 @@ function SessionSidebar({
           <div className="bg-sidebar-primary text-sidebar-primary-foreground font-heading grid size-6 shrink-0 place-items-center rounded-md text-sm font-semibold">
             M
           </div>
-          <h1 className="truncate text-base font-semibold group-data-[collapsible=icon]:hidden">Mivra</h1>
+          <span className="font-heading truncate text-base font-semibold group-data-[collapsible=icon]:hidden">Mivra</span>
         </div>
         <SidebarMenu>
           <SidebarMenuItem>
@@ -163,7 +177,7 @@ function SessionSidebar({
         ))}
       </SidebarContent>
       <SidebarFooter>
-        <ThemeToggle />
+        <ThemeToggle choice={theme} onChange={onThemeChange} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
@@ -234,7 +248,7 @@ function Chat({
             <div
               key={m.id}
               className={cn(
-                "flex flex-col gap-2 whitespace-pre-wrap",
+                "flex min-w-0 flex-col gap-2 whitespace-pre-wrap wrap-anywhere",
                 m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2",
               )}
             >

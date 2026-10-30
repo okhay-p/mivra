@@ -16,5 +16,9 @@ describe("groupSessions", () => {
       { label: "Older", sessions: [d] },
     ]);
     expect(groupSessions([d], now).map((g) => g.label)).toEqual(["Older"]);
+    // A week across a calendar boundary keeps its local-midnight cutoff.
+    const justBefore = { updatedAt: new Date(2026, 9, 22, 23, 59).toISOString() };
+    const justAfter = { updatedAt: new Date(2026, 9, 23, 0, 0).toISOString() };
+    expect(groupSessions([justAfter, justBefore], now).map((g) => g.sessions)).toEqual([[justAfter], [justBefore]]);
   });
 });
