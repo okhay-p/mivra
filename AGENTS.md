@@ -18,7 +18,7 @@ pnpm monorepo: `packages/server` (Hono, Drizzle + better-sqlite3, Vercel AI SDK)
 
 Every change passes a review gate before its PR is opened:
 
-1. Request a read-only review from GPT-6.1 Sol through T3 `delegate_task`: `target: { providerInstanceId: <the Codex instance from orchestrator_capabilities>, model: "gpt-6.1-sol", options: { reasoningEffort: "medium" } }`, and check the result echoes that provider, model and option. Give it the change's goal, the diff to inspect, and the checks you ran, and ask for a verdict (merge / merge after fixes / don't merge) with findings ranked by severity.
+1. Request a read-only review from GPT-6.1 Sol through T3 `delegate_task`: `target: { providerInstanceId: <the Codex instance from orchestrator_capabilities>, model: "gpt-6.1-sol", options: { reasoningEffort: "medium" } }`, and check the result echoes that provider, model and option. Give it the change's goal, the diff to inspect, and the checks you ran. Sol must run `pnpm typecheck`, `pnpm test` and `pnpm test:e2e` itself and report the results; this replaces CI, so don't add GitHub Actions for tests. Ask for a verdict (merge / merge after fixes / don't merge) with findings ranked by severity.
 2. Fix every must-fix finding, plus any nice-to-have worth its cost. Rerun `pnpm typecheck` and `pnpm test`.
 3. Request the next round with a fresh `delegate_task` whose prompt carries the original brief, the prior findings, and what you changed or why you declined.
 
