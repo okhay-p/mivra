@@ -44,9 +44,9 @@ describe("MultipleChoice", () => {
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({ answer: { optionIndex: 0 } });
 
-    expect(option(/^Never/).className).toContain("incorrect");
+    expect(option(/^Never/).dataset.result).toBe("incorrect");
     expect(option(/^Never/).textContent).toContain("Your answer, incorrect");
-    expect(option(/^When the sum/).className).toContain("correct");
+    expect(option(/^When the sum/).dataset.result).toBe("correct");
     expect(option(/^When the sum/).textContent).toContain("Correct answer");
     expect(screen.getByText("Shrink to restore the invariant.")).toBeTruthy();
     expect(screen.getByText("It has to shrink at some point.")).toBeTruthy();

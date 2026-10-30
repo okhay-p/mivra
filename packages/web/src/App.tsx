@@ -1,14 +1,38 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView } from "@mivra/protocol";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { MessageSquare, Plus } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { ThemeToggle } from "./ThemeToggle.js";
+import { groupSessions } from "./session-groups.js";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Separator } from "@/components/ui/separator";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from "@/components/ui/sidebar";
+import { cn } from "@/lib/utils";
 
 interface Session {
   id: string;
   title: string;
+  updatedAt: string;
 }
 
 export function App() {
@@ -43,35 +67,106 @@ export function App() {
     }
   };
 
+  const active = sessions.find((s) => s.id === activeId);
+
   return (
-    <div className="layout">
-      <aside className="sidebar">
-        <h1>Mivra</h1>
-        <button className="new" onClick={newSession}>
-          + New session
-        </button>
-        <ul>
-          {sessions.map((s) => (
-            <li key={s.id}>
-              <button className={s.id === activeId ? "active" : ""} onClick={() => setActiveId(s.id)}>
-                {s.title}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </aside>
-      <main>
+    <SidebarProvider>
+      <SessionSidebar sessions={sessions} activeId={activeId} onSelect={setActiveId} onNew={newSession} />
+      <SidebarInset className="h-svh min-w-0 overflow-hidden">
+        <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
+          <SidebarTrigger />
+          <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
+          <span className="truncate text-sm font-medium">{active?.title ?? "Mivra"}</span>
+        </header>
         {!token ? (
-          <p className="empty error">No API token found. Start the server, then reload this page.</p>
+          <Notice error>No API token found. Start the server, then reload this page.</Notice>
         ) : error ? (
-          <p className="empty error">{error}</p>
+          <Notice error>{error}</Notice>
         ) : activeId ? (
           <SessionLoader key={activeId} sessionId={activeId} onReply={refreshSessions} />
         ) : (
-          <p className="empty">Start a new session to begin learning.</p>
+          <Notice>Start a new session to begin learning.</Notice>
         )}
-      </main>
-    </div>
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+function Notice({ error, children }: { error?: boolean; children: ReactNode }) {
+  return <p className={cn("m-auto p-6 text-center", error ? "text-destructive" : "text-muted-foreground")}>{children}</p>;
+}
+
+function SessionSidebar({
+  sessions,
+  activeId,
+  onSelect,
+  onNew,
+}: {
+  sessions: Session[];
+  activeId: string | undefined;
+  onSelect: (id: string) => void;
+  onNew: () => void;
+}) {
+  const { isMobile, setOpenMobile } = useSidebar();
+  // On mobile the sidebar is an overlay, so close it once the choice is made.
+  const closeOnMobile = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+
+  return (
+    <Sidebar collapsible="icon">
+      <SidebarHeader>
+        <div className="flex items-center gap-2 p-1">
+          <div className="bg-sidebar-primary text-sidebar-primary-foreground font-heading grid size-6 shrink-0 place-items-center rounded-md text-sm font-semibold">
+            M
+          </div>
+          <h1 className="truncate text-base font-semibold group-data-[collapsible=icon]:hidden">Mivra</h1>
+        </div>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              variant="outline"
+              tooltip="New session"
+              onClick={() => {
+                onNew();
+                closeOnMobile();
+              }}
+            >
+              <Plus />
+              <span>New session</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+      <SidebarContent>
+        {groupSessions(sessions).map((group) => (
+          <SidebarGroup key={group.label}>
+            <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+            <SidebarMenu>
+              {group.sessions.map((s) => (
+                <SidebarMenuItem key={s.id}>
+                  <SidebarMenuButton
+                    isActive={s.id === activeId}
+                    tooltip={s.title}
+                    onClick={() => {
+                      onSelect(s.id);
+                      closeOnMobile();
+                    }}
+                  >
+                    <MessageSquare />
+                    <span>{s.title}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroup>
+        ))}
+      </SidebarContent>
+      <SidebarFooter>
+        <ThemeToggle />
+      </SidebarFooter>
+      <SidebarRail />
+    </Sidebar>
   );
 }
 
@@ -83,7 +178,7 @@ function SessionLoader({ sessionId, onReply }: { sessionId: string; onReply: () 
     void loadMessages(sessionId).then((result) => (result.ok ? setInitial(result.messages) : setError(result.error)));
   }, [sessionId]);
 
-  if (error) return <p className="empty error">Couldn't load this session: {error}</p>;
+  if (error) return <Notice error>Couldn't load this session: {error}</Notice>;
   return initial ? <Chat sessionId={sessionId} initialMessages={initial} onReply={onReply} /> : null;
 }
 
@@ -132,41 +227,52 @@ function Chat({
   };
 
   return (
-    <div className="chat">
-      <div className="messages">
-        {messages.map((m, mi) => (
-          <div key={m.id} className={`message ${m.role}`}>
-            {m.parts.map((part, i) => {
-              if (part.type === "text") return <p key={i}>{part.text}</p>;
-              if (part.type === "data-artifact") {
-                return (
-                  <ArtifactPart
-                    key={part.id ?? i}
-                    data={artifactData(part, updatedViews)}
-                    replyInProgress={isReplyInProgress(status, mi, messages.length)}
-                    onUpdate={(view) => setUpdatedViews((prev) => mergeViews(prev, { [view.id]: view }))}
-                    onRefresh={refreshViews}
-                  />
-                );
-              }
-              return null;
-            })}
-          </div>
-        ))}
-        {status === "submitted" && <div className="message assistant pending">Thinking…</div>}
-        {error && <div className="error">{readableError(error)}</div>}
-        <div ref={bottom} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
+          {messages.map((m, mi) => (
+            <div
+              key={m.id}
+              className={cn(
+                "flex flex-col gap-2 whitespace-pre-wrap",
+                m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2",
+              )}
+            >
+              {m.parts.map((part, i) => {
+                if (part.type === "text") return <p key={i}>{part.text}</p>;
+                if (part.type === "data-artifact") {
+                  return (
+                    <ArtifactPart
+                      key={part.id ?? i}
+                      data={artifactData(part, updatedViews)}
+                      replyInProgress={isReplyInProgress(status, mi, messages.length)}
+                      onUpdate={(view) => setUpdatedViews((prev) => mergeViews(prev, { [view.id]: view }))}
+                      onRefresh={refreshViews}
+                    />
+                  );
+                }
+                return null;
+              })}
+            </div>
+          ))}
+          {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
+          {error && <p className="text-destructive">{readableError(error)}</p>}
+          <div ref={bottom} />
+        </div>
       </div>
-      <form onSubmit={submit}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="What do you want to learn?"
-          autoFocus
-        />
-        <button type="submit" disabled={busy || !input.trim()}>
-          Send
-        </button>
+      <form onSubmit={submit} className="border-t">
+        <div className="mx-auto flex max-w-3xl gap-2 p-3">
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="What do you want to learn?"
+            aria-label="Message"
+            autoFocus
+          />
+          <Button type="submit" disabled={busy || !input.trim()}>
+            Send
+          </Button>
+        </div>
       </form>
     </div>
   );

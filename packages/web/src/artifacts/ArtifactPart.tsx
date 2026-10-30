@@ -32,7 +32,7 @@ export function ArtifactPart({
   const parsed = ArtifactView.safeParse(data);
   if (!parsed.success) {
     return (
-      <div className="artifact artifact-invalid" role="note">
+      <div className="text-muted-foreground rounded-lg border border-dashed p-3 text-sm" role="note">
         Can't display this item.
       </div>
     );

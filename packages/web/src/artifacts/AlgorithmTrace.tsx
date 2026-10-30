@@ -1,10 +1,27 @@
 import type { AlgorithmTraceSpec, TraceStep } from "@mivra/protocol";
+import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import type { ArtifactProps } from "./ArtifactPart.js";
 
 const PLAY_INTERVAL_MS = 1500;
 
 type Range = NonNullable<TraceStep["ranges"]>[number];
+type Tone = NonNullable<Range["tone"]>;
+
+const RANGE_TONES: Record<Tone, string> = {
+  active: "bg-accent text-accent-foreground",
+  done: "bg-success/15 text-success",
+  muted: "bg-muted text-muted-foreground",
+};
+const CELL_TONES: Record<Tone, string> = {
+  active: "border-primary bg-accent",
+  done: "border-success bg-success/15",
+  muted: "bg-muted text-muted-foreground",
+};
 
 /**
  * What to draw at a step, following the spec's state rules: `values` persists from the latest step
@@ -62,101 +79,107 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
   // Bounds are checked server-side; still skip anything outside the sequence rather than misdraw it.
   const ranges = state.ranges.filter((r) => r.start <= r.end && r.end < n);
   const pointers = state.pointers.filter((p) => p.index < n);
-  const toneAt = (i: number): Range["tone"] | undefined => {
+  const toneAt = (i: number): Tone | undefined => {
     const range = ranges.find((r) => r.start <= i && i <= r.end);
     return range ? (range.tone ?? "active") : undefined;
   };
 
   return (
-    <section
-      className="artifact trace"
-      aria-label={`Algorithm trace: ${spec.title}`}
-      tabIndex={0}
-      onKeyDown={onKeyDown}
-    >
-      <h3>{spec.title}</h3>
-      {/* The grid relates pointers and ranges to cells only by position, so screen readers get this instead. */}
-      <ul className="sr-only" data-testid="trace-description">
-        <li>Values: {state.values.map((v, i) => `index ${i}: ${String(v)}`).join(", ")}</li>
-        {pointers.map((p, i) => (
-          <li key={`p-${i}`}>
-            {p.name} points to index {p.index}, value {String(state.values[p.index])}
-          </li>
-        ))}
-        {ranges.map((r, i) => (
-          <li key={`r-${i}`}>
-            {r.label ? `${r.label} covers` : "Highlighted:"} indices {r.start} through {r.end}
-          </li>
-        ))}
-      </ul>
-      <div className="trace-scroll" aria-hidden="true">
-        <div className="trace-grid" style={{ gridTemplateColumns: `repeat(${n}, minmax(2.5rem, max-content))` }}>
+    <Card role="region" aria-label={`Algorithm trace: ${spec.title}`} tabIndex={0} onKeyDown={onKeyDown} className="whitespace-normal">
+      <CardHeader>
+        <CardTitle className="font-heading text-base">
+          <h3>{spec.title}</h3>
+        </CardTitle>
+        <CardDescription>Algorithm trace</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {/* The grid relates pointers and ranges to cells only by position, so screen readers get this instead. */}
+        <ul className="sr-only" data-testid="trace-description">
+          <li>Values: {state.values.map((v, i) => `index ${i}: ${String(v)}`).join(", ")}</li>
+          {pointers.map((p, i) => (
+            <li key={`p-${i}`}>
+              {p.name} points to index {p.index}, value {String(state.values[p.index])}
+            </li>
+          ))}
           {ranges.map((r, i) => (
-            <div
-              key={`range-${i}`}
-              className={`trace-range tone-${r.tone ?? "active"}`}
-              style={{ gridColumn: `${r.start + 1} / ${r.end + 2}`, gridRow: i + 1 }}
-              data-testid="trace-range"
-            >
-              {r.label ?? " "}
-            </div>
+            <li key={`r-${i}`}>
+              {r.label ? `${r.label} covers` : "Highlighted:"} indices {r.start} through {r.end}
+            </li>
           ))}
-          {state.values.map((value, i) => {
-            const tone = toneAt(i);
-            return (
+        </ul>
+        <div className="overflow-x-auto pb-1" aria-hidden="true">
+          <div className="inline-grid gap-1" style={{ gridTemplateColumns: `repeat(${n}, minmax(2.5rem, max-content))` }}>
+            {ranges.map((r, i) => (
               <div
-                key={`cell-${i}`}
-                className={`trace-cell${tone ? ` tone-${tone}` : ""}`}
-                style={{ gridColumn: i + 1, gridRow: ranges.length + 1 }}
-                data-testid="trace-cell"
+                key={`range-${i}`}
+                className={cn("min-h-5 rounded-sm px-1 text-center text-xs font-medium", RANGE_TONES[r.tone ?? "active"])}
+                style={{ gridColumn: `${r.start + 1} / ${r.end + 2}`, gridRow: i + 1 }}
+                data-testid="trace-range"
               >
-                {String(value)}
-                <span className="trace-index">{i}</span>
+                {r.label ?? " "}
               </div>
-            );
-          })}
-          {Array.from({ length: n }, (_, i) => {
-            const names = pointers.filter((p) => p.index === i).map((p) => p.name);
-            return names.length ? (
-              <div
-                key={`pointers-${i}`}
-                className="trace-pointers"
-                style={{ gridColumn: i + 1, gridRow: ranges.length + 2 }}
-                data-testid="trace-pointer"
-              >
-                ↑ {names.join(", ")}
-              </div>
-            ) : null;
-          })}
+            ))}
+            {state.values.map((value, i) => {
+              const tone = toneAt(i);
+              return (
+                <div
+                  key={`cell-${i}`}
+                  className={cn(
+                    "bg-background relative grid h-10 place-items-center rounded-sm border px-2 font-mono text-sm",
+                    tone && CELL_TONES[tone],
+                  )}
+                  style={{ gridColumn: i + 1, gridRow: ranges.length + 1 }}
+                  data-testid="trace-cell"
+                >
+                  {String(value)}
+                  <span className="text-muted-foreground absolute right-1 bottom-0 text-[0.6rem]">{i}</span>
+                </div>
+              );
+            })}
+            {Array.from({ length: n }, (_, i) => {
+              const names = pointers.filter((p) => p.index === i).map((p) => p.name);
+              return names.length ? (
+                <div
+                  key={`pointers-${i}`}
+                  className="text-accent-foreground text-center font-mono text-xs font-medium"
+                  style={{ gridColumn: i + 1, gridRow: ranges.length + 2 }}
+                  data-testid="trace-pointer"
+                >
+                  ↑ {names.join(", ")}
+                </div>
+              ) : null;
+            })}
+          </div>
         </div>
-      </div>
-      {state.variables.length > 0 && (
-        <dl className="trace-variables">
-          {state.variables.map((v, i) => (
-            <div key={i}>
-              <dt>{v.name}</dt>
-              <dd>{String(v.value)}</dd>
-            </div>
-          ))}
-        </dl>
-      )}
-      <p className="trace-explanation" aria-live="polite">
-        {state.explanation}
-      </p>
-      <div className="trace-controls">
-        <button type="button" onClick={() => go(index - 1)} disabled={index === 0}>
-          ← Prev
-        </button>
-        <button type="button" onClick={togglePlay} aria-pressed={playing}>
-          {playing ? "Pause" : "Play"}
-        </button>
-        <button type="button" onClick={() => go(index + 1)} disabled={index === last}>
-          Next →
-        </button>
-        <span className="trace-counter">
-          Step {index + 1} of {spec.steps.length}
-        </span>
-      </div>
-    </section>
+        {state.variables.length > 0 && (
+          <dl className="flex flex-wrap gap-2">
+            {state.variables.map((v, i) => (
+              <div key={i} className="bg-muted flex gap-1 rounded-sm px-2 py-0.5 font-mono text-xs">
+                <dt>{v.name}</dt>
+                <dd>= {String(v.value)}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        <p aria-live="polite">{state.explanation}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => go(index - 1)} disabled={index === 0}>
+            <ChevronLeft />
+            Prev
+          </Button>
+          <Button type="button" size="sm" onClick={togglePlay} aria-pressed={playing}>
+            {playing ? <Pause /> : <Play />}
+            {playing ? "Pause" : "Play"}
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => go(index + 1)} disabled={index === last}>
+            Next
+            <ChevronRight />
+          </Button>
+          <Badge variant="outline" className="ml-auto">
+            Step {index + 1} of {spec.steps.length}
+          </Badge>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

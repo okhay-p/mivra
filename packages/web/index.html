@@ -4,6 +4,17 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Mivra</title>
+    <script>
+      // Applies the saved theme before first paint, so the page never flashes the wrong one (see src/theme.ts).
+      (function () {
+        var saved = null;
+        try {
+          saved = localStorage.getItem("mivra-theme");
+        } catch (e) {}
+        var dark = saved === "dark" || (saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", dark);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
