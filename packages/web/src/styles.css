@@ -144,3 +144,230 @@ form input {
   color: inherit;
   font: inherit;
 }
+
+/* Learning artifacts */
+
+.artifact {
+  position: relative;
+  margin: 0.6rem 0;
+  padding: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  white-space: normal;
+}
+
+.artifact:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.artifact h3 {
+  font-size: 1rem;
+  margin: 0 0 0.6rem;
+}
+
+.artifact button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.artifact button:not(:disabled):hover {
+  background: var(--border);
+}
+
+.artifact-invalid {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.tone-active {
+  --tone: var(--accent);
+}
+
+.tone-done {
+  --tone: #30a46c;
+}
+
+.tone-muted {
+  --tone: #8b8d98;
+}
+
+.trace-scroll {
+  overflow-x: auto;
+  padding-bottom: 0.25rem;
+}
+
+.trace-grid {
+  display: grid;
+  gap: 0.25rem;
+  width: max-content;
+}
+
+.trace-range {
+  font-size: 0.75rem;
+  text-align: center;
+  padding: 0.1rem 0.3rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--tone) 25%, transparent);
+  border: 1px solid var(--tone);
+}
+
+.trace-cell {
+  position: relative;
+  text-align: center;
+  padding: 0.5rem 0.4rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trace-cell[class*="tone-"] {
+  background: color-mix(in srgb, var(--tone) 18%, transparent);
+  border-color: var(--tone);
+}
+
+.trace-index {
+  position: absolute;
+  bottom: 0.1rem;
+  left: 0;
+  right: 0;
+  font-size: 0.65rem;
+  color: var(--muted);
+}
+
+.trace-pointers {
+  font-size: 0.75rem;
+  text-align: center;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.trace-variables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.6rem 0 0;
+  font-size: 0.9rem;
+}
+
+.trace-variables div {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.trace-variables dt {
+  color: var(--muted);
+}
+
+.trace-variables dt::after {
+  content: ":";
+}
+
+.trace-variables dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.trace-explanation {
+  margin: 0.6rem 0;
+}
+
+.trace-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.trace-controls button[aria-pressed="true"] {
+  background: var(--border);
+}
+
+.trace-counter {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.mc-concept {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.mc-question {
+  margin: 0.3rem 0 0.6rem;
+  font-weight: 600;
+}
+
+.mc-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.artifact .mc-option {
+  text-align: left;
+}
+
+.mc.answered .mc-option:disabled {
+  opacity: 1;
+}
+
+.mc-option.chosen {
+  border-color: var(--accent);
+}
+
+.artifact .mc-option.correct {
+  border-color: #30a46c;
+  background: color-mix(in srgb, #30a46c 15%, transparent);
+}
+
+.artifact .mc-option.incorrect {
+  border-color: #e5484d;
+  background: color-mix(in srgb, #e5484d 15%, transparent);
+}
+
+.mc-mark {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.mc-hint {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.mc-result p {
+  margin: 0.5rem 0 0;
+}
+
+.mc-verdict {
+  font-weight: 600;
+}
+
+.mc-verdict.correct {
+  color: #30a46c;
+}
+
+.mc-verdict.incorrect {
+  color: #e5484d;
+}
+
+/* Visually hidden, still read by screen readers. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

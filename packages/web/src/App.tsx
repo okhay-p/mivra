@@ -1,7 +1,10 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
+import type { ArtifactView } from "@mivra/protocol";
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { api, authHeaders, errorMessage, token } from "./api.js";
+import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
+import { ArtifactPart } from "./artifacts/ArtifactPart.js";
+import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 
 interface Session {
   id: string;
@@ -77,13 +80,7 @@ function SessionLoader({ sessionId, onReply }: { sessionId: string; onReply: () 
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    api.sessions[":id"].messages
-      .$get({ param: { id: sessionId } })
-      .then(async (res) => {
-        if (res.ok) setInitial((await res.json()) as UIMessage[]);
-        else setError(await errorMessage(res));
-      })
-      .catch(() => setError("Can't reach the Mivra server."));
+    void loadMessages(sessionId).then((result) => (result.ok ? setInitial(result.messages) : setError(result.error)));
   }, [sessionId]);
 
   if (error) return <p className="empty error">Couldn't load this session: {error}</p>;
@@ -100,6 +97,9 @@ function Chat({
   onReply: () => void;
 }) {
   const [input, setInput] = useState("");
+  // Views the learner changed locally (e.g. a graded check), by artifact id. They win over the view in
+  // the message part, so the change survives re-renders; a reload gets it from the server instead.
+  const [updatedViews, setUpdatedViews] = useState<Record<string, ArtifactView>>({});
   const bottom = useRef<HTMLDivElement>(null);
   const { messages, sendMessage, status, error } = useChat({
     id: sessionId,
@@ -113,9 +113,16 @@ function Chat({
     onFinish: onReply,
   });
 
-  useEffect(() => bottom.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  // Block body: newer browsers return a Promise from scrollIntoView, which React would treat as a cleanup.
+  useEffect(() => {
+    bottom.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   const busy = status === "submitted" || status === "streaming";
+  const refreshViews = async () => {
+    const result = await loadMessages(sessionId);
+    if (result.ok) setUpdatedViews((prev) => mergeViews(prev, artifactViewsIn(result.messages)));
+  };
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const text = input.trim();
@@ -127,9 +134,23 @@ function Chat({
   return (
     <div className="chat">
       <div className="messages">
-        {messages.map((m) => (
+        {messages.map((m, mi) => (
           <div key={m.id} className={`message ${m.role}`}>
-            {m.parts.map((part, i) => (part.type === "text" ? <p key={i}>{part.text}</p> : null))}
+            {m.parts.map((part, i) => {
+              if (part.type === "text") return <p key={i}>{part.text}</p>;
+              if (part.type === "data-artifact") {
+                return (
+                  <ArtifactPart
+                    key={part.id ?? i}
+                    data={artifactData(part, updatedViews)}
+                    replyInProgress={isReplyInProgress(status, mi, messages.length)}
+                    onUpdate={(view) => setUpdatedViews((prev) => mergeViews(prev, { [view.id]: view }))}
+                    onRefresh={refreshViews}
+                  />
+                );
+              }
+              return null;
+            })}
           </div>
         ))}
         {status === "submitted" && <div className="message assistant pending">Thinking…</div>}
