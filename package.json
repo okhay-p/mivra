@@ -11,6 +11,7 @@
     "build": "pnpm --filter @mivra/protocol build && pnpm --filter @mivra/web build && pnpm --filter @mivra/server build",
     "start": "pnpm --filter @mivra/server start",
     "test": "pnpm -r test",
+    "test:e2e": "pnpm --filter @mivra/e2e test:e2e",
     "typecheck": "pnpm -r typecheck"
   }
 }
