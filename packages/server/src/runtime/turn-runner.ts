@@ -11,7 +11,7 @@ import {
   type UIMessageStreamOutcome,
 } from "ai";
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
-import { redactArtifactToolCalls, withAttemptResults } from "./artifacts.js";
+import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 
 export const INSTRUCTIONS = [
@@ -99,9 +99,11 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
 
       // Load history after claiming the run, so it cannot change underneath this turn.
       const conversation = store.loadMessages(sessionId);
-      const { tools, viewsByToolCall } = registry.toolsFor({ sessionId, runId, store });
+      let turnTools: ReturnType<CapabilityRegistry["toolsFor"]>;
       let modelMessages: ModelMessage[];
       try {
+        // Plugin code runs here, so any failure must still release the run.
+        turnTools = registry.toolsFor({ sessionId, runId, store });
         modelMessages = await assembleContext(withAttemptResults(conversation, registry, store), { sessionId });
       } catch (error) {
         store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
@@ -116,7 +118,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
         model: languageModel,
         instructions: INSTRUCTIONS,
         messages: modelMessages,
-        tools,
+        tools: turnTools.tools,
         stopWhen: stepCountIs(MAX_STEPS),
         abortSignal,
         onError: ({ error }) => {
@@ -127,6 +129,9 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
       // onEnd sees the raw reply (with artifact tool calls), which is what gets stored; the client
       // gets the redacted stream.
       const stream = result.toUIMessageStream({
+        // Reasoning can quote tool inputs, including a check's answer key.
+        sendReasoning: false,
+        sendSources: false,
         originalMessages: conversation,
         generateMessageId: randomUUID,
         onEnd: ({ responseMessage, outcome }) => {
@@ -140,7 +145,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
         // Provider errors (e.g. a missing API key) are shown to the learner; they are actionable.
         onError: errorText,
       });
-      const response = createUIMessageStreamResponse({ stream: redactArtifactToolCalls(stream, registry, viewsByToolCall) });
+      const response = createUIMessageStreamResponse({ stream: redactForClient(stream, turnTools.viewsByToolCall) });
       return { ok: true, response };
     },
   };

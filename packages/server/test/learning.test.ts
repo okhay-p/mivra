@@ -31,16 +31,34 @@ const trace = {
   steps: [{ explanation: "First window sums to 4.", ranges: [{ start: 0, end: 1 }], variables: [{ name: "sum", value: 4 }] }],
 };
 
-type Step = { toolCall: { name: string; input: unknown } } | { text: string };
+type Step =
+  | { toolCall: { name: string; input: unknown } }
+  | { text: string }
+  /** Raw provider stream parts, ending the step with a tool-calls finish. */
+  | { raw: object[] }
+  /** Starts a text reply that never finishes, until the request is aborted. */
+  | { hang: true };
 
 /** A model that plays scripted steps in order, one per model call, and records every prompt. */
 function scriptedModel(steps: Step[]) {
   let call = 0;
   return new MockLanguageModelV4({
-    doStream: async () => {
+    doStream: async ({ abortSignal }) => {
       const step = steps[call++] ?? { text: "ok" };
+      if ("hang" in step) {
+        const stream = new ReadableStream({
+          start(c) {
+            c.enqueue({ type: "text-start", id: "h" });
+            c.enqueue({ type: "text-delta", id: "h", delta: "Let me explain" });
+            abortSignal?.addEventListener("abort", () => c.error(new DOMException("Aborted", "AbortError")));
+          },
+        });
+        return { stream: stream as never };
+      }
       const chunks: object[] =
-        "toolCall" in step
+        "raw" in step
+          ? [...step.raw, { type: "finish" as const, finishReason: { unified: "tool-calls" as const, raw: "tool_calls" }, usage }]
+          : "toolCall" in step
           ? [
               { type: "tool-call" as const, toolCallId: `call_${call}`, toolName: step.toolCall.name, input: JSON.stringify(step.toolCall.input) },
               { type: "finish" as const, finishReason: { unified: "tool-calls" as const, raw: "tool_calls" }, usage },
@@ -179,6 +197,128 @@ describe("multiple_choice through the agent", () => {
     const discarded = store.createArtifact({ sessionId, runId, toolCallId: "c9", kind: "multiple_choice", version: 1, spec: check });
     store.finishRun(runId, sessionId, "cancelled");
     expect((await answer(app, discarded.id, { answer: { optionIndex: 1 } })).status).toBe(409);
+  });
+});
+
+describe("fail-closed client output", () => {
+  const leakyReasoning = [
+    { type: "reasoning-start", id: "r" },
+    { type: "reasoning-delta", id: "r", delta: "I'll set correctOptionIndex to 1. SECRET-EXPLANATION: halving." },
+    { type: "reasoning-end", id: "r" },
+  ];
+
+  it("keeps model reasoning out of the stream and reloaded messages", async () => {
+    const { app, db } = setup([
+      { raw: [...leakyReasoning, { type: "tool-call", toolCallId: "c1", toolName: "ask_multiple_choice", input: JSON.stringify(check) }] },
+      { text: "Try it." },
+    ]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "quiz me");
+    const reloaded = await messagesJson(app, sessionId);
+    for (const body of [sse, reloaded]) {
+      for (const secret of SECRETS) expect(body).not.toContain(secret);
+      expect(body).not.toContain("reasoning");
+    }
+    expect(sse).toContain('"type":"data-artifact"');
+  });
+
+  it("hides streamed tool-input fragments", async () => {
+    const json = JSON.stringify(check);
+    const { app, db } = setup([
+      {
+        raw: [
+          { type: "tool-input-start", id: "c1", toolName: "ask_multiple_choice" },
+          { type: "tool-input-delta", id: "c1", delta: json.slice(0, 60) },
+          { type: "tool-input-delta", id: "c1", delta: json.slice(60) },
+          { type: "tool-input-end", id: "c1" },
+          { type: "tool-call", toolCallId: "c1", toolName: "ask_multiple_choice", input: json },
+        ],
+      },
+      { text: "Try it." },
+    ]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "quiz me");
+    for (const secret of SECRETS) expect(sse).not.toContain(secret);
+    expect(sse).not.toContain("tool-input");
+    expect(sse).toContain('"type":"data-artifact"');
+  });
+
+  it("drops stored artifact tool calls when their plugin is no longer loaded", async () => {
+    const db = openDb(":memory:");
+    const first = setup([{ toolCall: { name: "ask_multiple_choice", input: check } }, { text: "Try it." }], db);
+    const sessionId = await newSession(first.app);
+    await turn(first.app, db, sessionId, "quiz me");
+
+    const withoutPlugin = createApp({ db, model: () => scriptedModel([]), security: { token: TOKEN, allowedHosts: [] }, plugins: [] });
+    const reloaded = await messagesJson(withoutPlugin, sessionId);
+    for (const secret of SECRETS) expect(reloaded).not.toContain(secret);
+    expect(reloaded).not.toContain("ask_multiple_choice");
+    expect(reloaded).toContain("Try it.");
+  });
+});
+
+describe("run lifecycle and checks", () => {
+  it("refuses an attempt while the reply that asked it is still running", async () => {
+    const db = openDb(":memory:");
+    const { app } = setup([], db);
+    const store = createSessionStore(db);
+    const session = store.createSession();
+    const runId = store.startRun(session, userMessage("quiz me"));
+    const artifact = store.createArtifact({ sessionId: session.id, runId, toolCallId: "c1", kind: "multiple_choice", version: 1, spec: check });
+
+    const res = await answer(app, artifact.id, { answer: { optionIndex: 1 } });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "The reply is still in progress; answer once it finishes" });
+    expect(db.select().from(attempts).all()).toEqual([]);
+  });
+
+  it("discards a check whose reply is cancelled after the check was shown", async () => {
+    const { app, db } = setup([{ toolCall: { name: "ask_multiple_choice", input: check } }, { hang: true }]);
+    const sessionId = await newSession(app);
+    const abort = new AbortController();
+    const res = await app.request(`/api/sessions/${sessionId}/chat`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ message: userMessage("quiz me") }),
+      signal: abort.signal,
+    });
+    const reader = res.body!.getReader();
+    let seen = "";
+    while (!seen.includes("Let me explain")) seen += new TextDecoder().decode((await reader.read()).value);
+    expect(seen).toContain('"type":"data-artifact"');
+    abort.abort();
+    await reader.cancel().catch(() => {});
+
+    await vi.waitFor(() => expect(db.select().from(runs).get()?.status).toBe("cancelled"));
+    const artifactId = db.select().from(artifacts).get()!.id;
+    expect((await answer(app, artifactId, { answer: { optionIndex: 1 } })).status).toBe(409);
+    expect(await messagesJson(app, sessionId)).not.toContain("data-artifact");
+  });
+
+  it("releases the run when a plugin's tool factory throws", async () => {
+    const broken: Plugin = {
+      name: "broken",
+      capabilities: ["tools"],
+      setup: (api) =>
+        api.registerTool("explode", () => {
+          throw new Error("tool setup failed");
+        }),
+    };
+    const db = openDb(":memory:");
+    const app = createApp({ db, model: () => scriptedModel([]), security: { token: TOKEN, allowedHosts: [] }, plugins: [coreLearning, broken] });
+    const sessionId = await newSession(app);
+    const send = () =>
+      app.request(`/api/sessions/${sessionId}/chat`, {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ message: userMessage("hi") }),
+      });
+
+    const first = await send();
+    expect(first.status).toBe(500);
+    expect(await first.json()).toEqual({ error: "tool setup failed" });
+    expect(db.select().from(runs).get()).toMatchObject({ status: "failed", error: "tool setup failed" });
+    expect((await send()).status).toBe(500); // not 409: the session isn't stuck
   });
 });
 

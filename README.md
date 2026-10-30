@@ -52,7 +52,7 @@ Each reply is a *run* (`runs` table). A session has at most one running run, so 
 
 The agent shows interactive artifacts through tool calls (ADR-006): `show_algorithm_trace` and `ask_multiple_choice`, registered by the first-party `core-learning` plugin (`packages/server/src/plugins/`) through the capability registry (ADR-007).
 
-- Each tool call's input is validated against its `packages/protocol` schema and stored in `artifacts` with the full spec. Clients never receive raw tool calls: the live stream and `GET /api/sessions/{id}/messages` carry `data-artifact` parts with the artifact's public view, so a check's answer key, explanation and feedback stay on the server.
-- `POST /api/artifacts/{id}/attempts` with `{ "answer": { "optionIndex": n } }` grades a check deterministically (one attempt per check) and returns the view with the grade.
+- Each tool call's input is validated against its `packages/protocol` schema and stored in `artifacts` with the full spec. Client output fails closed: the live stream and `GET /api/sessions/{id}/messages` pass only text and lifecycle parts plus `data-artifact` parts with the artifact's public view. Raw tool calls, model reasoning, sources and files never reach a client, so a check's answer key, explanation and feedback stay on the server.
+- `POST /api/artifacts/{id}/attempts` with `{ "answer": { "optionIndex": n } }` grades a check deterministically and returns the view with the grade. One attempt per check, accepted once the reply that asked it has finished.
 - On later turns, each check's tool result tells the model whether the learner answered and how they did.
 
