@@ -24,8 +24,13 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
     setError(result.error);
     // The answer may have been saved anyway (lost response, another tab); if so, show its grade.
     // Answering stays disabled until that's known.
-    await onRefresh();
-    setSubmitting(undefined);
+    try {
+      await onRefresh();
+    } catch {
+      // Keep the submit error; the learner can retry.
+    } finally {
+      setSubmitting(undefined);
+    }
   };
 
   const optionClass = (i: number) => {

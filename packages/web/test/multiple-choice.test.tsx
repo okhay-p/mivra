@@ -14,10 +14,11 @@ function Harness({
   data: unknown;
   replyInProgress?: boolean;
   /** What the chat's refresh would load from the server. */
-  refreshed?: ArtifactView | Promise<never>;
+  refreshed?: ArtifactView | Promise<never> | Error;
 }) {
   const [view, setView] = useState<ArtifactView>();
   const onRefresh = async () => {
+    if (refreshed instanceof Error) throw refreshed;
     const next = await refreshed;
     if (next) setView(next);
   };
@@ -82,6 +83,16 @@ describe("MultipleChoice", () => {
 
     await screen.findByText("Can't save");
     expect(options().every((b) => b.disabled)).toBe(true);
+  });
+
+  it("re-enables answering when the refresh after a failed answer fails too", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(json({ error: "Can't save" }, 500));
+    render(<Harness data={question} refreshed={new Error("offline")} />);
+
+    fireEvent.click(option(/^Never/));
+
+    await screen.findByText("Can't save");
+    await waitFor(() => expect(options().every((b) => !b.disabled)).toBe(true));
   });
 
   it("shows an existing attempt as graded and disables answering", () => {
