@@ -1,0 +1,17 @@
+import { defineConfig, devices } from "@playwright/test";
+
+const port = 4198;
+
+export default defineConfig({
+  testDir: "tests",
+  workers: 1,
+  reporter: "list",
+  use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure", ...devices["Desktop Chrome"] },
+  webServer: {
+    // The real server and built UI, with only the model replaced (see harness.ts).
+    command: `pnpm --filter @mivra/web build && pnpm exec tsx --conditions=@mivra/source harness.ts ${port}`,
+    url: `http://127.0.0.1:${port}/api/health`,
+    reuseExistingServer: false,
+    timeout: 120_000,
+  },
+});

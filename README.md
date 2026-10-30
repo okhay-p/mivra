@@ -28,6 +28,7 @@ cp .env.example .env   # add a provider key and set MIVRA_MODEL
 | `pnpm dev` | Server on :4096 with reload, plus Vite on :5173 proxying `/api` to it |
 | `pnpm build && pnpm start` | Production: the server serves the built web UI on :4096 |
 | `pnpm test` | Protocol, server API (mock model, no API key needed) and web component tests (Vitest + jsdom) |
+| `pnpm test:e2e` | Browser tests (Playwright): the built UI and real server with a scripted model, so no API key is needed. Run `pnpm --filter @mivra/e2e exec playwright install chromium` once first |
 | `pnpm typecheck` | Type-check all packages |
 | `pnpm --filter @mivra/server db:generate` | Generate a migration after editing `src/db/schema.ts` |
 
