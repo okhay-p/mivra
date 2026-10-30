@@ -257,6 +257,74 @@ describe("fail-closed client output", () => {
   });
 });
 
+describe("fail-closed client output: errors and metadata", () => {
+  it("doesn't forward provider error text, which could echo a check's input", async () => {
+    const { app, db } = setup([
+      { toolCall: { name: "ask_multiple_choice", input: check } },
+      { raw: [{ type: "error", error: new Error(`provider choked on ${JSON.stringify(check)}`) }] },
+    ]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "quiz me");
+    for (const secret of SECRETS) expect(sse).not.toContain(secret);
+    expect(sse).toContain('"errorText":"The model request failed."');
+    // Full detail is kept server-side for debugging.
+    expect(db.select().from(runs).get()?.error).toContain("SECRET-EXPLANATION");
+  });
+
+  it("strips provider metadata from text, live and on reload", async () => {
+    const meta = { vendor: { echo: check } };
+    const { app, db } = setup([
+      { toolCall: { name: "ask_multiple_choice", input: check } },
+      {
+        raw: [
+          { type: "text-start", id: "t", providerMetadata: meta },
+          { type: "text-delta", id: "t", delta: "Try it.", providerMetadata: meta },
+          { type: "text-end", id: "t", providerMetadata: meta },
+        ],
+      },
+    ]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "quiz me");
+    const reloaded = await messagesJson(app, sessionId);
+    for (const body of [sse, reloaded]) {
+      for (const secret of SECRETS) expect(body).not.toContain(secret);
+      expect(body).not.toContain("providerMetadata");
+      expect(body).toContain("Try it.");
+    }
+  });
+
+  it("passes through errors known to be about configuration", async () => {
+    const { LoadAPIKeyError, APICallError } = await import("ai");
+    const failWith = (error: Error) =>
+      createApp({
+        db: openDb(":memory:"),
+        model: () => {
+          throw error;
+        },
+        security: { token: TOKEN, allowedHosts: [] },
+      });
+    const send = async (app: App) => {
+      const sessionId = await newSession(app);
+      const res = await app.request(`/api/sessions/${sessionId}/chat`, {
+        method: "POST",
+        headers: { ...auth, "content-type": "application/json" },
+        body: JSON.stringify({ message: userMessage("hi") }),
+      });
+      return ((await res.json()) as { error: string }).error;
+    };
+    expect(await send(failWith(new LoadAPIKeyError({ message: "OpenRouter API key is missing." })))).toBe(
+      "OpenRouter API key is missing.",
+    );
+    const outOfCredits = new APICallError({
+      message: `echoes ${JSON.stringify(check)}`,
+      url: "https://example.test",
+      requestBodyValues: check,
+      statusCode: 402,
+    });
+    expect(await send(failWith(outOfCredits))).toBe("The model request failed: the provider account is out of credits.");
+  });
+});
+
 describe("run lifecycle and checks", () => {
   it("refuses an attempt while the reply that asked it is still running", async () => {
     const db = openDb(":memory:");
@@ -316,7 +384,7 @@ describe("run lifecycle and checks", () => {
 
     const first = await send();
     expect(first.status).toBe(500);
-    expect(await first.json()).toEqual({ error: "tool setup failed" });
+    expect(await first.json()).toEqual({ error: "Couldn't start the reply." });
     expect(db.select().from(runs).get()).toMatchObject({ status: "failed", error: "tool setup failed" });
     expect((await send()).status).toBe(500); // not 409: the session isn't stuck
   });

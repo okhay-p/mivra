@@ -306,7 +306,7 @@ describe("chat turns", () => {
     expect(runsFor(db, session.id)[0]?.endedAt).not.toBeNull();
   });
 
-  it("records a provider error as a failed run with the error", async () => {
+  it("records a provider error as a failed run, showing the learner only a generic message", async () => {
     const control = controlledModel();
     const { app, db } = setup(control.model);
     const session = await createSession(app);
@@ -314,7 +314,9 @@ describe("chat turns", () => {
     const res = await send(app, session.id, userMessage("explain"));
     const body = res.text();
     await control.fail("provider exploded");
-    expect(await body).toContain("provider exploded");
+    const sse = await body;
+    expect(sse).toContain('"errorText":"The model request failed."');
+    expect(sse).not.toContain("provider exploded");
 
     await vi.waitFor(() => expect(runsFor(db, session.id)[0]?.status).toBe("failed"));
     expect(runsFor(db, session.id)[0]?.error).toContain("provider exploded");
@@ -333,7 +335,7 @@ describe("chat turns", () => {
     const session = await createSession(app);
     const res = await send(app, session.id, userMessage("hi"));
     expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: "Unknown provider" });
+    expect(await res.json()).toEqual({ error: "The model request failed." });
     expect(db.select().from(messages).all()).toEqual([]);
   });
 });

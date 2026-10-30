@@ -13,6 +13,7 @@ import {
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
+import { errorText, publicErrorText } from "./errors.js";
 
 export const INSTRUCTIONS = [
   "You are Mivra, a patient tutor. Explain concepts step by step, check the learner's understanding, and adapt to what they already know.",
@@ -53,10 +54,6 @@ export interface StartTurnInput {
   abortSignal?: AbortSignal;
 }
 
-export function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : "The model request failed";
-}
-
 function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
   if (outcome.status === "completed") return "completed";
   if (outcome.status === "failed") return "failed";
@@ -86,7 +83,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
       try {
         languageModel = model();
       } catch (error) {
-        return { ok: false, error: { kind: "unavailable", message: errorText(error) } };
+        return { ok: false, error: { kind: "unavailable", message: publicErrorText(error) } };
       }
 
       let runId: string;
@@ -107,7 +104,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
         modelMessages = await assembleContext(withAttemptResults(conversation, registry, store), { sessionId });
       } catch (error) {
         store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
-        return { ok: false, error: { kind: "unavailable", message: errorText(error) } };
+        // Plugin or context code failed; its message isn't known to be safe to show.
+        return { ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } };
       }
 
       // A provider can report an error mid-stream and then close normally, which the SDK still calls
@@ -142,8 +140,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
           const error = outcome.status === "failed" ? errorText(outcome.error ?? streamError) : undefined;
           store.finishRun(runId, sessionId, status, responseMessage, error);
         },
-        // Provider errors (e.g. a missing API key) are shown to the learner; they are actionable.
-        onError: errorText,
+        // Only known-safe errors reach the learner (e.g. a missing API key); detail stays in runs.error.
+        onError: publicErrorText,
       });
       const response = createUIMessageStreamResponse({ stream: redactForClient(stream, turnTools.viewsByToolCall) });
       return { ok: true, response };

@@ -80,7 +80,8 @@ describe("TurnRunner, used without HTTP", () => {
     });
 
     const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hi") });
-    expect(result).toEqual({ ok: false, error: { kind: "unavailable", message: "memory unavailable" } });
+    // The client gets a generic message; the detail stays server-side in runs.error.
+    expect(result).toEqual({ ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } });
     const [run] = db.$client.prepare("select status, error from runs").all() as { status: string; error: string }[];
     expect(run).toEqual({ status: "failed", error: "memory unavailable" });
   });
