@@ -32,13 +32,18 @@ function clientPart(part: Part): Part | undefined {
   return undefined;
 }
 
-/** A stream chunk rebuilt from approved fields, or undefined if its type isn't client-visible. */
-function clientChunk(chunk: UIMessageChunk): UIMessageChunk | undefined {
+const FINISH_REASONS = new Set(["stop", "length", "content-filter", "tool-calls", "error", "interrupted", "other"]);
+
+/**
+ * A stream chunk rebuilt from approved fields, or undefined if its type isn't client-visible.
+ * Provider-controlled strings are replaced: text part ids by `textId`, finish reasons by an enum check.
+ */
+function clientChunk(chunk: UIMessageChunk, textId: (providerId: string) => string): UIMessageChunk | undefined {
   switch (chunk.type) {
     case "start":
       return { type: "start", ...(chunk.messageId ? { messageId: chunk.messageId } : {}) };
     case "finish":
-      return { type: "finish", ...(chunk.finishReason ? { finishReason: chunk.finishReason } : {}) };
+      return { type: "finish", ...(chunk.finishReason && FINISH_REASONS.has(chunk.finishReason) ? { finishReason: chunk.finishReason } : {}) };
     case "abort":
       return { type: "abort" };
     case "error":
@@ -50,9 +55,9 @@ function clientChunk(chunk: UIMessageChunk): UIMessageChunk | undefined {
       return { type: chunk.type };
     case "text-start":
     case "text-end":
-      return { type: chunk.type, id: chunk.id };
+      return { type: chunk.type, id: textId(chunk.id) };
     case "text-delta":
-      return { type: "text-delta", id: chunk.id, delta: chunk.delta };
+      return { type: "text-delta", id: textId(chunk.id), delta: chunk.delta };
     default:
       return undefined;
   }
@@ -107,10 +112,18 @@ export function redactForClient(
   stream: ReadableStream<UIMessageChunk>,
   viewsByToolCall: Map<string, ArtifactView>,
 ): ReadableStream<UIMessageChunk> {
+  // Text part ids come from the provider; map each to a server-generated id, consistently within
+  // this stream so start/delta/end still line up.
+  const textIds = new Map<string, string>();
+  const textId = (providerId: string) => {
+    let id = textIds.get(providerId);
+    if (!id) textIds.set(providerId, (id = `text-${textIds.size + 1}`));
+    return id;
+  };
   return stream.pipeThrough(
     new TransformStream<UIMessageChunk, UIMessageChunk>({
       transform(chunk, controller) {
-        const safe = clientChunk(chunk);
+        const safe = clientChunk(chunk, textId);
         if (safe) return controller.enqueue(safe);
         if (chunk.type === "tool-output-available") {
           const view = viewsByToolCall.get(chunk.toolCallId);

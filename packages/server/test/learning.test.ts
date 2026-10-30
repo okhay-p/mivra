@@ -293,7 +293,49 @@ describe("fail-closed client output: errors and metadata", () => {
     }
   });
 
-  it("passes through errors known to be about configuration", async () => {
+  it("replaces provider-controlled text ids and invalid finish reasons", async () => {
+    const leakyId = "SECRET-EXPLANATION-as-id";
+    const { app, db } = setup([
+      { toolCall: { name: "ask_multiple_choice", input: check } },
+      {
+        raw: [
+          { type: "text-start", id: leakyId },
+          { type: "text-delta", id: leakyId, delta: "Try " },
+          { type: "text-delta", id: leakyId, delta: "it." },
+          { type: "text-end", id: leakyId },
+          // The tool-calls finish appended by the script is valid; add a final step with a bad reason.
+        ],
+      },
+    ]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "quiz me");
+    expect(sse).not.toContain("SECRET-EXPLANATION");
+    const ids = [...sse.matchAll(/"type":"text-(?:start|delta|end)","id":"([^"]+)"/g)].map((m) => m[1]);
+    expect(new Set(ids)).toEqual(new Set(["text-1"])); // remapped, and consistent within the part
+
+    const badFinish = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [
+            { type: "text-start", id: "t" },
+            { type: "text-delta", id: "t", delta: "ok" },
+            { type: "text-end", id: "t" },
+            { type: "finish", finishReason: { unified: "SECRET-EXPLANATION", raw: "x" }, usage },
+          ],
+        }) as never,
+      }),
+    });
+    const app2 = createApp({ db: openDb(":memory:"), model: () => badFinish, security: { token: TOKEN, allowedHosts: [] } });
+    const session2 = await newSession(app2);
+    const res = await app2.request(`/api/sessions/${session2}/chat`, {
+      method: "POST",
+      headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ message: userMessage("hi") }),
+    });
+    expect(await res.text()).not.toContain("SECRET-EXPLANATION");
+  });
+
+  it("shows server-owned messages for configuration errors", async () => {
     const { LoadAPIKeyError, APICallError } = await import("ai");
     const failWith = (error: Error) =>
       createApp({
@@ -312,8 +354,13 @@ describe("fail-closed client output: errors and metadata", () => {
       });
       return ((await res.json()) as { error: string }).error;
     };
-    expect(await send(failWith(new LoadAPIKeyError({ message: "OpenRouter API key is missing." })))).toBe(
-      "OpenRouter API key is missing.",
+    // Server-owned messages: even a configuration error's own text isn't forwarded.
+    expect(await send(failWith(new LoadAPIKeyError({ message: `missing key; ${JSON.stringify(check)}` })))).toBe(
+      "The model provider's API key is missing. Set it in .env (see .env.example) and restart the server.",
+    );
+    const { NoSuchModelError } = await import("ai");
+    expect(await send(failWith(new NoSuchModelError({ modelId: "x", modelType: "languageModel", message: JSON.stringify(check) })))).toBe(
+      "Unknown model or provider. Check MIVRA_MODEL in .env.",
     );
     const outOfCredits = new APICallError({
       message: `echoes ${JSON.stringify(check)}`,

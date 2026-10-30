@@ -14,13 +14,17 @@ const STATUS_HINTS: Record<number, string> = {
 };
 
 /**
- * An error message safe to show a client. Arbitrary error text can echo request content, including
- * private tool inputs such as a check's answer key, so only errors whose messages are known to be
- * about configuration are passed through; everything else is generic.
+ * An error message safe to show a client. Error text from providers can echo request content,
+ * including private tool inputs such as a check's answer key, and an error's class doesn't
+ * guarantee its message is safe. So clients only ever get server-owned messages, chosen by error
+ * class and HTTP status; the original text stays server-side.
  */
 export function publicErrorText(error: unknown): string {
-  // Configuration problems the learner can fix: missing key, unknown provider or model.
-  if (LoadAPIKeyError.isInstance(error) || NoSuchModelError.isInstance(error)) return error.message;
+  // Configuration problems the learner can fix.
+  if (LoadAPIKeyError.isInstance(error)) {
+    return "The model provider's API key is missing. Set it in .env (see .env.example) and restart the server.";
+  }
+  if (NoSuchModelError.isInstance(error)) return "Unknown model or provider. Check MIVRA_MODEL in .env.";
   if (APICallError.isInstance(error)) {
     const hint = error.statusCode ? STATUS_HINTS[error.statusCode] : undefined;
     return hint
