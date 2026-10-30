@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +32,7 @@ const trace = {
       variables: [{ name: "swaps", value: 0 }],
     },
     { explanation: "Swap them.", values: [1, 3, 2] },
+    { explanation: "Move on.", pointers: [{ name: "i", index: 1 }] },
   ],
 };
 
@@ -55,7 +56,11 @@ const wideCheck = {
   explanation: "The second one.",
 };
 
-type Step = { tool: string; input: unknown } | { text: string; delayMs?: number };
+type Step = { tool: string; input: unknown } | { text: string; hold?: boolean };
+
+/** Held steps wait for POST /e2e/release. */
+let releaseHeld = () => {};
+const held = () => new Promise<void>((resolve) => (releaseHeld = resolve));
 
 const SCRIPTS: Record<string, Step[]> = {
   teach: [
@@ -64,7 +69,7 @@ const SCRIPTS: Record<string, Step[]> = {
     { text: "Step through it, then answer the check." },
   ],
   // Holds the reply open after the check, so a test can see it while it's still streaming.
-  slow: [{ tool: "ask_multiple_choice", input: check }, { text: "Take your time.", delayMs: 3000 }],
+  slow: [{ tool: "ask_multiple_choice", input: check }, { text: "Take your time.", hold: true }],
   wide: [
     { tool: "show_algorithm_trace", input: wideTrace },
     { tool: "ask_multiple_choice", input: wideCheck },
@@ -106,18 +111,30 @@ const model = new MockLanguageModelV4({
             { type: "text-end" as const, id: "t" },
             { type: "finish" as const, finishReason: { unified: "stop" as const, raw: "stop" }, usage },
           ];
-    const delayMs = "delayMs" in step ? step.delayMs : undefined;
-    return { stream: simulateReadableStream({ chunks, initialDelayInMs: delayMs ?? null }) as never };
+    if ("hold" in step) await held();
+    return { stream: simulateReadableStream({ chunks, initialDelayInMs: null }) as never };
   },
 });
 
 const dataDir = mkdtempSync(join(tmpdir(), "mivra-e2e-"));
 const token = loadOrCreateToken(dataDir);
+const db = openDb(join(dataDir, "mivra.db"));
 const app = createApp({
-  db: openDb(join(dataDir, "mivra.db")),
+  db,
   model: () => model,
   security: { token, allowedHosts: [] },
 });
-serveWeb(app as never, fileURLToPath(new URL("../web/dist", import.meta.url)), token);
+// Lets a test finish a held reply once it has seen the state it wants to check.
+app.post("/e2e/release", (c) => {
+  releaseHeld();
+  return c.body(null, 204);
+});
+serveWeb(app, fileURLToPath(new URL("../web/dist", import.meta.url)), token);
 
 serve({ fetch: app.fetch, port: Number(process.argv[2]), hostname: "127.0.0.1" });
+
+// Playwright stops this process with SIGTERM (gracefulShutdown in playwright.config.ts).
+process.on("SIGTERM", () => {
+  rmSync(dataDir, { recursive: true, force: true });
+  process.exit(0);
+});

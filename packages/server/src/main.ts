@@ -18,7 +18,7 @@ const app = createApp({
 });
 
 // In production the server also serves the built web UI (ADR-003). In dev, Vite serves it and proxies /api here.
-serveWeb(app as never, fileURLToPath(new URL("../../web/dist", import.meta.url)), token);
+serveWeb(app, fileURLToPath(new URL("../../web/dist", import.meta.url)), token);
 
 // Bind to loopback only: remote access must be an explicit opt-in (ADR-001).
 serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {

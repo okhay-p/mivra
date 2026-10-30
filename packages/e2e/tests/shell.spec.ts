@@ -51,22 +51,37 @@ test.describe("sidebar", () => {
     await expect.poll(async () => (await main.boundingBox())?.x).toBe(256);
   });
 
-  test("groups sessions and highlights the active one", async ({ page }) => {
+  test("lists a new session under Today and highlights it", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "New session" }).first().click();
-    await expect(page.getByText("Today")).toBeVisible();
-    await expect(page.locator('[data-active="true"]')).toHaveCount(1);
+    const prompt = `hello ${Date.now()}`;
+    await page.getByRole("textbox", { name: "Message" }).fill(prompt);
+    await page.getByRole("button", { name: "Send" }).click();
+
+    const session = page.locator('[data-slot="sidebar"]').getByRole("button", { name: prompt });
+    await expect(session).toHaveAttribute("data-active", "true");
+    await expect(page.locator('[data-slot="sidebar-group"]', { hasText: "Today" }).getByRole("button", { name: prompt })).toBeVisible();
   });
 
   test("is an overlay on mobile that closes after choosing a session", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
-    await page.getByRole("main").getByRole("button", { name: "Toggle Sidebar" }).click();
+    const toggle = page.getByRole("main").getByRole("button", { name: "Toggle Sidebar" });
     const sheet = page.locator('[data-mobile="true"]');
-    await expect(sheet).toBeVisible();
+
+    await toggle.click();
     await sheet.getByRole("button", { name: "New session" }).first().click();
     await expect(sheet).toHaveCount(0);
-    await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
+    const prompt = `hello ${Date.now()}`;
+    await page.getByRole("textbox", { name: "Message" }).fill(prompt);
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByText(/The server says/)).toBeVisible();
+
+    await page.reload();
+    await toggle.click();
+    await sheet.getByRole("button", { name: prompt }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByText(/The server says/)).toBeVisible();
   });
 });
 
