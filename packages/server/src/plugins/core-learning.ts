@@ -1,5 +1,6 @@
 import {
   AlgorithmTraceSpec,
+  GraphSpec,
   MultipleChoiceAnswer,
   MultipleChoiceSpec,
   SetDiagramSpec,
@@ -33,6 +34,22 @@ export const coreLearning: Plugin = {
         kind: "algorithm_trace",
         version: 1,
         spec: AlgorithmTraceSpec.parse(spec),
+      }),
+    });
+
+    const graph = artifactKinds.graph;
+    api.registerArtifactKind({
+      kind: "graph",
+      version: graph.version,
+      toolName: graph.toolName,
+      description: graph.description,
+      spec: graph.spec,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "graph",
+        version: 1,
+        spec: GraphSpec.parse(spec),
       }),
     });
 

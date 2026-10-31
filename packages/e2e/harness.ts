@@ -207,6 +207,78 @@ const literalCheck = {
   explanation: "2*3*4 is $24$, and 234 isn't.",
 };
 
+const graphTree = {
+  title: "Inorder walk of a BST",
+  directed: true,
+  kind: "tree",
+  nodes: ["8", "3", "10", "1", "6", "14", "13"].map((id) => ({ id })),
+  edges: [["8", "3", "left"], ["8", "10", "right"], ["3", "1", "left"], ["3", "6", "right"], ["10", "14", "right"], ["14", "13", "left"]].map(([from, to, side]) => ({ from, to, side })),
+  steps: [
+    { explanation: "Go left from the root until there's no left child.", nodeStates: [{ id: "1" }], edgeStates: [{ from: "8", to: "3" }, { from: "3", to: "1" }] },
+    { explanation: "Visit 1, then its parent.", nodeStates: [{ id: "1", tone: "done" }, { id: "3" }], variables: [{ name: "visited", value: "1" }] },
+  ],
+};
+const graphWeighted = {
+  title: "Dijkstra from $v_0$",
+  directed: true,
+  nodes: [{ id: "a", label: "$v_0$" }, { id: "b", label: "$v_1$" }, { id: "c", label: "$v_2$" }, { id: "d", label: "$v_3$" }, { id: "e", label: "goal" }],
+  edges: [
+    { from: "a", to: "b", weight: 4 },
+    { from: "a", to: "c", weight: 1 },
+    { from: "c", to: "b", weight: 2 },
+    { from: "b", to: "c", weight: 7 },
+    { from: "b", to: "d", weight: 5 },
+    { from: "c", to: "d", weight: 8 },
+    { from: "d", to: "e", label: "$x^2$" },
+  ],
+  steps: [
+    { explanation: "Start at $v_0$ with distance $0$.", nodeStates: [{ id: "a" }], variables: [{ name: "dist(a)", value: 0 }] },
+    { explanation: "Relax the edge to $v_2$.", nodeStates: [{ id: "a", tone: "done" }, { id: "c" }], edgeStates: [{ from: "a", to: "c" }, { from: "a", to: "b", tone: "muted" }] },
+    { explanation: "Take the cheaper way to $v_1$.", nodeStates: [{ id: "c", tone: "done" }, { id: "b" }], edgeStates: [{ from: "c", to: "b", tone: "done" }] },
+  ],
+};
+const graphLoop = {
+  title: "A multigraph with loops",
+  directed: false,
+  nodes: [{ id: "A" }, { id: "B" }, { id: "C" }],
+  edges: [
+    { from: "A", to: "B", label: "p" },
+    { from: "A", to: "B", label: "q" },
+    { from: "A", to: "B", label: "r" },
+    { from: "B", to: "C" },
+    { from: "C", to: "C", label: "s" },
+    { from: "A", to: "A" },
+    { from: "A", to: "A" },
+  ],
+  steps: [{ explanation: "Follow the middle edge.", edgeStates: [{ from: "B", to: "A", nth: 1 }] }, { explanation: "Then the loop.", edgeStates: [{ from: "C", to: "C", tone: "done" }] }],
+};
+// At the schema's limits, which can't fit legibly at 320px.
+const graphLimit = {
+  title: "The largest graph allowed",
+  directed: false,
+  nodes: Array.from({ length: 60 }, (_, i) => ({ id: `n${i}` })),
+  edges: Array.from({ length: 200 }, (_, i) => ({ from: `n${i % 60}`, to: `n${(i * 7 + 11) % 60}`, weight: i })),
+};
+
+// As deep as the schema allows, all to one side, and with steps so the keyboard has two jobs here.
+const graphSkew = {
+  title: "A degenerate BST",
+  directed: true,
+  kind: "tree",
+  nodes: Array.from({ length: 60 }, (_, i) => ({ id: String(i) })),
+  edges: Array.from({ length: 59 }, (_, i) => ({ from: String(i), to: String(i + 1), side: "right" })),
+  steps: [{ explanation: "Every insert goes right.", nodeStates: [{ id: "0" }] }, { explanation: "So searching is linear.", nodeStates: [{ id: "1" }] }],
+};
+
+// A left subtree that runs right: inorder only reads across the page if 6, 7 and 8 stay left of the root.
+const graphBst = {
+  title: "A BST with a long left subtree",
+  directed: true,
+  kind: "tree",
+  nodes: ["10", "5", "20", "6", "7", "8"].map((id) => ({ id })),
+  edges: [["10", "5", "left", 5], ["10", "20", "right", 10], ["5", "6", "right", 1], ["6", "7", "right", 1], ["7", "8", "right", 1]].map(([from, to, side, weight]) => ({ from, to, side, weight })),
+};
+
 const truthTable = {
   title: "Truth table for $p \\land q$",
   columns: ["$p$", "$q$", "$p \\land q$"],
@@ -262,6 +334,12 @@ const wideExplanationTable = {
 const wideTitleTable = { title: wideProof.title, columns: ["$a$"], rows: [[1]] };
 
 const SCRIPTS: Record<string, Step[]> = {
+  graphbst: [{ tool: "show_graph", input: graphBst }, { text: "Here's the BST." }],
+  graphskew: [{ tool: "show_graph", input: graphSkew }, { text: "Here's the skewed tree." }],
+  graphtree: [{ tool: "show_graph", input: graphTree }, { text: "Here's the tree." }],
+  graphweighted: [{ tool: "show_graph", input: graphWeighted }, { text: "Here's the graph." }],
+  graphloop: [{ tool: "show_graph", input: graphLoop }, { text: "Here's the multigraph." }],
+  graphlimit: [{ tool: "show_graph", input: graphLimit }, { text: "Here's the big one." }],
   wideproof: [
     { tool: "show_worked_steps", input: wideProof },
     { tool: "show_table", input: wideExplanationTable },

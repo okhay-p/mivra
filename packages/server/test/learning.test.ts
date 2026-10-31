@@ -504,6 +504,40 @@ describe("run lifecycle and checks", () => {
   });
 });
 
+describe("graph through the agent", () => {
+  const graph = {
+    title: "BFS from a",
+    directed: true,
+    nodes: [{ id: "a" }, { id: "b" }],
+    edges: [{ from: "a", to: "b", weight: 3 }],
+    steps: [{ explanation: "Start at a.", nodeStates: [{ id: "a" }], edgeStates: [{ from: "a", to: "b" }] }],
+  };
+
+  it("streams a strict view and stores the artifact", async () => {
+    const { app, db } = setup([{ toolCall: { name: "show_graph", input: graph } }, { text: "Follow along." }]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "show me BFS");
+    expect(sse).toContain('"kind":"graph"');
+    expect(sse).toContain("BFS from a");
+    expect(sse).toContain("Follow along.");
+    const part = sse.split("\n").flatMap((line: string) => {
+      if (!line.startsWith("data: {")) return [];
+      const event = JSON.parse(line.slice(6));
+      return event.type === "data-artifact" ? [event.data] : [];
+    })[0];
+    expect(ArtifactView.parse(part)).toMatchObject({ kind: "graph", version: 1, spec: graph });
+    expect(db.select().from(artifacts).all()[0]).toMatchObject({ kind: "graph", version: 1 });
+  });
+
+  it("doesn't store a graph with a dangling edge", async () => {
+    const bad = { ...graph, edges: [{ from: "a", to: "nope" }], steps: undefined };
+    const { app, db } = setup([{ toolCall: { name: "show_graph", input: bad } }, { text: "Oops." }]);
+    const sessionId = await newSession(app);
+    await turn(app, db, sessionId, "show me");
+    expect(db.select().from(artifacts).all()).toHaveLength(0);
+  });
+});
+
 describe("algorithm_trace through the agent", () => {
   it("streams and reloads the full trace view", async () => {
     const { app, db } = setup([{ toolCall: { name: "show_algorithm_trace", input: trace } }, { text: "Step through it." }]);

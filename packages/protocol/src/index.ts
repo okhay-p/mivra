@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { AlgorithmTraceSpec } from "./algorithm-trace.js";
+import { GraphSpec } from "./graph.js";
 import { MultipleChoiceAnswer, MultipleChoiceGrade, MultipleChoicePublic, MultipleChoiceSpec } from "./multiple-choice.js";
 import { SetDiagramSpec } from "./set-diagram.js";
 import { TableSpec } from "./table.js";
 import { WorkedStepsSpec } from "./worked-steps.js";
 
 export * from "./algorithm-trace.js";
+export * from "./graph.js";
 export * from "./multiple-choice.js";
 export * from "./set-diagram.js";
 export * from "./table.js";
@@ -24,6 +26,13 @@ export const artifactKinds = {
     description:
       "Show the learner an interactive step-by-step trace of an algorithm running over a sequence (e.g. sliding window, two pointers, binary search, a simple sort). The learner steps through it with play/pause/step controls. Use it when watching state change step by step will make the idea click. Keep traces short (roughly 5-20 steps) and make each step's explanation say what changed and why.",
     spec: AlgorithmTraceSpec,
+  },
+  graph: {
+    version: 1,
+    toolName: "show_graph",
+    description:
+      "Show the learner a graph or tree, drawn for you, optionally with steps they can walk through. Use it for graphs, trees, BFS, DFS, shortest paths, spanning trees and tree traversals, whenever seeing the structure or watching an algorithm move over it will help. Never give coordinates: the layout is automatic. For a binary search tree or binary tree traversal, set kind to tree and give every edge a side, so a lone left child and a lone right child are drawn differently. The automatic layout may draw crossing edges that mean nothing, even when the graph is planar, so don't use this to show whether a graph is planar. Keep it small enough to read (roughly 4-15 nodes, 5-20 steps) and make each step's explanation say what changed and why.",
+    spec: GraphSpec,
   },
   multiple_choice: {
     version: 1,
@@ -78,6 +87,7 @@ export const ArtifactView = z.discriminatedUnion("kind", [
   z
     .object({ ...ArtifactBase, kind: z.literal("algorithm_trace"), version: z.literal(1), spec: AlgorithmTraceSpec })
     .strict(),
+  z.object({ ...ArtifactBase, kind: z.literal("graph"), version: z.literal(1), spec: GraphSpec }).strict(),
   z
     .object({
       ...ArtifactBase,
