@@ -2,6 +2,9 @@ import {
   AlgorithmTraceSpec,
   MultipleChoiceAnswer,
   MultipleChoiceSpec,
+  SetDiagramSpec,
+  TableSpec,
+  WorkedStepsSpec,
   artifactKinds,
   gradeMultipleChoice,
   toMultipleChoicePublic,
@@ -10,8 +13,8 @@ import {
 import type { Plugin } from "../runtime/capabilities.js";
 
 /**
- * First-party learning tools (ADR-006/007): the algorithm_trace visualization and the
- * multiple_choice check, registered through the same API third-party plugins will use.
+ * First-party learning tools (ADR-006/007): the visualization kinds and the multiple_choice check,
+ * registered through the same API third-party plugins will use.
  */
 export const coreLearning: Plugin = {
   name: "core-learning",
@@ -30,6 +33,22 @@ export const coreLearning: Plugin = {
         kind: "algorithm_trace",
         version: 1,
         spec: AlgorithmTraceSpec.parse(spec),
+      }),
+    });
+
+    const sets = artifactKinds.set_diagram;
+    api.registerArtifactKind({
+      kind: "set_diagram",
+      version: sets.version,
+      toolName: sets.toolName,
+      description: sets.description,
+      spec: sets.spec,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "set_diagram",
+        version: 1,
+        spec: SetDiagramSpec.parse(spec),
       }),
     });
 
@@ -73,6 +92,38 @@ export const coreLearning: Plugin = {
           };
         },
       },
+    });
+
+    const table = artifactKinds.table;
+    api.registerArtifactKind({
+      kind: "table",
+      version: table.version,
+      toolName: table.toolName,
+      description: table.description,
+      spec: table.spec,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "table",
+        version: 1,
+        spec: TableSpec.parse(spec),
+      }),
+    });
+
+    const worked = artifactKinds.worked_steps;
+    api.registerArtifactKind({
+      kind: "worked_steps",
+      version: worked.version,
+      toolName: worked.toolName,
+      description: worked.description,
+      spec: worked.spec,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "worked_steps",
+        version: 1,
+        spec: WorkedStepsSpec.parse(spec),
+      }),
     });
   },
 };
