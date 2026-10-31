@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { beforeAll, describe, expect, it } from "vitest";
 import { ArtifactPart } from "../src/artifacts/ArtifactPart.js";
 import { induction } from "./fixtures.js";
 
@@ -8,6 +8,31 @@ const steps = () => screen.getAllByTestId("worked-step");
 const next = () => fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
 describe("WorkedSteps", () => {
+  // The first render and role query in a file take far longer than the rest, so a busy machine can time that test out.
+  beforeAll(() => {
+    renderSteps();
+    next();
+    cleanup();
+  });
+
+  it("marks the current step with neutral tokens, not amber, and a thicker rule", () => {
+    renderSteps();
+    next();
+    const [earlier, current] = steps();
+    expect(current!.className).toContain("border-foreground");
+    expect(current!.className).toContain("border-l-4");
+    expect(earlier!.className).toContain("border-border");
+    expect(earlier!.className).toContain("border-l-2");
+    expect(current!.className).not.toMatch(/accent|primary|amber/);
+  });
+
+  it("leaves a formula box's arrow keys to scrolling", () => {
+    renderSteps();
+    next();
+    fireEvent.keyDown(steps()[1]!.querySelector('[data-testid="step-scroll"]')!, { key: "ArrowLeft" });
+    expect(steps()).toHaveLength(2);
+  });
+
   it("reveals steps cumulatively, and hides them again going back", () => {
     renderSteps();
     expect(steps()).toHaveLength(1);

@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { ArtifactPart } from "../src/artifacts/ArtifactPart.js";
 import { tableStateAt } from "../src/artifacts/TableArtifact.js";
 import { relationMatrix, truthTable } from "./fixtures.js";
@@ -9,6 +9,8 @@ const cells = () => screen.getAllByTestId("table-cell");
 const texts = () => cells().map((c) => c.textContent);
 const next = () => fireEvent.click(screen.getByRole("button", { name: /next/i }));
 const prev = () => fireEvent.click(screen.getByRole("button", { name: /prev/i }));
+const counter = () => screen.getByTestId("step-counter").textContent;
+const live = () => screen.getByTestId("table-live");
 
 describe("tableStateAt", () => {
   it("carries cell changes forward and keeps highlights to their own step", () => {
@@ -22,6 +24,12 @@ describe("tableStateAt", () => {
 });
 
 describe("TableArtifact", () => {
+  // The first render and role query in a file take far longer than the rest, so a busy machine can time that test out.
+  beforeAll(() => {
+    renderTable(truthTable);
+    next();
+    cleanup();
+  });
   afterEach(() => void vi.useRealTimers());
 
   it("persists changed cells and shows booleans as T and F", () => {
@@ -52,10 +60,18 @@ describe("TableArtifact", () => {
     expect(cells()[1]!.getAttribute("data-tone")).toBe("done");
   });
 
-  it("uses success, not amber, for done and no raw colours", () => {
+  it("uses neutral tokens for active, success for done, and no amber or raw colours", () => {
     renderTable(truthTable);
+    const active = cells()[0]!.className;
+    expect(active).toContain("bg-secondary");
+    expect(active).toContain("ring-foreground");
+    expect(active).not.toMatch(/accent|primary|amber|#[0-9a-f]{3}/i);
     expect(cells()[1]!.className).toContain("bg-success/15");
-    expect(cells()[0]!.className).not.toMatch(/amber|#[0-9a-f]{3}/i);
+    // Muted shares active's background in both themes, so the outline has to tell them apart.
+    next();
+    next();
+    expect(cells()[5]!.className).toContain("bg-muted");
+    expect(cells()[5]!.className).not.toContain("ring");
   });
 
   it("is a real table with header scopes and a caption", () => {
@@ -84,6 +100,7 @@ describe("TableArtifact", () => {
     const { container } = renderTable(relationMatrix);
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByTestId("table-live")).toBeNull();
     expect(container.querySelector("[aria-live]")).toBeNull();
     expect(screen.getByRole("region").hasAttribute("tabindex")).toBe(false);
   });
@@ -102,22 +119,56 @@ describe("TableArtifact", () => {
   });
 
   it("announces the explanation, and renders its formula", () => {
-    const { container } = renderTable(truthTable);
-    const live = container.querySelector("[aria-live=polite]")!;
-    expect(live.textContent).toContain("Read the inputs.");
+    renderTable(truthTable);
+    const region = live();
+    expect(region.textContent).toContain("Read the inputs.");
     next();
     next();
-    expect(live.textContent).toContain("One is false");
-    expect(live.querySelector(".katex")).not.toBeNull();
+    expect(region.textContent).toContain("One is false");
+    expect(region.querySelector(".katex")).not.toBeNull();
+  });
+
+  it("announces each step whole from one persistent region, even when the explanations match", () => {
+    const steps = [
+      { explanation: "Fill in a cell.", cells: [{ row: 0, column: 2, value: true }] },
+      { explanation: "Fill in a cell.", highlight: [{ row: 1 }], cells: [{ row: 1, column: 2, value: false }] },
+    ];
+    renderTable({ ...truthTable, spec: { ...truthTable.spec, steps } });
+    const region = live();
+    expect(region.getAttribute("aria-live")).toBe("polite");
+    expect(region.getAttribute("aria-atomic")).toBe("true");
+    expect(region.textContent).toBe("Step 1 of 2. Fill in a cell. Changed row 1, column 3 to T.");
+    next();
+    expect(live()).toBe(region);
+    expect(region.textContent).toBe("Step 2 of 2. Fill in a cell. Highlighted: row 2. Changed row 2, column 3 to F.");
+  });
+
+  it("keeps the table out of the live region, and says the step number only once", () => {
+    renderTable(truthTable);
+    expect(live().contains(screen.getByRole("table"))).toBe(false);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
+  });
+
+  it("makes a formula box a tab stop only when it overflows", () => {
+    renderTable(truthTable);
+    const box = live().querySelector<HTMLElement>('[data-testid="step-scroll"]')!;
+    expect(box.hasAttribute("tabindex")).toBe(false);
+    vi.spyOn(box, "scrollWidth", "get").mockReturnValue(500);
+    vi.spyOn(box, "clientWidth", "get").mockReturnValue(100);
+    next();
+    expect(box.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(box, { key: "ArrowRight" });
+    expect(counter()).toBe("Step 2 of 3");
   });
 
   it("steps with the arrow keys, except while the table scroll box has focus", () => {
     renderTable(truthTable);
     const region = screen.getByRole("region");
     fireEvent.keyDown(region, { key: "ArrowRight" });
-    expect(screen.getByRole("status").textContent).toBe("Step 2 of 3");
+    expect(counter()).toBe("Step 2 of 3");
     fireEvent.keyDown(screen.getByTestId("table-scroll"), { key: "ArrowRight" });
-    expect(screen.getByRole("status").textContent).toBe("Step 2 of 3");
+    expect(counter()).toBe("Step 2 of 3");
     expect(screen.getByTestId("table-scroll").getAttribute("tabindex")).toBe("0");
   });
 
@@ -131,7 +182,7 @@ describe("TableArtifact", () => {
     expect(nextButton.disabled).toBe(false);
     expect(document.activeElement).toBe(nextButton);
     next();
-    expect(screen.getByRole("status").textContent).toBe("Step 3 of 3");
+    expect(counter()).toBe("Step 3 of 3");
   });
 
   it("plays to the end and stops", () => {
@@ -139,7 +190,7 @@ describe("TableArtifact", () => {
     renderTable(truthTable);
     fireEvent.click(screen.getByRole("button", { name: "Play" }));
     for (let i = 0; i < 5; i++) act(() => void vi.advanceTimersByTime(2000));
-    expect(screen.getByRole("status").textContent).toBe("Step 3 of 3");
+    expect(counter()).toBe("Step 3 of 3");
     expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
   });
 

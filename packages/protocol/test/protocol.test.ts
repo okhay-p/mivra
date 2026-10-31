@@ -232,6 +232,15 @@ describe("ArtifactView", () => {
 });
 
 describe("table", () => {
+  it("tells providers the rules JSON Schema can't express", async () => {
+    const { TableHighlight, TableCellChange } = await import("../src/table.js");
+    expect(TableHighlight.shape.row.description).toMatch(/below the number of rows/);
+    expect(TableHighlight.shape.row.description).toMatch(/a row, a column or both/);
+    expect(TableHighlight.shape.column.description).toMatch(/below the number of columns/);
+    expect(TableCellChange.shape.row.description).toMatch(/below the number of rows/);
+    expect(TableCellChange.shape.column.description).toMatch(/below the number of columns/);
+  });
+
   const truthTable = {
     title: "Truth table for $p \\land q$",
     columns: ["$p$", "$q$", "$p \\land q$"],

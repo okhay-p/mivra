@@ -178,6 +178,8 @@ test.describe("learning flow", () => {
     await expect(table.getByRole("columnheader")).toHaveCount(3);
     await expect(cells.nth(0)).toHaveAttribute("data-tone", "active");
     await expect(table.locator(".katex").first()).toBeVisible();
+    // A formula in hidden text would otherwise be a scroller, and so a tab stop nobody can see.
+    expect(await table.locator("caption .katex").evaluate((e) => getComputedStyle(e).overflowX)).toBe("visible");
 
     const next = table.getByRole("button", { name: "Next" });
     await next.click();
@@ -231,6 +233,84 @@ test.describe("learning flow", () => {
     await expect(restart).toBeFocused();
     await restart.click();
     await expect(steps).toHaveCount(1);
+  });
+
+  test("a formula too wide for a phone scrolls with the arrow keys, without stepping or losing focus", async ({ page }) => {
+    await startSession(page);
+    await send(page, `wideproof ${Date.now()}`);
+    await expect(page.getByText("Scroll the long one.")).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 800 });
+
+    const worked = page.getByRole("region", { name: /^Worked steps/ });
+    const steps = worked.getByTestId("worked-step");
+    await worked.getByRole("button", { name: "Next" }).click();
+    await expect(steps).toHaveCount(2);
+
+    // Only the boxes that overflow are tab stops: the title and the long statement.
+    await expect(worked.getByRole("group", { name: /scrolls sideways/ })).toHaveCount(2);
+    await expect(worked.getByRole("heading").getByRole("group")).toHaveCount(1);
+    await expect(steps.nth(0).getByRole("group")).toHaveCount(0);
+    const box = steps.nth(1).getByRole("group", { name: /scrolls sideways/ });
+    await expect(box).toHaveCount(1);
+    const fit = await box.evaluate((e) => ({ scrolls: e.scrollWidth > e.clientWidth, right: e.getBoundingClientRect().right, page: document.documentElement.scrollWidth }));
+    expect(fit.scrolls).toBe(true);
+    expect(fit.right).toBeLessThanOrEqual(320);
+    expect(fit.page).toBeLessThanOrEqual(320);
+
+    const scrollLeft = () => box.evaluate((e) => e.scrollLeft);
+    await box.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(scrollLeft).toBeGreaterThan(0);
+    await expect(steps).toHaveCount(2);
+    await expect(box).toBeFocused();
+    const scrolled = await scrollLeft();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(scrollLeft).toBeLessThan(scrolled);
+    await expect(steps).toHaveCount(2);
+    await expect(box).toBeFocused();
+
+    // Away from the formula, the arrow keys still step.
+    await worked.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(steps).toHaveCount(3);
+    await page.keyboard.press("ArrowLeft");
+    await expect(steps).toHaveCount(2);
+
+    // A formula in a table's explanation behaves the same, and gains its tab stop when its step arrives.
+    const table = page.getByRole("region", { name: /^Table: Same words/ });
+    await expect(table.getByRole("group", { name: /Formula/ })).toHaveCount(0);
+    await table.getByRole("button", { name: "Next" }).click();
+    await table.getByRole("button", { name: "Next" }).click();
+    const tableBox = table.getByRole("group", { name: /Formula/ });
+    await tableBox.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => tableBox.evaluate((e) => e.scrollLeft)).toBeGreaterThan(0);
+    await expect(table.getByTestId("step-counter")).toHaveText("Step 3 of 3");
+  });
+
+  test("the active tone is neutral and stands apart from muted, in both themes", async ({ page }) => {
+    await startSession(page);
+    await send(page, `truthtable ${Date.now()}`);
+    await expect(page.getByText("Step through the table.")).toBeVisible();
+    const cell = page.getByRole("region", { name: /^Table: Truth table/ }).locator('[data-tone="active"]').first();
+    for (const dark of [false, true]) {
+      await page.evaluate((on) => document.documentElement.classList.toggle("dark", on), dark);
+      const look = await cell.evaluate((e) => {
+        const probe = document.createElement("div");
+        document.body.append(probe);
+        const resolve = (token: string) => {
+          probe.style.color = `var(--${token})`;
+          return getComputedStyle(probe).color;
+        };
+        const tokens = { foreground: resolve("foreground"), primary: resolve("primary"), accent: resolve("accent") };
+        probe.remove();
+        const style = getComputedStyle(e);
+        return { ...tokens, background: style.backgroundColor, shadow: style.boxShadow };
+      });
+      expect(look.background).not.toBe(look.accent);
+      expect(look.shadow).not.toContain(look.primary);
+      expect(look.shadow).toContain(look.foreground);
+    }
   });
 
   test("shows a safe error when the model fails, and the session still works", async ({ page }) => {

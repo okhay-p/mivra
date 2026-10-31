@@ -134,7 +134,33 @@ const proof = {
   ],
 };
 
+// A formula with no operators to break at is wider than a phone, next to short ones that fit.
+const wideProof = {
+  // Short enough for the title's limit, and still too wide for a phone.
+  title: `$${Array.from({ length: 18 }, (_, i) => `a_{${i}}`).join("")}$`,
+  steps: [
+    { label: "Short", statement: "$x = x$", justification: "by reflexivity" },
+    { label: "Long", statement: `$${longFormula}$`, justification: "by adding them up" },
+    { label: "After", statement: "$y = y$", justification: "by reflexivity" },
+  ],
+};
+const wideExplanationTable = {
+  title: "Same words, new cells",
+  columns: ["$a$", "$b$"],
+  rows: [["", ""]],
+  steps: [
+    { explanation: "Fill in a cell.", cells: [{ row: 0, column: 0, value: 1 }] },
+    { explanation: "Fill in a cell.", highlight: [{ column: 1 }], cells: [{ row: 0, column: 1, value: 2 }] },
+    { explanation: `$${longFormula}$` },
+  ],
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  wideproof: [
+    { tool: "show_worked_steps", input: wideProof },
+    { tool: "show_table", input: wideExplanationTable },
+    { text: "Scroll the long one." },
+  ],
   truthtable: [
     { tool: "show_table", input: truthTable },
     { tool: "show_table", input: wideTable },

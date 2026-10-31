@@ -19,8 +19,8 @@ const Index = z.number().int().nonnegative();
 
 export const TableHighlight = z
   .object({
-    row: Index.optional().describe("0-based data row. With no column, highlights the whole row."),
-    column: Index.optional().describe("0-based data column. With no row, highlights the whole column. With both, highlights one cell."),
+    row: Index.optional().describe("0-based data row, below the number of rows. With no column, highlights the whole row. A highlight must give a row, a column or both."),
+    column: Index.optional().describe("0-based data column, below the number of columns. With no row, highlights the whole column. With both, highlights one cell."),
     tone: z
       .enum(["active", "done", "muted"])
       .optional()
@@ -30,8 +30,8 @@ export const TableHighlight = z
 
 export const TableCellChange = z
   .object({
-    row: Index.describe("0-based data row."),
-    column: Index.describe("0-based data column."),
+    row: Index.describe("0-based data row, below the number of rows."),
+    column: Index.describe("0-based data column, below the number of columns."),
     value: CellValue.describe("The cell's value from this step on."),
   })
   .strict();
