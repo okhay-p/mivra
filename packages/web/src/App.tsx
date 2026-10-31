@@ -188,6 +188,7 @@ function SessionSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton
               tooltip="Memory"
+              data-memory-trigger
               onClick={() => {
                 onOpenMemory();
                 closeOnMobile();

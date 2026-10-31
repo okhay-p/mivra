@@ -37,10 +37,10 @@ export type AssembleContext = (
 
 /** The whole transcript, plus the learner's record across sessions. Summaries will plug in here. */
 const defaultAssembleContext =
-  (store: SessionStore): AssembleContext =>
+  (store: SessionStore, registry: CapabilityRegistry): AssembleContext =>
   async (conversation) => ({
     messages: await convertToModelMessages(conversation),
-    instructions: learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listActiveMemories(MAX_MEMORIES)),
+    instructions: learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
   });
 
 export interface TurnRunnerDeps {
@@ -78,7 +78,7 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
   return {
     async startTurn({ sessionId, message: input, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);

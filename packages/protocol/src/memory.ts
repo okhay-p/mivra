@@ -28,14 +28,18 @@ export type RememberInput = z.infer<typeof RememberInput>;
 export const MemoryBasis = z.enum(["wrong_answer", "chat"]);
 export type MemoryBasis = z.infer<typeof MemoryBasis>;
 
-/** A memory as the learner sees it in the memory panel. */
+/**
+ * A memory as the learner sees it in the memory panel. A memory written while a check was unanswered
+ * could give that check's answer away, so until the check is answered it is `held`, without its content.
+ */
 export const MemoryView = z
   .object({
     id: z.string(),
     kind: MemoryKind,
-    text: z.string(),
+    held: z.boolean(),
+    text: z.string().nullable(),
     concept: z.string().nullable(),
-    basis: MemoryBasis,
+    basis: MemoryBasis.nullable(),
     createdAt: z.string().datetime(),
     editedAt: z.string().datetime().nullable(),
   })

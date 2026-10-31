@@ -60,7 +60,8 @@ function setup(steps: Step[], db: Db = openDb(":memory:")) {
     return sse;
   };
   const newSession = async () => ((await (await app.request("/api/sessions", { method: "POST", headers: auth })).json()) as { id: string }).id;
-  const list = async () => (await (await app.request("/api/memories", { headers: auth })).json()) as { id: string; text: string; basis: string; editedAt: string | null }[];
+  const list = async () =>
+    (await (await app.request("/api/memories", { headers: auth })).json()) as { id: string; held: boolean; text: string | null; basis: string | null; editedAt: string | null }[];
   const send = (path: string, method: string, body?: unknown) =>
     app.request(path, { method, headers: { ...auth, "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
   const promptOf = (index: number) => JSON.stringify(model.doStreamCalls[index]?.prompt);
@@ -107,7 +108,7 @@ describe("remember", () => {
     expect(stored).not.toContain("SECRET-GOAL");
     expect(JSON.stringify(createSessionStore(db).loadMessages(session))).not.toContain("SECRET-GOAL");
 
-    const [memory] = createSessionStore(db).listActiveMemories();
+    const [memory] = createSessionStore(db).listMemoriesForLearner([]);
     expect((await send(`/api/memories/${memory!.id}`, "DELETE")).status).toBe(204);
     await turn(session, "again");
     expect(promptOf(2)).not.toContain("SECRET-GOAL");
@@ -184,6 +185,178 @@ describe("remember", () => {
     expect((await list()).map((m) => m.text)).toEqual([goal.text]);
     await next.turn(await next.newSession(), "four");
     expect((await list()).map((m) => m.text)).toEqual(["Newer goal"]);
+  });
+});
+
+describe("memory written around an unanswered check", () => {
+  const leak = { kind: "goal", text: "SECRET the answer to the current check is 5" };
+
+  it("is held until the check is answered: hidden from the panel and other sessions, but deletable", async () => {
+    const { db, app, turn, newSession, list, send, promptOf } = setup([
+      { tool: "ask_multiple_choice", input: check },
+      remember(leak),
+      { text: "Try it." },
+      { text: "Other session." },
+      { text: "After answering." },
+    ]);
+    const session = await newSession();
+    await turn(session, "quiz me");
+
+    const body = await (await app.request("/api/memories", { headers: auth })).text();
+    expect(body).not.toContain("SECRET");
+    const [memory] = await list();
+    expect(memory).toMatchObject({ held: true, text: null, basis: null });
+    expect((await send(`/api/memories/${memory!.id}`, "PATCH", { text: "changed" })).status).toBe(409);
+
+    await turn(await newSession(), "hello");
+    expect(promptOf(3)).not.toContain("SECRET");
+
+    await send(`/api/artifacts/${db.select().from(artifacts).get()!.id}/attempts`, "POST", { answer: { optionIndex: 0 } });
+    expect(await list()).toMatchObject([{ held: false, text: leak.text }]);
+    await turn(await newSession(), "hello again");
+    expect(promptOf(4)).toContain("SECRET");
+  });
+
+  it("holds for a check asked after the memory in the same reply, and for one from an earlier reply", async () => {
+    const same = setup([remember(leak), { tool: "ask_multiple_choice", input: check }, { text: "Try it." }]);
+    await same.turn(await same.newSession(), "quiz me");
+    expect(await same.list()).toMatchObject([{ held: true }]);
+
+    const earlier = setup([{ tool: "ask_multiple_choice", input: check }, { text: "Try it." }, remember(leak), { text: "Noted." }]);
+    const session = await earlier.newSession();
+    await earlier.turn(session, "quiz me");
+    await earlier.turn(session, "still thinking");
+    expect(await earlier.list()).toMatchObject([{ held: true }]);
+  });
+
+  it("isn't held by a trace, or by a check asked in a later reply", async () => {
+    const trace = { title: "T", values: [1], steps: [{ explanation: "E" }] };
+    const { db, turn, newSession, list } = setup([
+      { tool: "show_algorithm_trace", input: trace },
+      remember(goal),
+      { text: "a" },
+      { tool: "ask_multiple_choice", input: check },
+      { text: "b" },
+    ]);
+    const session = await newSession();
+    await turn(session, "show me");
+    expect(await list()).toMatchObject([{ held: false }]);
+    await turn(session, "quiz me");
+    expect(db.select().from(artifacts).all()).toHaveLength(2);
+    expect(await list()).toMatchObject([{ held: false }]);
+  });
+});
+
+describe("memory changing while another reply is running", () => {
+  const start = (store: ReturnType<typeof createSessionStore>) => {
+    const session = store.createSession();
+    const runId = store.startRun(session, { id: crypto.randomUUID(), role: "user", parts: [] });
+    const save = (text: string, replaces: string | null = null) => {
+      const saved = store.saveMemory({ sessionId: session.id, runId, kind: "goal", text, concept: null, basis: "chat", attemptId: null, replaces });
+      if (!saved.ok) throw new Error(saved.reason);
+      return saved.memory;
+    };
+    return { save, finish: () => store.finishRun(runId, session.id, "completed") };
+  };
+  const active = (store: ReturnType<typeof createSessionStore>) => store.listMemoriesForLearner([]).map((m) => m.text);
+  const seed = (store: ReturnType<typeof createSessionStore>) => {
+    const run = start(store);
+    const memory = run.save("A");
+    run.finish();
+    return memory;
+  };
+
+  it("a memory deleted while its replacement is pending doesn't come back", () => {
+    const db = openDb(":memory:");
+    const store = createSessionStore(db);
+    const a = seed(store);
+    const run = start(store);
+    run.save("B", a.id);
+    expect(store.deleteMemory(a.id)).toBe(true);
+    run.finish();
+    expect(active(store)).toEqual([]);
+    expect(db.select().from(memories).all()).toEqual([]);
+  });
+
+  it("only the first of two concurrent replacements wins, across runs and within one", () => {
+    const store = createSessionStore(openDb(":memory:"));
+    const a = seed(store);
+    const first = start(store);
+    const second = start(store);
+    first.save("B", a.id);
+    second.save("C", a.id);
+    first.finish();
+    second.finish();
+    expect(active(store)).toEqual(["B"]);
+
+    const again = createSessionStore(openDb(":memory:"));
+    const x = seed(again);
+    const run = start(again);
+    run.save("B", x.id);
+    run.save("C", x.id);
+    run.finish();
+    expect(active(again)).toEqual(["B"]);
+  });
+
+  it("a learner's edit isn't overwritten by a replacement written before it", () => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 31), toFake: ["Date"] });
+    try {
+      const store = createSessionStore(openDb(":memory:"));
+      const a = seed(store);
+      const run = start(store);
+      run.save("B", a.id);
+      vi.advanceTimersByTime(1000);
+      expect(store.editMemory(a.id, "Learner's words", []).ok).toBe(true);
+      run.finish();
+      expect(active(store)).toEqual(["Learner's words"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("identical memories from concurrent replies become one, even if one reply fails", () => {
+    const store = createSessionStore(openDb(":memory:"));
+    const first = start(store);
+    const second = start(store);
+    first.save("Same goal");
+    second.save(" same GOAL ");
+    first.finish();
+    second.finish();
+    expect(active(store)).toEqual(["Same goal"]);
+
+    const other = createSessionStore(openDb(":memory:"));
+    const failing = other.createSession();
+    const failingRun = other.startRun(failing, { id: "f", role: "user", parts: [] });
+    other.saveMemory({ sessionId: failing.id, runId: failingRun, kind: "goal", text: "Same goal", concept: null, basis: "chat", attemptId: null, replaces: null });
+    const ok = start(other);
+    ok.save("Same goal");
+    other.finishRun(failingRun, failing.id, "failed");
+    ok.finish();
+    expect(active(other)).toEqual(["Same goal"]);
+  });
+
+  it("limits how many memories one reply can write", () => {
+    const store = createSessionStore(openDb(":memory:"));
+    const run = start(store);
+    for (let i = 0; i < 5; i++) run.save(`m${i}`);
+    expect(() => run.save("one too many")).toThrow("at most 5");
+    run.save("m0"); // A repeat isn't a new memory.
+    run.finish();
+    expect(active(store)).toHaveLength(5);
+  });
+
+  it("finds a wrong answer however many attempts came after it", () => {
+    const store = createSessionStore(openDb(":memory:"));
+    const session = store.createSession();
+    const runId = store.startRun(session, { id: "m", role: "user", parts: [] });
+    const record = (toolCallId: string, correct: boolean, concept: string) => {
+      const artifact = store.createArtifact({ sessionId: session.id, runId, toolCallId, kind: "multiple_choice", version: 1, spec: check });
+      return store.createAttempt({ artifactId: artifact.id, sessionId: session.id, answer: {}, grade: {}, correct, concept });
+    };
+    const wrong = record("old", false, "heaps");
+    for (let i = 0; i < 1001; i++) record(`later${i}`, true, "other");
+    expect(store.findLatestWrongAnswer((c) => c === "heaps")?.id).toBe(wrong.id);
+    expect(store.findLatestWrongAnswer((c) => c === "missing")).toBeUndefined();
   });
 });
 

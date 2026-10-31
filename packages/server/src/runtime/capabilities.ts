@@ -105,6 +105,8 @@ export function createCapabilityRegistry(plugins: Plugin[]) {
     artifactKind: (kind: string) => kinds.get(kind),
     artifactKindForTool: (toolName: string) => kindsByTool.get(toolName),
     viewOf,
+    /** The artifact kinds a learner can answer. */
+    checkKinds: () => [...kinds.values()].filter((definition) => definition.check).map((definition) => definition.kind),
     /** Whether a stored message part should be kept when saving a reply. */
     keepsInTranscript: (partType: string) => !partType.startsWith("tool-") || !untranscribedTools.has(partType.slice(5)),
 

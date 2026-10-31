@@ -114,6 +114,7 @@ test.describe("learning flow", () => {
     const editedEntry = panel.getByRole("listitem").filter({ hasText: edited });
     await expect(editedEntry).toBeVisible();
     await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "Memory", exact: true })).toBeFocused();
 
     await startSession(page);
     await send(page, `known ${edited}`);

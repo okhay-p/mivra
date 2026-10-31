@@ -138,6 +138,7 @@ const editMemory = createRoute({
   responses: {
     200: { description: "The edited memory", content: { "application/json": { schema: MemoryView } } },
     404: errorResponse("Unknown memory"),
+    409: errorResponse("Held until a check is answered"),
   },
 });
 
@@ -168,13 +169,15 @@ function toSessionJson(row: SessionRow) {
   };
 }
 
-function toMemoryJson(row: MemoryRow): MemoryView {
+/** Leaves out everything a held memory says: it could give away an unanswered check. */
+function toMemoryJson(row: MemoryRow & { held: boolean }): MemoryView {
   return {
     id: row.id,
     kind: row.kind,
-    text: row.text,
-    concept: row.concept,
-    basis: row.basis,
+    held: row.held,
+    text: row.held ? null : row.text,
+    concept: row.held ? null : row.concept,
+    basis: row.held ? null : row.basis,
     createdAt: row.createdAt.toISOString(),
     editedAt: row.editedAt?.toISOString() ?? null,
   };
@@ -215,10 +218,13 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       // Cast for the same reason as messages: hono's JSON typing recurses too deeply on the view type.
       return c.json(result.view as never, 201);
     })
-    .openapi(listMemories, (c) => c.json(store.listActiveMemories().map(toMemoryJson), 200))
+    .openapi(listMemories, (c) => c.json(store.listMemoriesForLearner(registry.checkKinds()).map(toMemoryJson), 200))
     .openapi(editMemory, (c) => {
-      const row = store.editMemory(c.req.valid("param").id, c.req.valid("json").text);
-      return row ? c.json(toMemoryJson(row), 200) : c.json({ error: "Memory not found" }, 404);
+      const result = store.editMemory(c.req.valid("param").id, c.req.valid("json").text, registry.checkKinds());
+      if (result.ok) return c.json(toMemoryJson(result.memory), 200);
+      return result.reason === "held"
+        ? c.json({ error: "This memory can't be edited until the check is answered" }, 409)
+        : c.json({ error: "Memory not found" }, 404);
     })
     .openapi(deleteMemory, (c) =>
       store.deleteMemory(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Memory not found" }, 404),

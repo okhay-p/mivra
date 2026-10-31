@@ -76,7 +76,7 @@ export function learnerContext(attempts: EvidenceRow[], memories: MemoryRow[] = 
       saved: m.createdAt.toISOString().slice(0, 10),
     }));
     sections.push(
-      "Their memories: your own earlier notes, which may be wrong. A basis of wrong_answer is backed by a graded answer; chat is only an impression, so treat it tentatively. Trust anything editedByLearner.",
+      "Their memories: your own earlier notes, which may be wrong. A basis of wrong_answer is backed by a graded answer, which may be old; chat is only an impression, so treat it tentatively. Trust anything editedByLearner.",
       `<learner_memories>\n${dataRows(rows)}\n</learner_memories>`,
     );
   }

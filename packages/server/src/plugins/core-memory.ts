@@ -1,10 +1,10 @@
 import { RememberInput } from "@mivra/protocol";
 import { tool } from "ai";
 import type { Plugin } from "../runtime/capabilities.js";
-import { MAX_EVIDENCE, conceptKey } from "../runtime/learner-context.js";
+import { conceptKey } from "../runtime/learner-context.js";
 
 /**
- * The remember tool (ADR-009). Saved memories take effect only if the reply completes. The call is
+ * The remember tool (ADR-009). Saved memories take effect only if the reply completes, and stay hidden while a check is unanswered. The call is
  * left out of the stored conversation, so editing or deleting a memory really removes what it said.
  */
 export const coreMemory: Plugin = {
@@ -20,12 +20,8 @@ export const coreMemory: Plugin = {
           inputSchema: RememberInput,
           execute: async (input) => {
             // The server, not the model, decides what supports a misconception.
-            const wrongAnswer =
-              input.kind === "misconception" && input.concept
-                ? store
-                    .listRecentEvidence(MAX_EVIDENCE)
-                    .find((a) => !a.correct && a.concept && conceptKey(a.concept) === conceptKey(input.concept!))
-                : undefined;
+            const key = input.kind === "misconception" && input.concept ? conceptKey(input.concept) : undefined;
+            const wrongAnswer = key ? store.findLatestWrongAnswer((concept) => conceptKey(concept) === key) : undefined;
             const saved = store.saveMemory({
               sessionId,
               runId,
@@ -36,7 +32,7 @@ export const coreMemory: Plugin = {
               attemptId: wrongAnswer?.id ?? null,
               basis: wrongAnswer ? "wrong_answer" : "chat",
             });
-            return saved ? { memoryId: saved.id, status: "saved" } : { status: "rejected", reason: "replaces isn't a known memory id" };
+            return saved.ok ? { memoryId: saved.memory.id, status: "saved" } : { status: "rejected", reason: saved.reason };
           },
         }),
       { keepInTranscript: false },

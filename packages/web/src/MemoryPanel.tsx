@@ -34,7 +34,15 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-md">
+      <SheetContent
+        className="w-full overflow-y-auto sm:max-w-md"
+        // The opening button isn't the Sheet's trigger, and on mobile it unmounts with the sidebar.
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          const target = document.querySelector<HTMLElement>("[data-memory-trigger]") ?? document.querySelector<HTMLElement>('[data-sidebar="trigger"]');
+          target?.focus();
+        }}
+      >
         <SheetHeader>
           <SheetTitle className="font-heading">Memory</SheetTitle>
           <SheetDescription>What Mivra has noted about you across sessions. It can be wrong, so correct or delete anything here.</SheetDescription>
@@ -77,7 +85,7 @@ function MemoryEntry({
   onDelete: () => void;
 }) {
   const [mode, setMode] = useState<"view" | "edit" | "confirm-delete">("view");
-  const [draft, setDraft] = useState(memory.text);
+  const [draft, setDraft] = useState(memory.text ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -114,7 +122,7 @@ function MemoryEntry({
               variant="outline"
               size="sm"
               onClick={() => {
-                setDraft(memory.text);
+                setDraft(memory.text ?? "");
                 setError(undefined);
                 setMode("view");
               }}
@@ -125,9 +133,9 @@ function MemoryEntry({
         </form>
       ) : (
         <>
-          <p>{memory.text}</p>
+          {memory.held ? <p className="text-muted-foreground italic">Hidden until you answer the check in that session.</p> : <p>{memory.text}</p>}
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{memory.basis === "wrong_answer" ? "From a wrong answer" : "From chat"}</Badge>
+            {!memory.held && <Badge variant="outline">{memory.basis === "wrong_answer" ? "From a wrong answer" : "From chat"}</Badge>}
             {memory.editedAt && <Badge variant="outline">Edited by you</Badge>}
             <span className="text-muted-foreground text-xs">{new Date(memory.createdAt).toLocaleDateString()}</span>
           </div>
@@ -143,9 +151,11 @@ function MemoryEntry({
             </div>
           ) : (
             <div className="flex gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => setMode("edit")}>
-                Edit
-              </Button>
+              {!memory.held && (
+                <Button type="button" variant="outline" size="sm" onClick={() => setMode("edit")}>
+                  Edit
+                </Button>
+              )}
               <Button type="button" variant="outline" size="sm" onClick={() => setMode("confirm-delete")}>
                 Delete
               </Button>

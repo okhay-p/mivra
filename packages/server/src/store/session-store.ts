@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
-import { and, asc, desc, eq, max, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNotNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { artifacts, attempts, memories, messages, runs, sessions, type RunStatus } from "../db/schema.js";
 
@@ -16,6 +16,28 @@ export type MemoryRow = typeof memories.$inferSelect;
 export class Conflict extends Error {}
 
 const DEFAULT_TITLE = "New session";
+/** Most memories one reply can write. */
+const MAX_MEMORIES_PER_RUN = 5;
+
+const sameMemoryText = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * Whether a memory could give away an unanswered check: its session has a check from the same reply or
+ * an earlier one, in a reply that completed, with no attempt yet. The model could see that check's answer.
+ */
+function heldBy(checkKinds: string[]) {
+  if (checkKinds.length === 0) return sql<number>`0`;
+  // Spelled out: Drizzle drops table names from columns in single-table selects, which would be ambiguous here.
+  const kinds = sql.join(checkKinds.map((kind) => sql`${kind}`), sql`, `);
+  return sql<number>`exists (
+    select 1 from artifacts a join runs r on r.id = a.run_id
+    where a.session_id = "memories"."session_id"
+      and a.kind in (${kinds})
+      and r.status = 'completed'
+      and (a.run_id = "memories"."run_id" or a.created_at <= "memories"."created_at")
+      and not exists (select 1 from attempts t where t.artifact_id = a.id)
+  )`;
+}
 
 function firstText(message: UIMessage): string | undefined {
   const part = message.parts.find((p) => p.type === "text");
@@ -128,7 +150,20 @@ export function createSessionStore(db: Db) {
           tx.delete(memories).where(pending).run();
           return;
         }
-        for (const memory of tx.select().from(memories).where(pending).all()) {
+        // Other runs and the learner may have changed things since these were written, so check again now.
+        for (const memory of tx.select().from(memories).where(pending).orderBy(sql`rowid`).all()) {
+          const target = memory.replacesId ? tx.select().from(memories).where(eq(memories.id, memory.replacesId)).get() : undefined;
+          const staleTarget = memory.replacesId && (target?.status !== "active" || (target.editedAt && target.editedAt >= memory.createdAt));
+          const duplicate = tx
+            .select()
+            .from(memories)
+            .where(and(eq(memories.kind, memory.kind), eq(memories.status, "active")))
+            .all()
+            .some((other) => other.id !== memory.replacesId && sameMemoryText(other.text, memory.text));
+          if (staleTarget || duplicate) {
+            tx.delete(memories).where(eq(memories.id, memory.id)).run();
+            continue;
+          }
           if (memory.replacesId) tx.update(memories).set({ status: "superseded" }).where(eq(memories.id, memory.replacesId)).run();
           tx.update(memories).set({ status: "active" }).where(eq(memories.id, memory.id)).run();
         }
@@ -168,45 +203,82 @@ export function createSessionStore(db: Db) {
     },
 
     /**
-     * Saves a memory written during a run; it becomes active when the run completes. Repeating a known
-     * memory returns the existing one. Returns undefined if `replaces` isn't an active memory.
+     * Saves a memory written during a run; it is reconsidered when the run completes. Repeating a known
+     * memory returns the existing one.
      */
-    saveMemory(input: Pick<MemoryRow, "sessionId" | "runId" | "kind" | "text" | "concept" | "basis" | "attemptId"> & { replaces: string | null }) {
+    saveMemory(
+      input: Pick<MemoryRow, "sessionId" | "runId" | "kind" | "text" | "concept" | "basis" | "attemptId"> & { replaces: string | null },
+    ): { ok: true; memory: MemoryRow } | { ok: false; reason: string } {
       return db.transaction((tx) => {
         const { replaces, ...fields } = input;
         if (replaces && tx.select({ status: memories.status }).from(memories).where(eq(memories.id, replaces)).get()?.status !== "active") {
-          return undefined;
+          return { ok: false, reason: "replaces isn't a known memory id" };
         }
+        const ofThisRun = and(eq(memories.status, "pending"), eq(memories.runId, input.runId!));
         if (!replaces) {
-          const same = (text: string) => text.trim().toLowerCase() === input.text.trim().toLowerCase();
           const known = tx
             .select()
             .from(memories)
-            .where(and(eq(memories.kind, input.kind), or(eq(memories.status, "active"), and(eq(memories.status, "pending"), eq(memories.runId, input.runId!)))))
+            .where(and(eq(memories.kind, input.kind), or(eq(memories.status, "active"), ofThisRun)))
             .all();
-          const existing = known.find((m) => same(m.text));
-          if (existing) return existing;
+          const existing = known.find((m) => sameMemoryText(m.text, input.text));
+          if (existing) return { ok: true, memory: existing };
+        }
+        if (tx.select({ id: memories.id }).from(memories).where(ofThisRun).all().length >= MAX_MEMORIES_PER_RUN) {
+          return { ok: false, reason: `A reply can save at most ${MAX_MEMORIES_PER_RUN} memories` };
         }
         const row = { id: randomUUID(), ...fields, status: "pending" as const, replacesId: replaces, createdAt: new Date(), editedAt: null };
         tx.insert(memories).values(row).run();
-        return row;
+        return { ok: true, memory: row };
       });
     },
 
-    /** Memories currently in force, newest first. */
-    listActiveMemories(limit?: number): MemoryRow[] {
-      const query = db.select().from(memories).where(eq(memories.status, "active")).orderBy(desc(memories.createdAt), desc(sql`rowid`));
-      return limit === undefined ? query.all() : query.limit(limit).all();
+    /** Memories in force for the learner to see, newest first, each marked if it is held. */
+    listMemoriesForLearner(checkKinds: string[]): (MemoryRow & { held: boolean })[] {
+      return db
+        .select({ memory: memories, held: heldBy(checkKinds) })
+        .from(memories)
+        .where(eq(memories.status, "active"))
+        .orderBy(desc(memories.createdAt), desc(sql`rowid`))
+        .all()
+        .map((row) => ({ ...row.memory, held: Boolean(row.held) }));
     },
 
-    /** The learner's correction of a memory. Returns undefined unless it is active. */
-    editMemory(id: string, text: string): MemoryRow | undefined {
+    /** Memories in force for the model to see, newest first, leaving out held ones. */
+    listMemoriesForModel(checkKinds: string[], limit: number): MemoryRow[] {
       return db
-        .update(memories)
-        .set({ text, editedAt: new Date() })
-        .where(and(eq(memories.id, id), eq(memories.status, "active")))
-        .returning()
-        .get();
+        .select()
+        .from(memories)
+        .where(and(eq(memories.status, "active"), sql`not ${heldBy(checkKinds)}`))
+        .orderBy(desc(memories.createdAt), desc(sql`rowid`))
+        .limit(limit)
+        .all();
+    },
+
+    /** The learner's correction of a memory. A held memory can't be edited, since editing would show its text. */
+    editMemory(id: string, text: string, checkKinds: string[]): { ok: true; memory: MemoryRow & { held: boolean } } | { ok: false; reason: "not_found" | "held" } {
+      return db.transaction((tx) => {
+        const found = tx
+          .select({ held: heldBy(checkKinds) })
+          .from(memories)
+          .where(and(eq(memories.id, id), eq(memories.status, "active")))
+          .get();
+        if (!found) return { ok: false, reason: "not_found" };
+        if (found.held) return { ok: false, reason: "held" };
+        const memory = tx.update(memories).set({ text, editedAt: new Date() }).where(eq(memories.id, id)).returning().get();
+        return { ok: true, memory: { ...memory, held: false } };
+      });
+    },
+
+    /** The most recent wrong answer whose concept matches, however old. */
+    findLatestWrongAnswer(matches: (concept: string) => boolean): Pick<AttemptRow, "id"> | undefined {
+      return db
+        .select({ id: attempts.id, concept: attempts.concept })
+        .from(attempts)
+        .where(and(eq(attempts.correct, false), isNotNull(attempts.concept)))
+        .orderBy(desc(attempts.createdAt), desc(sql`rowid`))
+        .all()
+        .find((attempt) => matches(attempt.concept!));
     },
 
     /** Permanently deletes a memory and the earlier versions it replaced. Returns false unless it is active. */

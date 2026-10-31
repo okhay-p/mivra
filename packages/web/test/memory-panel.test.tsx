@@ -6,6 +6,7 @@ import { MemoryPanel } from "../src/MemoryPanel.js";
 const memory = (over: Partial<MemoryView> = {}): MemoryView => ({
   id: "m1",
   kind: "goal",
+  held: false,
   text: "Wants to pass interviews",
   concept: null,
   basis: "chat",
@@ -40,6 +41,14 @@ describe("MemoryPanel", () => {
   it("shows the server's error when loading fails", async () => {
     openPanel(json({ error: "Database is busy" }, 500));
     expect(await screen.findByText("Database is busy")).toBeTruthy();
+  });
+
+  it("hides a held memory's content, and allows deleting but not editing it", async () => {
+    openPanel(json([memory({ held: true, text: null, basis: null })]));
+    expect(await screen.findByText("Hidden until you answer the check in that session.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
+    expect(screen.queryByText("From chat")).toBeNull();
   });
 
   it("saves an edit and shows the result", async () => {
