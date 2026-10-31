@@ -25,6 +25,189 @@ const expectCells = (page: Page, values: string[]) =>
     .poll(() => cells(page).evaluateAll((all) => all.map((cell) => cell.firstChild?.textContent)))
     .toEqual(values);
 
+test.describe("set diagram", () => {
+  const diagram = (page: Page) => page.getByRole("region", { name: /Set diagram/ });
+  const highlighted = (page: Page) =>
+    diagram(page).locator('[data-testid="set-region"]:not([data-tone="none"])').evaluateAll((all) => all.map((g) => `${g.getAttribute("data-mask")}:${g.getAttribute("data-tone")}`));
+
+  const contents = (page: Page, mask: number) => diagram(page).locator(`[data-testid="set-elements"][data-mask="${mask}"]`);
+  const drawnWidth = (page: Page) => diagram(page).getByTestId("set-diagram").evaluate((root) => root.getBoundingClientRect().width);
+
+  /** Every region whose contents reach outside its exact shape, by the browser's own hit test all around their edge. */
+  const spilled = (page: Page) =>
+    diagram(page).evaluate((root) => {
+      const ctm = root.querySelector("svg")!.getScreenCTM()!.inverse();
+      return [...root.querySelectorAll('[data-testid="set-elements"] > span')].flatMap((chip) => {
+        const mask = chip.parentElement!.getAttribute("data-mask");
+        const shape = root.querySelector(`[data-testid="set-region"][data-mask="${mask}"] path`) as SVGPathElement;
+        const box = chip.getBoundingClientRect();
+        const edge: [number, number][] = [];
+        for (let t = 0; t <= 1; t += 0.05) {
+          const [x, y] = [box.left + t * box.width, box.top + t * box.height];
+          edge.push([x, box.top], [x, box.bottom], [box.left, y], [box.right, y]);
+        }
+        return edge.every(([x, y]) => shape.isPointInFill(new DOMPoint(x, y).matrixTransform(ctm))) ? [] : [`${mask}: ${chip.textContent} (${box.width}x${box.height})`];
+      });
+    });
+
+  async function showAt320(page: Page, prompt: string) {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto("/");
+    await page.getByRole("main").getByRole("button", { name: "Toggle Sidebar" }).click();
+    await page.locator('[data-mobile="true"]').getByRole("button", { name: "New session" }).first().click();
+    await send(page, prompt);
+    await expect(diagram(page)).toBeVisible();
+  }
+
+  test("each step highlights its own region, drawn as its exact shape", async ({ page }) => {
+    await startSession(page);
+    await send(page, `venn ${Date.now()}`);
+    await expect(page.getByText("Step through the diagram.")).toBeVisible();
+    await expect(diagram(page).getByTestId("set-circle")).toHaveCount(3);
+    await expect(diagram(page).getByTestId("set-region")).toHaveCount(8);
+
+    // a=1, b=2, c=4, in the order the script's steps go through them.
+    for (const mask of [1, 2, 4, 3, 5, 6, 7, 0]) {
+      await expect.poll(() => highlighted(page)).toEqual([`${mask}:active`]);
+      await diagram(page).getByRole("button", { name: "Next" }).click();
+    }
+    await expect.poll(() => highlighted(page)).toEqual(["3:active", "7:done", "0:muted"]);
+    await expect(diagram(page).getByTestId("set-key")).toContainText("Ruled out:outside");
+
+    // The browser's own hit test: every point away from an edge is in the one region its circles say it is.
+    const wrong = await diagram(page).evaluate((root) => {
+      const circles = [...root.querySelectorAll('[data-testid="set-circle"]')].map((c) => ({
+        x: Number(c.getAttribute("cx")),
+        y: Number(c.getAttribute("cy")),
+        r: Number(c.getAttribute("r")),
+      }));
+      const shapes = [...root.querySelectorAll('[data-testid="set-region"]')].map((g) => ({
+        mask: Number(g.getAttribute("data-mask")),
+        path: g.querySelector('[data-testid="set-region-shape"]') as SVGPathElement,
+      }));
+      const misses: string[] = [];
+      let checked = 0;
+      for (let x = 4; x < 378; x += 3) {
+        for (let y = 4; y < 408; y += 3) {
+          const distances = circles.map((c) => Math.hypot(x - c.x, y - c.y) - c.r);
+          if (distances.some((d) => Math.abs(d) < 1)) continue;
+          const expected = distances.reduce((mask, d, i) => (d < 0 ? mask | (1 << i) : mask), 0);
+          checked++;
+          const hits = shapes.filter((s) => s.path.isPointInFill(new DOMPoint(x, y))).map((s) => s.mask);
+          if (hits.length !== 1 || hits[0] !== expected) misses.push(`${x},${y}: ${hits.join("/")} not ${expected}`);
+        }
+      }
+      return { checked, misses: misses.slice(0, 5) };
+    });
+    expect(wrong.checked).toBeGreaterThan(10_000);
+    expect(wrong.misses).toEqual([]);
+  });
+
+  test("describes the sets, regions and current highlights in words", async ({ page }) => {
+    await startSession(page);
+    await send(page, `venn ${Date.now()}`);
+    const description = diagram(page).getByTestId("set-description");
+    await expect(description).toContainText("Multiples of 3");
+    await expect(diagram(page).getByTestId("set-announcement")).toContainText("Focus: in");
+    await expect(diagram(page).getByTestId("set-diagram")).toHaveAttribute("aria-hidden", "true");
+    await diagram(page).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(diagram(page).getByText("Step 2 of 9", { exact: true })).toBeVisible();
+  });
+
+  test("fits at 320px, with every region's contents inside its region", async ({ page }) => {
+    await showAt320(page, `venn ${Date.now()}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(diagram(page).locator(".katex").first()).toBeVisible();
+
+    expect(await spilled(page)).toEqual([]);
+  });
+
+  test("too many elements leave a marker that fits, with the list below the diagram", async ({ page }) => {
+    await showAt320(page, `crowdedsets ${Date.now()}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(contents(page, 7)).toHaveText(/n = 30 ↓|^↓$/);
+    await expect(contents(page, 6)).toHaveText(/n = 40 ↓|^↓$/);
+    await expect(diagram(page).getByTestId("set-overflow")).toContainText("229");
+    await expect(diagram(page).getByTestId("set-overflow")).toContainText("n = 40");
+    expect(await spilled(page)).toEqual([]);
+  });
+
+  test("contents never cross out of their region, whatever their shape", async ({ page }) => {
+    await showAt320(page, `spillsets ${Date.now()}`);
+    expect(await drawnWidth(page)).toBeGreaterThan(200);
+    // A count of a million, a block that wraps too tall, and a formula that would scroll.
+    await expect(contents(page, 3)).toHaveText("↓");
+    await expect(contents(page, 1)).toHaveText(/n = 1 ↓|^↓$/);
+    await expect(contents(page, 6)).toHaveText(/n = 1 ↓|^↓$/);
+    const list = diagram(page).getByTestId("set-overflow");
+    await expect(list).toContainText("n = 1000000");
+    await expect(list).toContainText("a b c d e f g h i j k l");
+    await expect(list.locator(".font-mono .katex")).toBeVisible();
+    expect(await spilled(page)).toEqual([]);
+
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await expect.poll(() => spilled(page)).toEqual([]);
+  });
+
+  test("shows small examples in place when there's room, and re-measures on resize", async ({ page }) => {
+    await startSession(page);
+    await send(page, `smallsets ${Date.now()}`);
+    await expect(diagram(page).getByTestId("set-diagram")).toBeVisible();
+    await expect(contents(page, 3)).toHaveText("4, 5, 6");
+    await expect(diagram(page).getByTestId("set-overflow")).toHaveCount(0);
+    expect(await spilled(page)).toEqual([]);
+
+    await page.setViewportSize({ width: 320, height: 800 });
+    await expect(contents(page, 3)).toHaveText("↓");
+    await expect(diagram(page).getByTestId("set-overflow")).toContainText("4, 5, 6");
+    expect(await spilled(page)).toEqual([]);
+
+    await page.setViewportSize({ width: 1100, height: 800 });
+    await expect(contents(page, 3)).toHaveText("4, 5, 6");
+    await expect(diagram(page).getByTestId("set-overflow")).toHaveCount(0);
+  });
+
+  for (const [sets, script] of [[1, "oneset"], [2, "twosets"], [3, "venn"]] as const) {
+    for (const width of [320, 1100]) {
+      test(`contents stay inside their regions with ${sets} set(s) at ${width}px`, async ({ page }) => {
+        await startSession(page);
+        await send(page, `${script} ${Date.now()}`);
+        await expect(diagram(page).getByTestId("set-circle")).toHaveCount(sets);
+        await page.setViewportSize({ width, height: 800 });
+        await expect(diagram(page).getByTestId("set-diagram")).toBeVisible();
+        await expect.poll(() => spilled(page)).toEqual([]);
+      });
+    }
+  }
+
+  test("a count doesn't look like an element", async ({ page }) => {
+    await startSession(page);
+    await send(page, `smallsets ${Date.now()}`);
+    await expect(contents(page, 1)).toHaveText("1");
+    await expect(contents(page, 2)).toHaveText("n = 1");
+  });
+
+  test("announces every step, even when its explanation repeats", async ({ page }) => {
+    await startSession(page);
+    await send(page, `repeatedsets ${Date.now()}`);
+    const announcement = diagram(page).getByTestId("set-announcement");
+    await expect(announcement).toHaveAttribute("aria-live", "polite");
+    await expect(announcement).toHaveAttribute("aria-atomic", "true");
+    await expect(announcement).toContainText("Step 1 of 2: Look here.");
+    await expect(announcement).toContainText("Focus: in");
+    const before = await announcement.textContent();
+    await announcement.evaluate((live) => {
+      (live as HTMLElement & { same?: boolean }).same = true;
+    });
+    await diagram(page).getByRole("button", { name: "Next" }).click();
+    await expect(announcement).toContainText("Step 2 of 2: Look here.");
+    await expect(announcement).toContainText("seen = 1");
+    expect(await announcement.textContent()).not.toBe(before);
+    expect(await announcement.evaluate((live) => (live as HTMLElement & { same?: boolean }).same)).toBe(true);
+  });
+});
+
 test.describe("learning flow", () => {
   test("teaches, grades a wrong answer, keeps it after reload and tells the tutor", async ({ page }) => {
     await startSession(page);

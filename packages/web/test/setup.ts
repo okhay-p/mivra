@@ -15,4 +15,4 @@ class NoResizeObserver {
   disconnect() {}
 }
 globalThis.ResizeObserver ??= NoResizeObserver;
-Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve() } });
+Object.defineProperty(document, "fonts", { configurable: true, value: { ready: Promise.resolve(), addEventListener() {}, removeEventListener() {} } });

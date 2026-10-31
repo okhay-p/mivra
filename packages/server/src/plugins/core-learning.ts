@@ -2,6 +2,7 @@ import {
   AlgorithmTraceSpec,
   MultipleChoiceAnswer,
   MultipleChoiceSpec,
+  SetDiagramSpec,
   TableSpec,
   WorkedStepsSpec,
   artifactKinds,
@@ -12,8 +13,8 @@ import {
 import type { Plugin } from "../runtime/capabilities.js";
 
 /**
- * First-party learning tools (ADR-006/007): the algorithm_trace, table and worked_steps
- * visualizations and the multiple_choice check, registered through the same API third-party plugins will use.
+ * First-party learning tools (ADR-006/007): the visualization kinds and the multiple_choice check,
+ * registered through the same API third-party plugins will use.
  */
 export const coreLearning: Plugin = {
   name: "core-learning",
@@ -32,6 +33,22 @@ export const coreLearning: Plugin = {
         kind: "algorithm_trace",
         version: 1,
         spec: AlgorithmTraceSpec.parse(spec),
+      }),
+    });
+
+    const sets = artifactKinds.set_diagram;
+    api.registerArtifactKind({
+      kind: "set_diagram",
+      version: sets.version,
+      toolName: sets.toolName,
+      description: sets.description,
+      spec: sets.spec,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "set_diagram",
+        version: 1,
+        spec: SetDiagramSpec.parse(spec),
       }),
     });
 

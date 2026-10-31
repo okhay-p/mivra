@@ -21,6 +21,34 @@ export const trace = {
   },
 } satisfies ArtifactView;
 
+export const venn = {
+  id: "art-venn",
+  createdAt: "2026-10-30T00:00:00.000Z",
+  kind: "set_diagram",
+  version: 1,
+  spec: {
+    title: "Three sets",
+    sets: [
+      { id: "a", label: "A" },
+      { id: "b", label: "B" },
+      { id: "c", label: "C" },
+    ],
+    universe: "U",
+    regions: [
+      { in: ["a"], elements: [1, 2] },
+      { in: ["b", "a"], elements: [3, 5] },
+      { in: ["a", "b", "c"], elements: [] },
+      { in: ["c"], elements: [], count: 7 },
+      { in: [], elements: [9] },
+    ],
+    steps: [
+      { explanation: "Look at the overlap.", highlights: [{ in: ["b", "a"] }, { in: [], tone: "muted" }], variables: [{ name: "size", value: 2 }] },
+      { explanation: "Nothing highlighted here." },
+      { explanation: "Now the middle.", highlights: [{ in: ["a", "b", "c"], tone: "done" }] },
+    ],
+  },
+} satisfies ArtifactView;
+
 export const question = {
   id: "art-mc",
   createdAt: "2026-10-30T00:00:00.000Z",
