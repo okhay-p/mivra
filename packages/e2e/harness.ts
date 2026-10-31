@@ -165,7 +165,17 @@ const graphSkew = {
   steps: [{ explanation: "Every insert goes right.", nodeStates: [{ id: "0" }] }, { explanation: "So searching is linear.", nodeStates: [{ id: "1" }] }],
 };
 
+// A left subtree that runs right: inorder only reads across the page if 6, 7 and 8 stay left of the root.
+const graphBst = {
+  title: "A BST with a long left subtree",
+  directed: true,
+  kind: "tree",
+  nodes: ["10", "5", "20", "6", "7", "8"].map((id) => ({ id })),
+  edges: [["10", "5", "left", 5], ["10", "20", "right", 10], ["5", "6", "right", 1], ["6", "7", "right", 1], ["7", "8", "right", 1]].map(([from, to, side, weight]) => ({ from, to, side, weight })),
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  graphbst: [{ tool: "show_graph", input: graphBst }, { text: "Here's the BST." }],
   graphskew: [{ tool: "show_graph", input: graphSkew }, { text: "Here's the skewed tree." }],
   graphtree: [{ tool: "show_graph", input: graphTree }, { text: "Here's the tree." }],
   graphweighted: [{ tool: "show_graph", input: graphWeighted }, { text: "Here's the graph." }],

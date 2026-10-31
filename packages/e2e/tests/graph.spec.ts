@@ -68,6 +68,17 @@ test.describe("graph", () => {
     expect(loneLeft.x).toBeLessThan(loneRight.x);
   });
 
+  for (const width of [1100, 320]) {
+    test(`a BST reads in sorted order across the page at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      const graph = await showGraph(page, "graphbst");
+      await expect(graph.getByTestId("graph-canvas")).toHaveAttribute("data-layout", "tree");
+      const boxes = await Promise.all(["5", "6", "7", "8", "10", "20"].map(async (id) => (await graph.locator(`[data-node="${id}"]`).boundingBox())!));
+      boxes.slice(1).forEach((box, i) => expect(box.x).toBeGreaterThan(boxes[i]!.x));
+      expect(await graph.getByTestId("graph-scroll").evaluate((e) => e.scrollWidth <= e.clientWidth)).toBe(true);
+    });
+  }
+
   test("self-loops and parallel edges are all drawn apart", async ({ page }) => {
     const graph = await showGraph(page, "graphloop");
     await expect(graph.getByTestId("graph-node")).toHaveCount(3);

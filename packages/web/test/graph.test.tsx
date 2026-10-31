@@ -225,6 +225,96 @@ describe("layoutGraph", () => {
       edges: sided.map(([from, to, side]) => ({ from, to, side })),
     });
     const at = (layout: ReturnType<typeof layoutGraph>, id: string) => layout.nodes.find((n) => n.id === id)!;
+    /** Inorder is left to right on the page, with no ties, which is what a BST's drawing should show. */
+    const expectInorder = (layout: ReturnType<typeof layoutGraph>, inorder: string[]) => {
+      const xs = inorder.map((id) => at(layout, id).x);
+      xs.slice(1).forEach((x, i) => expect(x, `${inorder[i]} before ${inorder[i + 1]}`).toBeGreaterThan(xs[i]!));
+    };
+    const expectParentsAbove = (layout: ReturnType<typeof layoutGraph>, spec: { edges: { from: string; to: string }[] }) => {
+      for (const { from, to } of spec.edges) expect(at(layout, from).y, `${from} above ${to}`).toBeLessThan(at(layout, to).y);
+    };
+    const chain = (side: "left" | "right", count: number): [string, string, "left" | "right"][] =>
+      Array.from({ length: count - 1 }, (_, i) => [String(i), String(i + 1), side]);
+    const ids = (count: number) => Array.from({ length: count }, (_, i) => String(i));
+
+    const shapes: [string, [string, string, "left" | "right"][], string[]][] = [
+      [
+        "a left subtree that runs right, under a root",
+        [["10", "5", "left"], ["10", "20", "right"], ["5", "6", "right"], ["6", "7", "right"], ["7", "8", "right"]],
+        ["5", "6", "7", "8", "10", "20"],
+      ],
+      [
+        "its mirror",
+        [["10", "20", "right"], ["10", "5", "left"], ["20", "19", "left"], ["19", "18", "left"], ["18", "17", "left"]],
+        ["5", "10", "17", "18", "19", "20"],
+      ],
+      ["a left-only chain", chain("left", 8), ids(8).reverse()],
+      ["a right-only chain", chain("right", 8), ids(8)],
+      [
+        "a balanced BST",
+        [["4", "2", "left"], ["4", "6", "right"], ["2", "1", "left"], ["2", "3", "right"], ["6", "5", "left"], ["6", "7", "right"]],
+        ["1", "2", "3", "4", "5", "6", "7"],
+      ],
+    ];
+    it.each(shapes)("draws inorder strictly left to right, parents above children: %s", (_, sided, inorder) => {
+      const spec = tree(...sided);
+      const layout = layoutGraph(spec);
+      expect(layout.mode).toBe("tree");
+      expectInorder(layout, inorder);
+      expectParentsAbove(layout, spec);
+      expect(layoutGraph(structuredClone(spec))).toEqual(layout);
+    });
+
+    it("keeps nodes on one level apart, and two siblings' weights from touching, however wide", () => {
+      const spec = tree(["root", "a-very-long-node-name", "left"], ["root", "another-long-name", "right"]);
+      const wide = layoutGraph(spec);
+      const [, left, right] = wide.nodes;
+      expect(right!.x - right!.width / 2).toBeGreaterThan(left!.x + left!.width / 2);
+
+      const weighted = { ...tree(["p", "l", "left"], ["p", "r", "right"]) };
+      weighted.edges = weighted.edges.map((edge) => ({ ...edge, weight: 123456789 }));
+      const [a, b] = layoutGraph(weighted).edges;
+      expect(b!.label.y).toBe(a!.label.y);
+      expect(b!.label.x - a!.label.x).toBeGreaterThan(9 * 13 * 0.6 + 8);
+    });
+
+    it("keeps sides honest in a tree that only uses them on some nodes", () => {
+      // The schema allows this: each node's children either all have a side or none do.
+      const spec = {
+        directed: true,
+        kind: "tree" as const,
+        nodes: nodes("r", "a", "b", "c", "a1", "a2", "a3", "c1"),
+        edges: [
+          { from: "r", to: "a", side: "left" as const },
+          { from: "r", to: "b", side: "right" as const },
+          // a's children have no side, so they stay in edge order, on the left of r.
+          { from: "a", to: "a1" },
+          { from: "a", to: "a2" },
+          { from: "a", to: "a3" },
+          // b has one child with no side, and it has a sided child.
+          { from: "b", to: "c" },
+          { from: "c", to: "c1", side: "left" as const },
+        ],
+      };
+      const layout = layoutGraph(spec);
+      const x = (id: string) => at(layout, id).x;
+      expect(layout.mode).toBe("tree");
+      expectParentsAbove(layout, spec);
+      expectInorder(layout, ["a1", "a2", "a3", "r", "c1", "c"]);
+      expect(x("a")).toBe(x("a2"));
+      expect(x("b")).toBe(x("c"));
+      expect(x("b")).toBeGreaterThan(x("r"));
+      const box = (id: string) => at(layout, id);
+      for (const [one, other] of [["a1", "a2"], ["a2", "a3"]]) expect(box(other!).x - box(other!).width / 2).toBeGreaterThan(box(one!).x + box(one!).width / 2);
+    });
+
+    it("keeps an all-unsided tree in its tidy layout", () => {
+      const unsided = layoutGraph({ directed: true, kind: "tree", nodes: nodes("r", "x", "y", "z"), edges: edges(["r", "x"], ["r", "y"], ["x", "z"]) });
+      const [r, x, y, z] = unsided.nodes;
+      expect(r!.x).toBe((x!.x + y!.x) / 2);
+      // Under its parent, which inorder columns wouldn't put it.
+      expect(z!.x).toBe(x!.x);
+    });
 
     it("puts a lone child on its own side of its parent", () => {
       const left = layoutGraph(tree(["p", "c", "left"]));
@@ -241,8 +331,7 @@ describe("layoutGraph", () => {
       const x = (id: string) => at(layout, id).x;
       for (const [parent, child] of [["8", "3"], ["3", "1"], ["14", "13"]]) expect(x(child!)).toBeLessThan(x(parent!));
       for (const [parent, child] of [["8", "10"], ["3", "6"], ["10", "14"]]) expect(x(child!)).toBeGreaterThan(x(parent!));
-      // Inorder is left to right on the page, which is what a BST's drawing should show.
-      expect(["1", "3", "6", "8", "10", "13", "14"].map(x)).toEqual([...["1", "3", "6", "8", "10", "13", "14"].map(x)].sort((a, b) => a - b));
+      expectInorder(layout, ["1", "3", "6", "8", "10", "13", "14"]);
       expect(layoutGraph(structuredClone(tree(["8", "3", "left"])))).toEqual(layoutGraph(tree(["8", "3", "left"])));
     });
 
@@ -252,8 +341,7 @@ describe("layoutGraph", () => {
     });
 
     it("spreads a deep skewed tree out, with nodes apart and nothing overlapping", () => {
-      const ids = Array.from({ length: 60 }, (_, i) => String(i));
-      const layout = layoutGraph(tree(...ids.slice(1).map((id, i) => [String(i), id, "left"] as [string, string, "left"])));
+      const layout = layoutGraph(tree(...chain("left", 60)));
       expect(layout.width).toBeGreaterThan(1000);
       expect(layout.height).toBeGreaterThan(4000);
       for (let i = 1; i < 60; i++) {

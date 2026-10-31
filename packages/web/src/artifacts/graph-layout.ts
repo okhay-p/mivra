@@ -22,6 +22,7 @@ const ARROW_LENGTH = 9;
 const ARROW_HALF_WIDTH = 4.5;
 const MARGIN = 8;
 const EDGE_LABEL_HEIGHT = 18;
+const EDGE_LABEL_GAP = 4;
 /** Where along its edge a label may sit, in order of preference. */
 const LABEL_SPOTS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.22, 0.78];
 const TICKS = 150;
@@ -55,6 +56,7 @@ export interface GraphLayout {
 }
 
 type LayoutInput = Pick<GraphSpec, "directed" | "kind" | "nodes" | "edges">;
+type GraphShape = NonNullable<ReturnType<typeof graphTreeShape>>;
 
 /** A label's source, roughly as wide as it renders: maths is shorter than the LaTeX that writes it. */
 function labelWidth(text: string) {
@@ -63,22 +65,53 @@ function labelWidth(text: string) {
 }
 
 export const edgeText = (edge: GraphSpec["edges"][number]) => (edge.weight !== undefined ? String(edge.weight) : edge.label);
+const edgeLabelWidth = (text: string | undefined) => (text ? labelWidth(text) : 0) + 8;
 
-/** An empty slot keeps a lone child to its side: d3 centres a parent over its children, slots included. */
-function treePositions(spec: LayoutInput, sizes: Map<string, Box>, shape: NonNullable<ReturnType<typeof graphTreeShape>>) {
-  const sideOf = new Map(spec.edges.map((edge) => [edge.to, edge.side]));
-  const slots = (id: string) => {
-    const children = shape.children.get(id)!;
-    const left = children.find((child) => sideOf.get(child) === "left");
-    const right = children.find((child) => sideOf.get(child) === "right");
-    return left === undefined && right === undefined ? children : [left ?? null, right ?? null];
-  };
+/** d3's tidy layout, for a tree with no sides: children stay in edge order. */
+function tidyPositions(sizes: Map<string, Box>, shape: GraphShape) {
   const widest = Math.max(...[...sizes.values()].map((box) => box.width));
-  const root = hierarchy<string | null>(shape.root, (id) => (id === null ? undefined : slots(id)));
-  tree<string | null>().nodeSize([widest + SIBLING_GAP, LEVEL_GAP]).separation(() => 1)(root);
-  root.each((node) => {
-    if (node.data !== null) Object.assign(sizes.get(node.data)!, { x: node.x, y: node.y });
-  });
+  const root = hierarchy(shape.root, (id) => shape.children.get(id));
+  tree<string>().nodeSize([widest + SIBLING_GAP, LEVEL_GAP]).separation(() => 1)(root);
+  root.each((node) => Object.assign(sizes.get(node.data)!, { x: node.x, y: node.y }));
+}
+
+/**
+ * A tree with sides gets one column per node, in inorder, so a left subtree is wholly left of its parent and a
+ * right subtree wholly right, however deep: the page reads as a BST's sorted order. Nodes next to each other in
+ * inorder are always on different levels, so nodes on one level are two columns apart at least, and an edge
+ * can't cross a node. The schema lets a node without sides sit in such a tree: its children stay in edge order,
+ * a column apart so that still holds, with the node centred over them.
+ */
+function inorderPositions(spec: LayoutInput, sizes: Map<string, Box>, shape: GraphShape) {
+  const sideOf = new Map(spec.edges.map((edge) => [edge.to, edge.side]));
+  const widest = Math.max(...[...sizes.values()].map((box) => box.width));
+  // Two children's edges are a column apart halfway down, which is where their labels go.
+  const widestLabel = Math.max(0, ...spec.edges.map((edge) => edgeLabelWidth(edgeText(edge))));
+  const column = Math.max((widest + SIBLING_GAP) / 2, widestLabel + EDGE_LABEL_GAP);
+  const columnOf = new Map<string, number>();
+
+  /** Places a subtree in the columns from `start`, and returns the column after them. */
+  const place = (id: string, depth: number, start: number): number => {
+    const children = shape.children.get(id)!;
+    const box = sizes.get(id)!;
+    let end: number;
+    if (children.some((child) => sideOf.get(child))) {
+      const left = children.find((child) => sideOf.get(child) === "left");
+      const right = children.find((child) => sideOf.get(child) === "right");
+      const own = left === undefined ? start : place(left, depth + 1, start);
+      columnOf.set(id, own);
+      end = right === undefined ? own + 1 : place(right, depth + 1, own + 1);
+    } else {
+      end = children.reduce((next, child, i) => place(child, depth + 1, next + (i > 0 ? 1 : 0)), start);
+      const first = children[0];
+      const last = children.at(-1);
+      columnOf.set(id, first === undefined || last === undefined ? start : (columnOf.get(first)! + columnOf.get(last)!) / 2);
+      end = Math.max(end, start + 1);
+    }
+    Object.assign(box, { x: columnOf.get(id)! * column, y: depth * LEVEL_GAP });
+    return end;
+  };
+  place(shape.root, 0, 0);
 }
 
 type SimNode = SimulationNodeDatum & { id: string; radius: number; x: number; y: number; vx: number; vy: number };
@@ -182,8 +215,8 @@ const pointsText = (points: Point[], shift: Point) => points.map((p) => `${fixed
 
 /**
  * Where everything goes, in px at the graph's natural size. Pure and independent of the steps, so a graph
- * never moves while it's stepped through. A tree uses d3's tidy layout, which keeps children by side or else
- * in edge order (left and right matter in a traversal); anything else uses a force layout run to the end up front.
+ * never moves while it's stepped through. A tree with sides is laid out in inorder, any other tree by d3's tidy
+ * layout, and anything else by a force layout run to the end up front.
  */
 export function layoutGraph(spec: LayoutInput): GraphLayout {
   const boxes = new Map<string, Box>(
@@ -193,8 +226,9 @@ export function layoutGraph(spec: LayoutInput): GraphLayout {
     ]),
   );
   const shape = spec.kind === "tree" ? graphTreeShape(spec) : undefined;
-  if (shape) treePositions(spec, boxes, shape);
-  else forcePositions(spec, boxes);
+  if (!shape) forcePositions(spec, boxes);
+  else if (spec.edges.some((edge) => edge.side)) inorderPositions(spec, boxes, shape);
+  else tidyPositions(boxes, shape);
 
   const all = [...boxes.values()];
   const centre = { x: all.reduce((sum, b) => sum + b.x, 0) / all.length, y: all.reduce((sum, b) => sum + b.y, 0) / all.length };
@@ -237,7 +271,7 @@ export function layoutGraph(spec: LayoutInput): GraphLayout {
   const taken: Box[] = [...all];
   const labels = drawn.map((edge, i) => {
     const text = edgeText(spec.edges[i]!);
-    const size = { width: (text ? labelWidth(text) : 0) + 8, height: EDGE_LABEL_HEIGHT };
+    const size = { width: edgeLabelWidth(text), height: EDGE_LABEL_HEIGHT };
     const spots = LABEL_SPOTS.map((t) => ({ ...edge.curve(t), ...size }));
     if (!text) return spots[0]!;
     const clashes = spots.map((spot) => taken.filter((box) => overlaps(box, spot)).length);
