@@ -68,3 +68,13 @@ The agent shows interactive artifacts through tool calls (ADR-006): `show_algori
 - On later turns, each check's tool result tells the model whether the learner answered and how they did.
 - The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. A trace is a stepper (prev/next, play/pause, arrow keys). A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered.
 
+## Markdown and maths
+
+`MathText` (`packages/web/src/MathText.tsx`) renders model-written text in one of two modes:
+
+- `block`, for replies: GitHub-flavoured markdown with KaTeX maths, `$...$` inline and `$$...$$` display.
+- `math`, for artifact text: the trace title and step explanations, and the check's question, option text, feedback and explanation. Only `$...$` is a formula and `\$` a dollar. Everything else is literal, including `$$`, so the options `2*3*4` and `234` stay different. A new artifact field that may hold an answer or a structured value should use this mode; explanatory prose may use `block`.
+
+Concept labels, pointer and range labels, variable names and values, and trace cell values aren't passed through `MathText`, and learner messages stay plain.
+
+A `$...$` is maths only if there's no whitespace just inside its dollars, no digit just after the closing one, and no backtick between them, and the first dollar after the opening one decides. So "costs $5 and $10" isn't a formula. In `block` mode, code and `\$` take precedence over a dollar. Raw HTML shows as text, images show their alt text and never load, and only `http`, `https` and `mailto` links work. A reply is rendered block by block, so a streamed delta only re-renders its last block; a block over 50,000 characters, or with absurdly deep nesting at its line starts or a run of more than 32 `[` outside code, shows as plain text with its code still in a box, and so does a block that fails to render. Other hostile nesting, such as `[a [a [a ` repeated thousands of times, isn't detected and renders slowly.

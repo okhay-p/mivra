@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { submitMultipleChoice } from "../api.js";
+import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 
 export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: ArtifactProps<"multiple_choice">) {
@@ -53,7 +54,9 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
     <Card role="region" aria-label={`Check: ${spec.concept}`} className="whitespace-normal">
       <CardHeader>
         <CardDescription>Check · {spec.concept}</CardDescription>
-        <CardTitle className="font-heading text-base">{spec.question}</CardTitle>
+        <CardTitle className="font-heading text-base">
+          <MathText text={spec.question} mode="math" />
+        </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-col gap-2" role="group" aria-label="Options">
@@ -76,7 +79,9 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 disabled={disabled}
                 onClick={() => void answer(i)}
               >
-                <span className="min-w-0 flex-[1_1_12rem] wrap-anywhere">{option.text}</span>
+                <span className="min-w-0 flex-[1_1_12rem] wrap-anywhere">
+                  <MathText text={option.text} mode="math" />
+                </span>
                 {optionMark(i) && (
                   <span className={cn("shrink-0 text-xs font-medium", result === "incorrect" ? "text-destructive" : "text-success")}>
                     {optionMark(i)}
@@ -95,8 +100,14 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 {grade.correct ? "Correct!" : "Not quite."}
               </AlertTitle>
               <AlertDescription className="text-foreground">
-                {grade.feedback && <p>{grade.feedback}</p>}
-                <p>{grade.explanation}</p>
+                {grade.feedback && (
+                  <p>
+                    <MathText text={grade.feedback} mode="math" />
+                  </p>
+                )}
+                <p>
+                  <MathText text={grade.explanation} mode="math" />
+                </p>
               </AlertDescription>
             </Alert>
           )}
