@@ -1,5 +1,6 @@
 import {
   AlgorithmTraceSpec,
+  GraphSpec,
   MultipleChoiceAnswer,
   MultipleChoiceSpec,
   artifactKinds,
@@ -10,7 +11,7 @@ import {
 import type { Plugin } from "../runtime/capabilities.js";
 
 /**
- * First-party learning tools (ADR-006/007): the algorithm_trace visualization and the
+ * First-party learning tools (ADR-006/007): the algorithm_trace and graph visualizations and the
  * multiple_choice check, registered through the same API third-party plugins will use.
  */
 export const coreLearning: Plugin = {
@@ -30,6 +31,22 @@ export const coreLearning: Plugin = {
         kind: "algorithm_trace",
         version: 1,
         spec: AlgorithmTraceSpec.parse(spec),
+      }),
+    });
+
+    const graph = artifactKinds.graph;
+    api.registerArtifactKind({
+      kind: "graph",
+      version: graph.version,
+      toolName: graph.toolName,
+      description: graph.description,
+      spec: graph.spec,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "graph",
+        version: 1,
+        spec: GraphSpec.parse(spec),
       }),
     });
 

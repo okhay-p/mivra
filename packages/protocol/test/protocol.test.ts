@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   AlgorithmTraceSpec,
   ArtifactView,
+  GraphSpec,
   MultipleChoiceSpec,
   artifactKinds,
   gradeMultipleChoice,
@@ -226,5 +227,93 @@ describe("ArtifactView", () => {
       },
     };
     expect(ArtifactView.safeParse(view).success).toBe(true);
+  });
+});
+
+describe("graph", () => {
+  const graph = {
+    title: "BFS",
+    directed: true,
+    nodes: [{ id: "a", label: "$v_0$" }, { id: "b" }, { id: "c" }],
+    edges: [{ from: "a", to: "b", weight: 2 }, { from: "b", to: "c", label: "x" }],
+    steps: [
+      { explanation: "Start.", nodeStates: [{ id: "a" }], edgeStates: [{ from: "a", to: "b", tone: "muted" }], variables: [{ name: "queue", value: "a" }] },
+      { explanation: "Next." },
+    ],
+  };
+  const issues = (spec: unknown) => GraphSpec.safeParse(spec).error?.issues.map((issue) => issue.message).join("; ") ?? "";
+  const withStep = (step: object, spec: object = graph) => ({ ...spec, steps: [{ explanation: "x", ...step }] });
+  const nodes = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `n${i}` }));
+
+  it("accepts a stepped graph, and one with no steps or edges", () => {
+    expect(GraphSpec.safeParse(graph).success).toBe(true);
+    expect(GraphSpec.safeParse({ title: "One", directed: false, kind: "tree", nodes: [{ id: "a" }], edges: [] }).success).toBe(true);
+  });
+
+  it("rejects {}, no nodes, unknown fields and coordinates", () => {
+    expect(GraphSpec.safeParse({}).success).toBe(false);
+    expect(GraphSpec.safeParse({ ...graph, nodes: [], edges: [], steps: undefined }).success).toBe(false);
+    expect(GraphSpec.safeParse({ ...graph, nodes: [{ id: "a", x: 1, y: 2 }], edges: [], steps: undefined }).success).toBe(false);
+    expect(GraphSpec.safeParse({ ...graph, steps: [] }).success).toBe(false);
+  });
+
+  it("rejects duplicate ids and dangling edges", () => {
+    expect(issues({ ...graph, nodes: [...graph.nodes, { id: "a" }] })).toContain("duplicate node id a");
+    expect(issues({ ...graph, edges: [{ from: "a", to: "zz" }], steps: undefined })).toContain("no node has id zz");
+    expect(issues({ ...graph, edges: [{ from: "zz", to: "a" }], steps: undefined })).toContain("no node has id zz");
+  });
+
+  it("rejects an edge with both a weight and a label", () => {
+    expect(issues({ ...graph, edges: [{ from: "a", to: "b", weight: 1, label: "x" }], steps: undefined })).toContain("not both");
+  });
+
+  it("allows self-loops and parallel edges", () => {
+    const multigraph = { ...graph, edges: [{ from: "a", to: "a" }, { from: "a", to: "b" }, { from: "a", to: "b" }], steps: undefined };
+    expect(GraphSpec.safeParse(multigraph).success).toBe(true);
+  });
+
+  it("rejects step references to things that don't exist", () => {
+    expect(issues(withStep({ nodeStates: [{ id: "zz" }] }))).toContain("no node has id zz");
+    expect(issues(withStep({ edgeStates: [{ from: "a", to: "c" }] }))).toContain("no edge a -> c");
+    // Direction counts in a directed graph, but not in an undirected one.
+    expect(issues(withStep({ edgeStates: [{ from: "b", to: "a" }] }))).toContain("no edge b -> a");
+    expect(GraphSpec.safeParse(withStep({ edgeStates: [{ from: "b", to: "a" }] }, { ...graph, directed: false })).success).toBe(true);
+  });
+
+  it("rejects two states for one thing in a step", () => {
+    expect(issues(withStep({ nodeStates: [{ id: "a" }, { id: "a", tone: "done" }] }))).toContain("two states");
+    expect(issues(withStep({ edgeStates: [{ from: "a", to: "b" }, { from: "a", to: "b", tone: "done" }] }))).toContain("two states");
+  });
+
+  it("makes a reference to a parallel edge say which one", () => {
+    const parallel = { ...graph, edges: [{ from: "a", to: "b" }, { from: "a", to: "b" }] };
+    expect(issues(withStep({ edgeStates: [{ from: "a", to: "b" }] }, parallel))).toContain("set nth");
+    expect(issues(withStep({ edgeStates: [{ from: "a", to: "b", nth: 2 }] }, parallel))).toContain("out of range");
+    expect(GraphSpec.safeParse(withStep({ edgeStates: [{ from: "a", to: "b", nth: 1 }, { from: "a", to: "b", nth: 0 }] }, parallel)).success).toBe(true);
+  });
+
+  it("keeps ids with odd characters apart when matching edges", () => {
+    const odd = { title: "t", directed: false, nodes: [{ id: "a,b" }, { id: "c" }, { id: "a" }, { id: "b,c" }], edges: [{ from: "a,b", to: "c" }] };
+    expect(issues(withStep({ edgeStates: [{ from: "a", to: "b,c" }] }, odd))).toContain("no edge");
+  });
+
+  it("enforces the limits", () => {
+    const edge = { from: "n0", to: "n1" };
+    const big = { title: "t", directed: false, nodes: nodes(60) };
+    expect(GraphSpec.safeParse({ ...big, edges: Array(200).fill(edge) }).success).toBe(true);
+    expect(GraphSpec.safeParse({ ...big, edges: Array(201).fill(edge) }).success).toBe(false);
+    expect(GraphSpec.safeParse({ title: "t", directed: false, nodes: nodes(61), edges: [] }).success).toBe(false);
+    const step = { explanation: "x" };
+    expect(GraphSpec.safeParse({ ...big, edges: [], steps: Array(200).fill(step) }).success).toBe(true);
+    expect(GraphSpec.safeParse({ ...big, edges: [], steps: Array(201).fill(step) }).success).toBe(false);
+    expect(GraphSpec.safeParse({ ...big, edges: [], title: "x".repeat(121) }).success).toBe(false);
+    expect(GraphSpec.safeParse({ title: "t", directed: false, nodes: [{ id: "a", label: "x".repeat(25) }], edges: [] }).success).toBe(false);
+  });
+
+  it("is registered as show_graph and fits ArtifactView", () => {
+    expect(kindForTool("show_graph")).toBe("graph");
+    const view = { id: "x", createdAt: new Date().toISOString(), kind: "graph", version: 1, spec: graph };
+    expect(ArtifactView.safeParse(view).success).toBe(true);
+    expect(ArtifactView.safeParse({ ...view, spec: { ...graph, nodes: [] } }).success).toBe(false);
   });
 });

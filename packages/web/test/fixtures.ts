@@ -21,6 +21,33 @@ export const trace = {
   },
 } satisfies ArtifactView;
 
+export const graph = {
+  id: "art-graph",
+  createdAt: "2026-10-30T00:00:00.000Z",
+  kind: "graph",
+  version: 1,
+  spec: {
+    title: "Walk",
+    directed: true,
+    nodes: [{ id: "a", label: "start" }, { id: "b" }, { id: "c" }],
+    edges: [
+      { from: "a", to: "b", weight: 4 },
+      { from: "a", to: "a", weight: 1 },
+      { from: "b", to: "c", label: "go" },
+    ],
+    steps: [
+      {
+        explanation: "Begin at the start.",
+        nodeStates: [{ id: "a" }],
+        edgeStates: [{ from: "a", to: "b" }, { from: "a", to: "a", tone: "muted" }],
+        variables: [{ name: "dist", value: 0 }],
+      },
+      { explanation: "Move on.", nodeStates: [{ id: "a", tone: "done" }, { id: "b", tone: "active" }], edgeStates: [{ from: "b", to: "c", tone: "done" }] },
+      { explanation: "Nothing highlighted." },
+    ],
+  },
+} satisfies ArtifactView;
+
 export const question = {
   id: "art-mc",
   createdAt: "2026-10-30T00:00:00.000Z",

@@ -102,7 +102,64 @@ const literalCheck = {
   explanation: "2*3*4 is $24$, and 234 isn't.",
 };
 
+const graphTree = {
+  title: "Inorder walk of a BST",
+  directed: true,
+  kind: "tree",
+  nodes: ["8", "3", "10", "1", "6", "14"].map((id) => ({ id })),
+  edges: [["8", "3"], ["8", "10"], ["3", "1"], ["3", "6"], ["10", "14"]].map(([from, to]) => ({ from, to })),
+  steps: [
+    { explanation: "Go left from the root until there's no left child.", nodeStates: [{ id: "1" }], edgeStates: [{ from: "8", to: "3" }, { from: "3", to: "1" }] },
+    { explanation: "Visit 1, then its parent.", nodeStates: [{ id: "1", tone: "done" }, { id: "3" }], variables: [{ name: "visited", value: "1" }] },
+  ],
+};
+const graphWeighted = {
+  title: "Dijkstra from $v_0$",
+  directed: true,
+  nodes: [{ id: "a", label: "$v_0$" }, { id: "b", label: "$v_1$" }, { id: "c", label: "$v_2$" }, { id: "d", label: "$v_3$" }, { id: "e", label: "goal" }],
+  edges: [
+    { from: "a", to: "b", weight: 4 },
+    { from: "a", to: "c", weight: 1 },
+    { from: "c", to: "b", weight: 2 },
+    { from: "b", to: "c", weight: 7 },
+    { from: "b", to: "d", weight: 5 },
+    { from: "c", to: "d", weight: 8 },
+    { from: "d", to: "e", label: "$x^2$" },
+  ],
+  steps: [
+    { explanation: "Start at $v_0$ with distance $0$.", nodeStates: [{ id: "a" }], variables: [{ name: "dist(a)", value: 0 }] },
+    { explanation: "Relax the edge to $v_2$.", nodeStates: [{ id: "a", tone: "done" }, { id: "c" }], edgeStates: [{ from: "a", to: "c" }, { from: "a", to: "b", tone: "muted" }] },
+    { explanation: "Take the cheaper way to $v_1$.", nodeStates: [{ id: "c", tone: "done" }, { id: "b" }], edgeStates: [{ from: "c", to: "b", tone: "done" }] },
+  ],
+};
+const graphLoop = {
+  title: "A multigraph with loops",
+  directed: false,
+  nodes: [{ id: "A" }, { id: "B" }, { id: "C" }],
+  edges: [
+    { from: "A", to: "B", label: "p" },
+    { from: "A", to: "B", label: "q" },
+    { from: "A", to: "B", label: "r" },
+    { from: "B", to: "C" },
+    { from: "C", to: "C", label: "s" },
+    { from: "A", to: "A" },
+    { from: "A", to: "A" },
+  ],
+  steps: [{ explanation: "Follow the middle edge.", edgeStates: [{ from: "B", to: "A", nth: 1 }] }, { explanation: "Then the loop.", edgeStates: [{ from: "C", to: "C", tone: "done" }] }],
+};
+// At the schema's limits, which can't fit legibly at 320px.
+const graphLimit = {
+  title: "The largest graph allowed",
+  directed: false,
+  nodes: Array.from({ length: 60 }, (_, i) => ({ id: `n${i}` })),
+  edges: Array.from({ length: 200 }, (_, i) => ({ from: `n${i % 60}`, to: `n${(i * 7 + 11) % 60}`, weight: i })),
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  graphtree: [{ tool: "show_graph", input: graphTree }, { text: "Here's the tree." }],
+  graphweighted: [{ tool: "show_graph", input: graphWeighted }, { text: "Here's the graph." }],
+  graphloop: [{ tool: "show_graph", input: graphLoop }, { text: "Here's the multigraph." }],
+  graphlimit: [{ tool: "show_graph", input: graphLimit }, { text: "Here's the big one." }],
   literals: [
     { tool: "show_algorithm_trace", input: literalTrace },
     { tool: "ask_multiple_choice", input: literalCheck },

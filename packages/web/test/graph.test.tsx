@@ -1,0 +1,208 @@
+import type { GraphSpec } from "@mivra/protocol";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { ArtifactPart } from "../src/artifacts/ArtifactPart.js";
+import { graphStateAt } from "../src/artifacts/Graph.js";
+import { layoutGraph } from "../src/artifacts/graph-layout.js";
+import { graph } from "./fixtures.js";
+
+const renderGraph = (data: unknown = graph) => render(<ArtifactPart data={data} replyInProgress={false} onUpdate={() => {}} onRefresh={async () => {}} />);
+const next = () => fireEvent.click(screen.getByRole("button", { name: /next/i }));
+const tones = (testId: string) => screen.getAllByTestId(testId).map((e) => e.getAttribute("data-tone"));
+const description = () => screen.getByTestId("graph-description").textContent;
+
+const nodes = (...ids: string[]) => ids.map((id) => ({ id }));
+const edges = (...pairs: [string, string][]) => pairs.map(([from, to]) => ({ from, to }));
+const base = { directed: false, nodes: nodes("a", "b", "c", "d"), edges: [] };
+
+describe("Graph", () => {
+  it("draws every node and edge, with arrowheads only when directed", () => {
+    renderGraph();
+    expect(screen.getAllByTestId("graph-node")).toHaveLength(3);
+    expect(screen.getAllByTestId("graph-edge")).toHaveLength(3);
+    expect(screen.getAllByTestId("graph-arrow")).toHaveLength(3);
+    expect(screen.getAllByTestId("graph-edge-label").map((e) => e.textContent)).toEqual(["4", "1", "go"]);
+  });
+
+  it("omits arrowheads on an undirected graph, and the stepper when there are no steps", () => {
+    renderGraph({ ...graph, spec: { title: "Plain", directed: false, nodes: nodes("a", "b"), edges: edges(["a", "b"]) } });
+    expect(screen.queryAllByTestId("graph-arrow")).toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /next/i })).toBeNull();
+    expect(screen.queryByText(/^Step /)).toBeNull();
+  });
+
+  it("applies node and edge state to its own step only", () => {
+    renderGraph();
+    expect(tones("graph-node")).toEqual(["active", null, null]);
+    expect(tones("graph-edge")).toEqual(["active", "muted", null]);
+    expect(screen.getByText("dist")).toBeTruthy();
+
+    next();
+    expect(tones("graph-node")).toEqual(["done", "active", null]);
+    expect(tones("graph-edge")).toEqual([null, null, "done"]);
+    expect(screen.queryByText("dist")).toBeNull();
+
+    next();
+    expect(tones("graph-node")).toEqual([null, null, null]);
+    expect(tones("graph-edge")).toEqual([null, null, null]);
+  });
+
+  it("resolves a parallel edge's nth, in either order when undirected", () => {
+    const spec: GraphSpec = {
+      title: "Parallel",
+      directed: false,
+      nodes: nodes("a", "b"),
+      edges: edges(["a", "b"], ["b", "a"]),
+      steps: [{ explanation: "x", edgeStates: [{ from: "b", to: "a", nth: 1, tone: "done" }] }],
+    };
+    expect([...graphStateAt(spec, 0).edges]).toEqual([[1, "done"]]);
+  });
+
+  it("describes the graph and the current step in words", () => {
+    renderGraph();
+    expect(description()).toContain("Directed graph with 3 nodes and 3 edges.");
+    expect(description()).toContain("Edge: start to b, weight 4");
+    expect(description()).toContain("Edge: start to itself");
+    expect(description()).toContain("Node start is active");
+    expect(description()).toContain("Edge start to b, weight 4 is active");
+    expect(description()).toContain("Edge: b to c, labelled");
+    next();
+    expect(description()).toContain("Node start is done");
+    expect(description()).not.toContain("is ruled out");
+  });
+
+  it("says undirected edges have no direction, and that muted means ruled out", () => {
+    renderGraph({
+      ...graph,
+      spec: { title: "U", directed: false, nodes: nodes("a", "b"), edges: edges(["a", "b"]), steps: [{ explanation: "x", edgeStates: [{ from: "a", to: "b", tone: "muted" }] }] },
+    });
+    expect(description()).toContain("Undirected graph with 2 nodes and 1 edge.");
+    expect(description()).toContain("Edge: a and b");
+    expect(description()).toContain("Edge a and b is ruled out");
+  });
+
+  it("steps with the arrow keys and plays to the end", () => {
+    vi.useFakeTimers();
+    renderGraph();
+    const region = screen.getByRole("region", { name: /Graph: Walk/ });
+    fireEvent.keyDown(region, { key: "ArrowRight" });
+    expect(screen.getByText("Step 2 of 3")).toBeTruthy();
+    fireEvent.keyDown(region, { key: "ArrowLeft" });
+    fireEvent.keyDown(region, { key: "ArrowLeft" });
+    expect(screen.getByText("Step 1 of 3")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Play" }));
+    for (let i = 0; i < 5; i++) act(() => void vi.advanceTimersByTime(2000));
+    expect(screen.getByText("Step 3 of 3")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Play" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("keeps a node where it is while stepping", () => {
+    renderGraph();
+    const places = () => screen.getAllByTestId("graph-node").map((e) => [e.style.left, e.style.top]);
+    const paths = () => screen.getAllByTestId("graph-edge").map((e) => e.querySelector("path")!.getAttribute("d"));
+    const before = [places(), paths()];
+    next();
+    next();
+    expect([places(), paths()]).toEqual(before);
+  });
+
+  it("puts a formula in a node label through KaTeX, and keeps other text literal", () => {
+    renderGraph({ ...graph, spec: { title: "T", directed: false, nodes: [{ id: "a", label: "$v_1$" }, { id: "b", label: "2*3*4" }], edges: [] } });
+    const [a, b] = screen.getAllByTestId("graph-node");
+    expect(a!.querySelector(".katex")).toBeTruthy();
+    expect(b!.textContent).toBe("2*3*4");
+  });
+});
+
+describe("layoutGraph", () => {
+  const dense: GraphSpec = {
+    title: "Limit",
+    directed: true,
+    nodes: Array.from({ length: 60 }, (_, i) => ({ id: `n${i}` })),
+    edges: Array.from({ length: 200 }, (_, i) => ({ from: `n${i % 60}`, to: `n${(i * 7 + 11) % 60}`, weight: i })),
+  };
+
+  it("gives the same coordinates for the same spec", () => {
+    expect(layoutGraph(dense)).toEqual(layoutGraph(structuredClone(dense)));
+    expect(layoutGraph(base)).toEqual(layoutGraph(base));
+  });
+
+  it("ignores steps", () => {
+    const stepped: GraphSpec = { ...base, title: "x", steps: [{ explanation: "x", nodeStates: [{ id: "a" }] }] };
+    expect(layoutGraph(stepped)).toEqual(layoutGraph(base));
+  });
+
+  // A guard against something going badly wrong, not a benchmark: this runs on busy machines.
+  it("is fast enough to run synchronously at the limits", () => {
+    const start = performance.now();
+    layoutGraph(dense);
+    expect(performance.now() - start).toBeLessThan(2000);
+  });
+
+  it("puts everything inside the box, with nodes apart", () => {
+    const layout = layoutGraph(dense);
+    for (const node of layout.nodes) {
+      expect(node.x - node.width / 2).toBeGreaterThanOrEqual(0);
+      expect(node.x + node.width / 2).toBeLessThanOrEqual(layout.width);
+      expect(node.y - node.height / 2).toBeGreaterThanOrEqual(0);
+      expect(node.y + node.height / 2).toBeLessThanOrEqual(layout.height);
+    }
+    expect(new Set(layout.nodes.map((n) => `${n.x},${n.y}`)).size).toBe(60);
+  });
+
+  it("uses the tree layout for a real tree, in levels, with children in edge order", () => {
+    const layout = layoutGraph({ directed: true, kind: "tree", nodes: nodes("r", "x", "y", "z"), edges: edges(["r", "x"], ["r", "y"], ["x", "z"]) });
+    expect(layout.mode).toBe("tree");
+    const [r, x, y, z] = layout.nodes;
+    expect(x!.y).toBeGreaterThan(r!.y);
+    expect(x!.y).toBe(y!.y);
+    expect(x!.x).toBeLessThan(y!.x);
+    expect(z!.y).toBeGreaterThan(x!.y);
+  });
+
+  it("roots an undirected tree at its first node", () => {
+    const layout = layoutGraph({ directed: false, kind: "tree", nodes: nodes("r", "x", "y"), edges: edges(["x", "r"], ["y", "x"]) });
+    expect(layout.mode).toBe("tree");
+    const [r, x, y] = layout.nodes;
+    expect(r!.y).toBeLessThan(x!.y);
+    expect(x!.y).toBeLessThan(y!.y);
+  });
+
+  it("falls back to the general layout for anything that isn't a real tree", () => {
+    const fallback: [string, Parameters<typeof layoutGraph>[0]][] = [
+      ["cycle", { directed: false, kind: "tree", nodes: nodes("a", "b", "c"), edges: edges(["a", "b"], ["b", "c"], ["c", "a"]) }],
+      ["disconnected, right edge count", { directed: false, kind: "tree", nodes: nodes("a", "b", "c", "d"), edges: edges(["a", "b"], ["c", "d"], ["d", "c"]) }],
+      ["two roots", { directed: true, kind: "tree", nodes: nodes("a", "b", "c"), edges: edges(["a", "c"], ["b", "c"]) }],
+      ["no root", { directed: true, kind: "tree", nodes: nodes("a", "b"), edges: edges(["a", "b"], ["b", "a"]) }],
+      ["self-loop", { directed: false, kind: "tree", nodes: nodes("a", "b"), edges: edges(["a", "a"]) }],
+      ["parallel edge", { directed: false, kind: "tree", nodes: nodes("a", "b", "c"), edges: edges(["a", "b"], ["a", "b"]) }],
+      ["directed loop hidden by a root", { directed: true, kind: "tree", nodes: nodes("r", "a", "b", "c"), edges: edges(["r", "c"], ["a", "b"], ["b", "a"]) }],
+    ];
+    for (const [name, spec] of fallback) expect(layoutGraph(spec).mode, name).toBe("general");
+    expect(layoutGraph({ directed: true, nodes: nodes("a", "b"), edges: edges(["a", "b"]) }).mode).toBe("general");
+  });
+
+  it("gives parallel and opposite edges and repeated loops separate paths, with arrowheads", () => {
+    const layout = layoutGraph({ directed: true, nodes: nodes("a", "b"), edges: edges(["a", "b"], ["b", "a"], ["a", "b"], ["a", "a"], ["a", "a"]) });
+    expect(new Set(layout.edges.map((e) => e.path)).size).toBe(5);
+    expect(layout.edges.every((e) => e.arrow)).toBe(true);
+    expect(layout.edges.every((e) => !e.path.includes("NaN"))).toBe(true);
+  });
+
+  it("keeps a weight out from behind nodes and other labels when it can", () => {
+    // The graph whose weight was once hidden behind an unrelated node.
+    const spec = { directed: true, nodes: nodes("a", "b", "c", "d", "e"), edges: [["a", "b"], ["a", "c"], ["c", "b"], ["b", "c"], ["b", "d"], ["c", "d"], ["d", "e"]].map(([from, to], i) => ({ from: from!, to: to!, weight: i })) };
+    const layout = layoutGraph(spec);
+    const clear = (x: number, y: number, w: number, other: { x: number; y: number; width: number; height: number }) =>
+      Math.abs(x - other.x) >= (w + other.width) / 2 || Math.abs(y - other.y) >= (18 + other.height) / 2;
+    for (const edge of layout.edges) {
+      for (const node of layout.nodes) expect(clear(edge.label.x, edge.label.y, 16, node)).toBe(true);
+    }
+  });
+
+  it("copes with a single node", () => {
+    const layout = layoutGraph({ directed: false, nodes: nodes("a"), edges: edges(["a", "a"]) });
+    expect(layout.width).toBeGreaterThan(0);
+    expect(layout.edges[0]!.path).not.toContain("NaN");
+  });
+});
