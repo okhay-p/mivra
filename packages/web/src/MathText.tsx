@@ -4,7 +4,7 @@ import { Component, isValidElement, memo, useDeferredValue, useMemo, type Compon
 import Markdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { isTooDeep, remarkDollarRule, splitBlocks, splitMath } from "./math-syntax.js";
+import { blockSections, isTooDeep, remarkDollarRule, splitBlocks, splitMath } from "./math-syntax.js";
 
 interface MathTextProps {
   /** The text. May be half-written, while a reply streams. */
@@ -87,11 +87,11 @@ const components: Components = {
       <span>{children}</span>
     ),
   code: ({ className, children }) =>
-    isMath(className) ? <Formula source={String(children)} display={className!.includes("math-display")} /> : <code className={className}>{children}</code>,
+    isMath(className) ? <Formula source={String(children ?? "")} display={className!.includes("math-display")} /> : <code className={className}>{children}</code>,
   // `$$` blocks and ```math fences arrive as a <pre> around the <code> above.
   pre: ({ children }) => {
     const code = isValidElement(children) ? (children as ReactElement<{ className?: string; children?: ReactNode }>) : undefined;
-    return code && isMath(code.props.className) ? <Formula source={String(code.props.children).replace(/\n$/, "")} display /> : <pre>{children}</pre>;
+    return code && isMath(code.props.className) ? <Formula source={String(code.props.children ?? "").replace(/\n$/, "")} display /> : <pre>{children}</pre>;
   },
   // A remote image would send data to whoever hosts it, so show its description instead.
   img: ({ alt }) => (alt ? <span>{alt}</span> : null),
@@ -121,7 +121,19 @@ class PlainTextOnError extends Component<{ text: string; children: ReactNode }, 
 
 /** Memoised on its text, so only the block a delta touches is parsed again. */
 const Block = memo(function Block({ text }: { text: string }) {
-  if (isTooDeep(text)) return <p className="math-text-literal">{text}</p>;
+  if (isTooDeep(text)) {
+    return blockSections(text).map((section, i) =>
+      section.kind === "code" ? (
+        <pre key={i}>
+          <code>{section.code}</code>
+        </pre>
+      ) : (
+        <p key={i} className="math-text-literal">
+          {section.text}
+        </p>
+      ),
+    );
+  }
   return (
     <PlainTextOnError text={text}>
       <Markdown remarkPlugins={remarkPlugins} urlTransform={safeUrl} components={components}>

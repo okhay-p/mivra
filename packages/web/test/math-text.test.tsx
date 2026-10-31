@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import katex from "katex";
 import { describe, expect, it, vi } from "vitest";
 import { MathText } from "../src/MathText.js";
-import { splitBlocks } from "../src/math-syntax.js";
+import { isTooDeep, splitBlocks } from "../src/math-syntax.js";
 
 const block = (text: string) => render(<MathText text={text} />).container;
 const math = (text: string) => render(<MathText text={text} mode="math" />).container;
@@ -352,6 +352,225 @@ describe("MathText robustness", () => {
 
   it("renders nothing for empty text", () => {
     expect(block("").textContent).toBe("");
+  });
+});
+
+const nested = "[".repeat(40) + "x" + "](u)".repeat(40);
+const bare = "[".repeat(40) + "x" + "]".repeat(40);
+
+describe("MathText guard on ordinary content", () => {
+  const rows = Array.from({ length: 33 }, (_, i) => `| $[${i},${i + 1})$ | ${i} |`).join("\n");
+
+  it("renders a table of half-open intervals", () => {
+    const c = block(`| interval | n |\n|---|---|\n${rows}`);
+    expect(c.querySelectorAll("tbody tr")).toHaveLength(33);
+    expect(formulas(c)[0]).toBe("[0,1)");
+    expect(c.querySelector(".math-text-literal")).toBeNull();
+  });
+
+  it.each([
+    ["closed intervals", Array.from({ length: 80 }, (_, i) => `| $[${i},${i + 1}]$ | $[${i},${i}]$ |`).join("\n")],
+    ["half-open intervals without dollars", Array.from({ length: 80 }, (_, i) => `| [${i},${i + 1}) | ${i} |`).join("\n")],
+    ["both kinds of half-open interval", Array.from({ length: 80 }, (_, i) => `| $(${i},${i + 1}]$ | $[${i},${i + 1})$ |`).join("\n")],
+  ])("renders a table of %s", (_name, body) => {
+    const c = block(`| a | b |\n|---|---|\n${body}`);
+    expect(c.querySelectorAll("tbody tr")).toHaveLength(80);
+    expect(c.querySelector(".math-text-literal")).toBeNull();
+  });
+
+  it.each([
+    ["underscores in a string", `const s = "${"_".repeat(33)}";`],
+    ["stars and tildes", `${"*".repeat(40)} ${"~".repeat(40)}x${"*".repeat(40)}`],
+    ["deep indentation", `${" ".repeat(300)}x`],
+    ["list-like lines", "- ".repeat(40) + "x"],
+    ["brackets", nested],
+  ])("keeps code containing %s as code", (_name, code) => {
+    const c = block(`Here:\n\n\`\`\`js\n${code}\n\`\`\`\n`);
+    expect(c.querySelector("pre code")?.textContent).toBe(`${code}\n`);
+    expect(c.querySelector(".math-text-literal")).toBeNull();
+  });
+
+  it.each(["```", "~~~~"])("keeps code that follows a sentence directly, fenced by %s", (fence) => {
+    const code = `s = "${"_".repeat(33)}"`;
+    const c = block(`Example:\n${fence}\n${code}\n${fence}`);
+    expect(c.querySelector("pre code")?.textContent).toBe(`${code}\n`);
+  });
+
+  it("keeps a code span's delimiter runs from nesting with anything", () => {
+    const blank = "_".repeat(40);
+    const c = block(`Compare \`${blank}\` with \`${blank}\` here`);
+    expect([...c.querySelectorAll("code")].map((e) => e.textContent)).toEqual([blank, blank]);
+  });
+
+  it.each([
+    ["a thematic break", "_".repeat(40)],
+    ["blanks to fill in", `Name: ${"_".repeat(40)} Date: ${"_".repeat(40)}`],
+    ["a blank run on to a label", `Name:${"_".repeat(40)} Date:${"_".repeat(40)}`],
+    ["many flat links", Array.from({ length: 40 }, (_, i) => `- [link ${i}](https://e.com/${i})`).join("\n")],
+    ["many bold terms", Array.from({ length: 40 }, (_, i) => `- **term ${i}**: $x_${i}$`).join("\n")],
+  ])("doesn't take %s for nesting", (_name, text) => {
+    expect(isTooDeep(text)).toBe(false);
+  });
+
+  it("keeps the code box when a block is too long to parse", () => {
+    const code = `${"x".repeat(60_000)}\n`;
+    for (const text of [`\`\`\`\n${code}\`\`\``, `\`\`\`\n${code}`, `Example:\n\`\`\`\n${code}\`\`\`\nThat's it.`]) {
+      const c = block(text);
+      expect(c.querySelector("pre code")?.textContent).toBe(code);
+    }
+    const mixed = block(`Example:\n\`\`\`\n${code}\`\`\`\nThat's it.`);
+    expect(mixed.textContent).toContain("Example:");
+    expect(mixed.textContent).toContain("That's it.");
+  });
+
+  it("keeps the code box when the text around it is hostile", () => {
+    const c = block(`See ${nested}\n\`\`\`\ncode\n\`\`\``);
+    expect(c.querySelector("pre code")?.textContent).toBe("code\n");
+    expect(c.querySelector(".math-text-literal")?.textContent).toContain(nested);
+    expect(c.querySelector("a")).toBeNull();
+  });
+});
+
+describe("MathText guard on hostile content", () => {
+  const hostile = [">".repeat(40) + " x", "- ".repeat(40) + "x", " ".repeat(300) + "x", nested, "*".repeat(40) + "x" + "*".repeat(40)];
+
+  it.each(hostile)("doesn't let code excuse what follows a closed fence: %s", (text) => {
+    expect(isTooDeep(`\`\`\`\ncode\n\`\`\`\n${text}`)).toBe(true);
+    expect(isTooDeep(`$$\nx\n$$\n${text}`)).toBe(true);
+  });
+
+  // In each of these a fence or `$$` looks open, but the parser reads the line as something else, so what follows is live.
+  it.each([
+    ["a definition's destination", "[a]:\n```\n"],
+    ["a definition's title", '[a]: u "\n```\n"\n'],
+    ["a multiline label", "[a\n```\n]: u\n"],
+    ["an HTML block", "<div>\n```\n\n"],
+    ["an HTML comment", "<!--\n```\n-->\n"],
+    ["a list item", "- a\n  ```\nb\n\n"],
+    ["a blockquote's list item", "> - a\n  ```\n\n"],
+    ["indented code", "    ```\n\n"],
+    ["a one-line `$$` formula", "$$x$$\n"],
+    ["a closed fence", "```\nx\n```\n"],
+    ["a lone carriage return", "~~~\r~~~\r"],
+  ])("isn't fooled by %s", (_name, prefix) => {
+    for (const text of hostile) expect(isTooDeep(prefix + text)).toBe(true);
+  });
+
+  // In each of these a closing bracket looks like markup, or an opening one looks like code, but the parser disagrees.
+  it.each([
+    ["an unterminated backtick", "`" + nested],
+    ["an unterminated dollar", "$" + nested],
+    ["closers hidden in code spans", "[ `]` ".repeat(40) + "x" + "](u)".repeat(40)],
+    ["closers hidden in formulas", "[ $]$ ".repeat(40) + "x" + "](u)".repeat(40)],
+    ["closers hidden in multiline code spans", "[ `\n]`\n".repeat(40) + "x" + "](u)".repeat(40)],
+    ["openers behind a dollar in a destination", "[a]($)[$ ".repeat(40) + "x" + "](u)".repeat(40)],
+    ["openers behind a dollar in a title", '[a](u ")$")[$ '.repeat(40) + "x" + "](u)".repeat(40)],
+    ["a code span ended by inline HTML", '<a b="`">' + nested + '<a b="`">'],
+    ["a code span ended by a destination", "[a](`)" + nested + "[a](`)"],
+    ["a code span across table cells", "| ` | " + bare + " | ` |\n|---|---|---|"],
+    ["a formula across table cells", "| $a | " + bare + " | b$ |\n|---|---|---|"],
+    ["a code span across a list item", "`a\n- " + nested + "\n- `"],
+    ["a dollar parity trick across a list item", "`\n- " + "[ `]` ".repeat(40) + "x" + "](u)".repeat(40)],
+  ])("isn't fooled by %s", (_name, text) => {
+    expect(isTooDeep(text)).toBe(true);
+  });
+
+  it.each([`$$\n${"x ".repeat(3000)}`, `$$\n${"x ".repeat(3000)}\n$$`, `$${"[".repeat(3000)}x${"]".repeat(3000)}$`])("doesn't typeset a formula this long", (text) => {
+    expect(isTooDeep(text)).toBe(true);
+  });
+
+  it.each(["[".repeat(5000), "[x ".repeat(5000), "`" + "[x ".repeat(5000)])("stops a flood of brackets with no partners", (text) => {
+    expect(isTooDeep(text)).toBe(true);
+  });
+
+  it.each([
+    ["an unterminated fence", "```\n"],
+    ["an unterminated tilde fence", "~~~\n"],
+    ["an unterminated `$$`", "$$\n"],
+  ])("leaves what's really inside %s to the parser, which won't read it", (_name, prefix) => {
+    const text = prefix + ">".repeat(2000) + " deep";
+    expect(isTooDeep(text)).toBe(false);
+    const started = performance.now();
+    const c = block(text);
+    expect(performance.now() - started).toBeLessThan(2000);
+    expect(c.querySelector("blockquote")).toBeNull();
+  });
+});
+
+describe("MathText empty formulas", () => {
+  it.each(["$$\n$$", "$$\n\n$$", "```math\n```", "$$", "$$\n", "$$\n\n", "```math", "```math\n"])("doesn't invent a formula for %j", (text) => {
+    const c = block(text);
+    expect(c.textContent).not.toContain("undefined");
+    expect(formulas(c).join("")).not.toContain("undefined");
+  });
+
+  it.each(["$$ $$", "a $$ $$ b", "$$  $$", "a $$\n$$ b"])("doesn't invent an inline formula for %j", (text) => {
+    expect(block(text).textContent).not.toContain("undefined");
+  });
+
+  it("doesn't invent a formula at any prefix of a `$$` block", () => {
+    const reply = "$$\nx\n$$\n\n```math\ny\n```";
+    const { container, rerender } = render(<MathText text="" />);
+    for (let i = 1; i <= reply.length; i++) {
+      rerender(<MathText text={reply.slice(0, i)} />);
+      expect(container.textContent).not.toContain("undefined");
+    }
+    expect(formulas(container)).toEqual(["x", "y"]);
+  });
+});
+
+describe("MathText split against a single parse", () => {
+  // A definition keeps a reply in one piece, so this is what the text renders as with no splitting at all.
+  const singleParse = (text: string) => block(`[unused]: https://e.com\n\n${text}`).innerHTML;
+  const normal = (html: string) => html.replace(/<\/?div[^>]*>|\s+/g, "");
+
+  it.each([
+    ["paragraphs and code", "one\n\n```\na\n\nb\n```\n\ntwo\n\n$x$"],
+    ["a three-dollar formula", "one\n\n$$$\na\n\nb\n$$$\n\ntwo"],
+    ["a three-dollar formula with a `$$` line in it", "one\n\n$$$\na\n$$\n\nb\n$$$\n\ntwo"],
+    ["a four-dollar close on a two-dollar open", "one\n\n$$\na\n\nb\n$$$$\n\ntwo"],
+    ["a long fence with a short one inside", "one\n\n````\n```\n\nb\n````\n\ntwo"],
+    ["a loose list", "one\n\n- a\n\n- b\n\n  c\n\ntwo"],
+    ["a fence in a list that the list ends", "one\n\n- a\n  ```\n  b\n\n```\nc\n\nd\n```\n\ntwo"],
+    ["a closed fence in a list item", "one\n\n- ```\n  a\n  ```\n\n```\nb\n\nc\n```\n\ntwo"],
+    ["a fence after a list that a heading ended", "one\n\n- a\n# h\n  ```\n---\n\nb\n```\n\ntwo"],
+    ["CRLF line endings", "one\r\n\r\n```\r\na\r\n\r\nb\r\n```\r\n\r\ntwo"],
+    ["a table and a quote", "one\n\n| a |\n|---|\n| $b$ |\n\n> c\n\n> d\n\ntwo"],
+  ])("splits %s without changing it", (_name, text) => {
+    const blocks = splitBlocks(text);
+    expect(blocks.length).toBeGreaterThan(1);
+    expect(blocks.join("")).toBe(text);
+    expect(normal(block(text).innerHTML)).toBe(normal(singleParse(text)));
+  });
+
+  it("keeps a `$$$` block as one display formula", () => {
+    const text = "one\n\n$$$\na\n\nb\n$$$\n\ntwo";
+    expect(splitBlocks(text)).toEqual(["one\n\n", "$$$\na\n\nb\n$$$\n\n", "two"]);
+    const c = block(text);
+    expect(c.querySelectorAll(".katex-display")).toHaveLength(1);
+    expect(formulas(c)).toEqual(["a\n\nb"]);
+  });
+
+  it.each([
+    ["a multiline label", "[a][r]\n\n[r\n]: https://example.com"],
+    ["a label starting on its own line", "[a][r]\n\n[\nr\n]: https://example.com"],
+    ["a label with an escaped bracket", "[a][r\\]s]\n\n[r\\]s]: https://example.com"],
+    ["a definition in a quote", "[a][r]\n\n> [r\n> ]: https://example.com"],
+    ["a definition in a list item", "[a][r]\n\n- [r]: https://example.com"],
+    ["a destination on the next line", "[a][r]\n\n[r]:\n  https://example.com"],
+  ])("resolves a reference to a definition with %s", (_name, text) => {
+    expect(splitBlocks(text)).toEqual([text]);
+    expect(block(text).querySelector("a")?.getAttribute("href")).toBe("https://example.com/");
+  });
+
+  it.each(["<!-- a\n\n**b** -->", "<pre>\n\n**b**\n</pre>", "<script>\n\n**b**\n</script>", "<?x\n\n**b**\n?>"])("keeps %j, which runs across a blank line, as text", (text) => {
+    expect(splitBlocks(text)).toEqual([text]);
+    expect(block(text).querySelector("strong")).toBeNull();
+  });
+
+  it("doesn't take a fence hidden in an HTML block for a real one", () => {
+    const text = "<div>\n$$$\n\n$$$\n- x\n\ny";
+    expect(splitBlocks(text)).toEqual([text]);
   });
 });
 
