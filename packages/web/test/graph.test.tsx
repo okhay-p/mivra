@@ -1,5 +1,5 @@
 import type { GraphSpec } from "@mivra/protocol";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ArtifactPart } from "../src/artifacts/ArtifactPart.js";
 import { graphStateAt } from "../src/artifacts/Graph.js";
@@ -10,6 +10,7 @@ const renderGraph = (data: unknown = graph) => render(<ArtifactPart data={data} 
 const next = () => fireEvent.click(screen.getByRole("button", { name: /next/i }));
 const tones = (testId: string) => screen.getAllByTestId(testId).map((e) => e.getAttribute("data-tone"));
 const description = () => screen.getByTestId("graph-description").textContent;
+const status = () => screen.getByTestId("graph-status");
 
 const nodes = (...ids: string[]) => ids.map((id) => ({ id }));
 const edges = (...pairs: [string, string][]) => pairs.map(([from, to]) => ({ from, to }));
@@ -63,12 +64,68 @@ describe("Graph", () => {
     expect(description()).toContain("Directed graph with 3 nodes and 3 edges.");
     expect(description()).toContain("Edge: start to b, weight 4");
     expect(description()).toContain("Edge: start to itself");
-    expect(description()).toContain("Node start is active");
-    expect(description()).toContain("Edge start to b, weight 4 is active");
     expect(description()).toContain("Edge: b to c, labelled");
+    expect(status().textContent).toContain("Node start is active");
+    expect(status().textContent).toContain("Edge start to b, weight 4 is active");
+    expect(status().textContent).toContain("dist = 0");
     next();
-    expect(description()).toContain("Node start is done");
-    expect(description()).not.toContain("is ruled out");
+    expect(status().textContent).toContain("Node start is done");
+    expect(status().textContent).not.toContain("is ruled out");
+  });
+
+  it("announces a step atomically from one live region, even when its explanation repeats", () => {
+    const same = "Look at the next node.";
+    renderGraph({
+      ...graph,
+      spec: { title: "Same", directed: false, nodes: nodes("a", "b"), edges: [], steps: [{ explanation: same, nodeStates: [{ id: "a" }] }, { explanation: same, nodeStates: [{ id: "b" }] }] },
+    });
+    const live = status();
+    expect(live.getAttribute("aria-live")).toBe("polite");
+    expect(live.getAttribute("aria-atomic")).toBe("true");
+    expect(live.textContent).toContain("Step 1 of 2.");
+    expect(live.textContent).toContain("Node a is active");
+    next();
+    expect(status()).toBe(live);
+    expect(live.textContent).toContain("Step 2 of 2.");
+    expect(live.textContent).toContain(same);
+    expect(live.textContent).toContain("Node b is active");
+    expect(live.textContent).not.toContain("Node a");
+    // The visible copies would otherwise be read twice.
+    expect(screen.getByTestId("graph-explanation").getAttribute("aria-hidden")).toBe("true");
+    expect(screen.getByText("Step 2 of 2").getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("says which child an edge is", () => {
+    renderGraph({ ...graph, spec: { title: "T", directed: true, kind: "tree", nodes: nodes("r", "x"), edges: [{ from: "r", to: "x", side: "right" }] } });
+    expect(description()).toContain("Edge: r to x, right child");
+  });
+
+  it("names the card by its rendered heading, not the title's source", () => {
+    renderGraph({ ...graph, spec: { ...graph.spec, title: "Walk $v_1$" } });
+    const region = screen.getByRole("region", { name: /Directed graph$/ });
+    expect(region.getAttribute("aria-label")).toBeNull();
+    const [title] = region.getAttribute("aria-labelledby")!.split(" ");
+    expect(document.getElementById(title!)!.tagName).toBe("H3");
+    expect(document.getElementById(title!)!.querySelector(".katex")).toBeTruthy();
+  });
+
+  it("makes the scrolling box a named tab stop only when it overflows, and leaves its arrow keys alone", () => {
+    renderGraph();
+    const box = screen.getByTestId("graph-scroll");
+    expect(box.getAttribute("tabindex")).toBeNull();
+    expect(box.getAttribute("aria-hidden")).toBeNull();
+    expect(screen.getByTestId("graph-canvas").getAttribute("aria-hidden")).toBe("true");
+    cleanup();
+
+    const wide = vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(500);
+    renderGraph();
+    const scroller = screen.getByRole("group", { name: "Scrollable graph drawing" });
+    expect(scroller.getAttribute("tabindex")).toBe("0");
+    fireEvent.keyDown(scroller, { key: "ArrowRight" });
+    expect(screen.getByText("Step 1 of 3")).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("region"), { key: "ArrowRight" });
+    expect(screen.getByText("Step 2 of 3")).toBeTruthy();
+    wide.mockRestore();
   });
 
   it("says undirected edges have no direction, and that muted means ruled out", () => {
@@ -78,13 +135,13 @@ describe("Graph", () => {
     });
     expect(description()).toContain("Undirected graph with 2 nodes and 1 edge.");
     expect(description()).toContain("Edge: a and b");
-    expect(description()).toContain("Edge a and b is ruled out");
+    expect(status().textContent).toContain("Edge a and b is ruled out");
   });
 
   it("steps with the arrow keys and plays to the end", () => {
     vi.useFakeTimers();
     renderGraph();
-    const region = screen.getByRole("region", { name: /Graph: Walk/ });
+    const region = screen.getByRole("region", { name: /Walk/ });
     fireEvent.keyDown(region, { key: "ArrowRight" });
     expect(screen.getByText("Step 2 of 3")).toBeTruthy();
     fireEvent.keyDown(region, { key: "ArrowLeft" });
@@ -158,6 +215,52 @@ describe("layoutGraph", () => {
     expect(x!.y).toBe(y!.y);
     expect(x!.x).toBeLessThan(y!.x);
     expect(z!.y).toBeGreaterThan(x!.y);
+  });
+
+  describe("binary tree sides", () => {
+    const tree = (...sided: [string, string, "left" | "right"][]) => ({
+      directed: true,
+      kind: "tree" as const,
+      nodes: nodes(...new Set(sided.flatMap(([from, to]) => [from, to]))),
+      edges: sided.map(([from, to, side]) => ({ from, to, side })),
+    });
+    const at = (layout: ReturnType<typeof layoutGraph>, id: string) => layout.nodes.find((n) => n.id === id)!;
+
+    it("puts a lone child on its own side of its parent", () => {
+      const left = layoutGraph(tree(["p", "c", "left"]));
+      const right = layoutGraph(tree(["p", "c", "right"]));
+      expect(left.mode).toBe("tree");
+      expect(at(left, "c").x).toBeLessThan(at(left, "p").x);
+      expect(at(right, "c").x).toBeGreaterThan(at(right, "p").x);
+      expect(at(left, "c").y).toBeGreaterThan(at(left, "p").y);
+    });
+
+    it("draws a real BST by side, whatever order the edges come in", () => {
+      // 8 has both, 3 has both, 10 has only a right child and 14 only a left one.
+      const layout = layoutGraph(tree(["8", "10", "right"], ["8", "3", "left"], ["3", "6", "right"], ["3", "1", "left"], ["10", "14", "right"], ["14", "13", "left"]));
+      const x = (id: string) => at(layout, id).x;
+      for (const [parent, child] of [["8", "3"], ["3", "1"], ["14", "13"]]) expect(x(child!)).toBeLessThan(x(parent!));
+      for (const [parent, child] of [["8", "10"], ["3", "6"], ["10", "14"]]) expect(x(child!)).toBeGreaterThan(x(parent!));
+      // Inorder is left to right on the page, which is what a BST's drawing should show.
+      expect(["1", "3", "6", "8", "10", "13", "14"].map(x)).toEqual([...["1", "3", "6", "8", "10", "13", "14"].map(x)].sort((a, b) => a - b));
+      expect(layoutGraph(structuredClone(tree(["8", "3", "left"])))).toEqual(layoutGraph(tree(["8", "3", "left"])));
+    });
+
+    it("leaves unsided children in edge order, centred when alone", () => {
+      const layout = layoutGraph({ directed: true, kind: "tree", nodes: nodes("p", "c"), edges: edges(["p", "c"]) });
+      expect(at(layout, "c").x).toBe(at(layout, "p").x);
+    });
+
+    it("spreads a deep skewed tree out, with nodes apart and nothing overlapping", () => {
+      const ids = Array.from({ length: 60 }, (_, i) => String(i));
+      const layout = layoutGraph(tree(...ids.slice(1).map((id, i) => [String(i), id, "left"] as [string, string, "left"])));
+      expect(layout.width).toBeGreaterThan(1000);
+      expect(layout.height).toBeGreaterThan(4000);
+      for (let i = 1; i < 60; i++) {
+        expect(layout.nodes[i]!.x).toBeLessThan(layout.nodes[i - 1]!.x);
+        expect(layout.nodes[i]!.y).toBeGreaterThan(layout.nodes[i - 1]!.y);
+      }
+    });
   });
 
   it("roots an undirected tree at its first node", () => {

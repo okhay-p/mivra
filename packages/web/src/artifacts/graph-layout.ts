@@ -1,4 +1,4 @@
-import type { GraphSpec } from "@mivra/protocol";
+import { graphTreeShape, type GraphSpec } from "@mivra/protocol";
 import { forceLink, forceSimulation, forceX, forceY, type SimulationNodeDatum } from "d3-force";
 import { hierarchy, tree } from "d3-hierarchy";
 
@@ -64,36 +64,21 @@ function labelWidth(text: string) {
 
 export const edgeText = (edge: GraphSpec["edges"][number]) => (edge.weight !== undefined ? String(edge.weight) : edge.label);
 
-/** Each node's children in edge order, if the graph is a real tree: one root, connected, no cycles. */
-function treeChildren(spec: LayoutInput): { root: string; children: Map<string, string[]> } | undefined {
-  if (spec.edges.length !== spec.nodes.length - 1) return undefined;
-  const ids = spec.nodes.map((node) => node.id);
-  const adjacent = new Map<string, string[]>(ids.map((id) => [id, []]));
-  for (const { from, to } of spec.edges) {
-    adjacent.get(from)!.push(to);
-    if (!spec.directed && from !== to) adjacent.get(to)!.push(from);
-  }
-  const roots = spec.directed ? ids.filter((id) => !spec.edges.some((edge) => edge.to === id)) : ids.slice(0, 1);
-  const root = roots[0];
-  if (roots.length !== 1 || root === undefined) return undefined;
-
-  const children = new Map<string, string[]>();
-  const pending = [root];
-  while (pending.length) {
-    const id = pending.pop()!;
-    const next = adjacent.get(id)!.filter((other) => !children.has(other));
-    children.set(id, next);
-    pending.push(...next);
-  }
-  // With n - 1 edges, reaching all n nodes means there can't be a cycle.
-  return children.size === ids.length ? { root, children } : undefined;
-}
-
-function treePositions(sizes: Map<string, Box>, shape: NonNullable<ReturnType<typeof treeChildren>>) {
+/** An empty slot keeps a lone child to its side: d3 centres a parent over its children, slots included. */
+function treePositions(spec: LayoutInput, sizes: Map<string, Box>, shape: NonNullable<ReturnType<typeof graphTreeShape>>) {
+  const sideOf = new Map(spec.edges.map((edge) => [edge.to, edge.side]));
+  const slots = (id: string) => {
+    const children = shape.children.get(id)!;
+    const left = children.find((child) => sideOf.get(child) === "left");
+    const right = children.find((child) => sideOf.get(child) === "right");
+    return left === undefined && right === undefined ? children : [left ?? null, right ?? null];
+  };
   const widest = Math.max(...[...sizes.values()].map((box) => box.width));
-  const root = hierarchy(shape.root, (id) => shape.children.get(id));
-  tree<string>().nodeSize([widest + SIBLING_GAP, LEVEL_GAP]).separation(() => 1)(root);
-  root.each((node) => Object.assign(sizes.get(node.data)!, { x: node.x, y: node.y }));
+  const root = hierarchy<string | null>(shape.root, (id) => (id === null ? undefined : slots(id)));
+  tree<string | null>().nodeSize([widest + SIBLING_GAP, LEVEL_GAP]).separation(() => 1)(root);
+  root.each((node) => {
+    if (node.data !== null) Object.assign(sizes.get(node.data)!, { x: node.x, y: node.y });
+  });
 }
 
 type SimNode = SimulationNodeDatum & { id: string; radius: number; x: number; y: number; vx: number; vy: number };
@@ -197,8 +182,8 @@ const pointsText = (points: Point[], shift: Point) => points.map((p) => `${fixed
 
 /**
  * Where everything goes, in px at the graph's natural size. Pure and independent of the steps, so a graph
- * never moves while it's stepped through. A tree uses d3's tidy layout, which keeps children in edge order
- * (left and right matter in a traversal); anything else uses a force layout run to the end up front.
+ * never moves while it's stepped through. A tree uses d3's tidy layout, which keeps children by side or else
+ * in edge order (left and right matter in a traversal); anything else uses a force layout run to the end up front.
  */
 export function layoutGraph(spec: LayoutInput): GraphLayout {
   const boxes = new Map<string, Box>(
@@ -207,8 +192,8 @@ export function layoutGraph(spec: LayoutInput): GraphLayout {
       { x: 0, y: 0, width: Math.max(NODE_HEIGHT, labelWidth(node.label ?? node.id) + NODE_PADDING), height: NODE_HEIGHT },
     ]),
   );
-  const shape = spec.kind === "tree" ? treeChildren(spec) : undefined;
-  if (shape) treePositions(boxes, shape);
+  const shape = spec.kind === "tree" ? graphTreeShape(spec) : undefined;
+  if (shape) treePositions(spec, boxes, shape);
   else forcePositions(spec, boxes);
 
   const all = [...boxes.values()];

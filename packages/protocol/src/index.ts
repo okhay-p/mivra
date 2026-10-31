@@ -25,7 +25,7 @@ export const artifactKinds = {
     version: 1,
     toolName: "show_graph",
     description:
-      "Show the learner a graph or tree, drawn for you, optionally with steps they can walk through. Use it for graphs, trees, BFS, DFS, shortest paths, spanning trees and tree traversals, whenever seeing the structure or watching an algorithm move over it will help. Never give coordinates: the layout is automatic. Keep it small enough to read (roughly 4-15 nodes, 5-20 steps) and make each step's explanation say what changed and why.",
+      "Show the learner a graph or tree, drawn for you, optionally with steps they can walk through. Use it for graphs, trees, BFS, DFS, shortest paths, spanning trees and tree traversals, whenever seeing the structure or watching an algorithm move over it will help. Never give coordinates: the layout is automatic. For a binary search tree or binary tree traversal, set kind to tree and give every edge a side, so a lone left child and a lone right child are drawn differently. The automatic layout may draw crossing edges that mean nothing, even when the graph is planar, so don't use this to show whether a graph is planar. Keep it small enough to read (roughly 4-15 nodes, 5-20 steps) and make each step's explanation say what changed and why.",
     spec: GraphSpec,
   },
   multiple_choice: {

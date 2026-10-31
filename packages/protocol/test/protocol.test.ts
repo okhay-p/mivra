@@ -272,6 +272,51 @@ describe("graph", () => {
     expect(GraphSpec.safeParse(multigraph).success).toBe(true);
   });
 
+  describe("edge sides", () => {
+    const tree = (edges: object[], extra: object = {}) => ({ title: "t", directed: true, kind: "tree", nodes: [{ id: "r" }, { id: "x" }, { id: "y" }, { id: "z" }].slice(0, edges.length + 1), edges, ...extra });
+    const l = { from: "r", to: "x", side: "left" };
+    const r = { from: "r", to: "y", side: "right" };
+
+    it("accepts a lone left child, a lone right child, and one of each", () => {
+      expect(GraphSpec.safeParse(tree([l])).success).toBe(true);
+      expect(GraphSpec.safeParse(tree([{ ...l, side: "right" }])).success).toBe(true);
+      expect(GraphSpec.safeParse(tree([r, l])).success).toBe(true);
+      expect(GraphSpec.safeParse(tree([{ ...l }, { from: "x", to: "y", side: "right" }], { directed: false })).success).toBe(true);
+    });
+
+    it("rejects any other side", () => {
+      expect(GraphSpec.safeParse(tree([{ ...l, side: "middle" }])).success).toBe(false);
+    });
+
+    it("only allows it on a tree", () => {
+      expect(issues(tree([l], { kind: "graph" }))).toContain('side only applies when kind is "tree"');
+      expect(issues(tree([l], { kind: undefined }))).toContain('side only applies when kind is "tree"');
+    });
+
+    it("rejects it when kind is tree but the graph isn't one", () => {
+      const cycle = { title: "t", directed: false, kind: "tree", nodes: [{ id: "r" }, { id: "x" }, { id: "y" }], edges: [l, { from: "x", to: "y" }, { from: "y", to: "r" }] };
+      expect(issues(cycle)).toContain("side needs a real tree");
+    });
+
+    it("rejects two children on one side", () => {
+      expect(issues(tree([l, { ...r, side: "left" }]))).toContain("node r has two left children");
+      expect(issues(tree([{ ...l, side: "right" }, r]))).toContain("node r has two right children");
+    });
+
+    it("rejects a node mixing sided and unsided children", () => {
+      expect(issues(tree([l, { from: "r", to: "y" }]))).toContain("node r mixes children");
+    });
+
+    it("rejects an undirected edge written child first, which would put the side on the wrong node", () => {
+      const swapped = tree([{ from: "x", to: "r", side: "left" }], { directed: false });
+      expect(issues(swapped)).toContain("side needs from to be the parent");
+    });
+
+    it("reports a dangling edge rather than choking on it", () => {
+      expect(issues(tree([{ ...l, to: "zz" }]))).toContain("no node has id zz");
+    });
+  });
+
   it("rejects step references to things that don't exist", () => {
     expect(issues(withStep({ nodeStates: [{ id: "zz" }] }))).toContain("no node has id zz");
     expect(issues(withStep({ edgeStates: [{ from: "a", to: "c" }] }))).toContain("no edge a -> c");

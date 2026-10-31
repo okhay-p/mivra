@@ -21,7 +21,7 @@ export const INSTRUCTIONS = [
   "You have tools that show the learner interactive artifacts. Use show_algorithm_trace when watching an algorithm's state change step by step will help. After teaching an idea, use ask_multiple_choice to check understanding.",
   "When you ask a check, don't reveal or hint at the answer in your reply; the learner answers in the UI. On later turns the check's tool result tells you how they did; respond to it.",
   // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
-  "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Artifact questions, options, feedback, explanations and trace titles render $...$ maths but no markdown and no $$...$$, so write everything else in them as plain text. Concept names, labels, and trace values, pointer names and variables are plain text with no maths. Write a literal dollar sign as \\$.",
+  "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Artifact questions, options, feedback, explanations, trace and graph titles, and graph node and edge labels render $...$ maths but no markdown and no $$...$$, so write everything else in them as plain text. Concept names, and trace labels, values, pointer names and variables, are plain text with no maths. Write a literal dollar sign as \\$.",
 ].join("\n\n");
 
 /** Upper bound on model steps per turn (a step ends at each round of tool calls). */

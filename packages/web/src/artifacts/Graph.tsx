@@ -1,6 +1,6 @@
 import { graphEdgeLookup, type GraphSpec, type GraphTone } from "@mivra/protocol";
 import { Check, ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,13 +57,27 @@ export function Graph({ view }: ArtifactProps<"graph">) {
   const shape = JSON.stringify([spec.directed, spec.kind, spec.nodes, spec.edges]);
   const layout = useMemo(() => layoutGraph(spec), [shape]);
 
-  // A graph bigger than its box has little in the corners, so it opens on the middle.
+  // A graph bigger than its box has little in the corners, so it opens on the middle. A tree opens on its root.
   const scroller = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const box = scroller.current;
     if (!box) return;
-    box.scrollLeft = (box.scrollWidth - box.clientWidth) / 2;
-    box.scrollTop = (box.scrollHeight - box.clientHeight) / 2;
+    const root = layout.mode === "tree" ? layout.nodes.reduce((top, node) => (node.y < top.y ? node : top)) : undefined;
+    box.scrollLeft = root ? (root.x * box.scrollWidth) / layout.width - box.clientWidth / 2 : (box.scrollWidth - box.clientWidth) / 2;
+    box.scrollTop = root ? 0 : (box.scrollHeight - box.clientHeight) / 2;
+  }, [layout]);
+
+  // Only a box that overflows has anything to do with the keyboard, so only then is it a tab stop.
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const box = scroller.current;
+    if (!box) return;
+    const measure = () => setOverflows(box.scrollWidth > box.clientWidth || box.scrollHeight > box.clientHeight);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    return () => observer.disconnect();
   }, [layout]);
 
   useEffect(() => {
@@ -86,6 +100,8 @@ export function Graph({ view }: ArtifactProps<"graph">) {
     setPlaying(true);
   };
   const onKeyDown = (e: KeyboardEvent) => {
+    // In the drawing's scrolling box the arrow keys scroll it.
+    if (scroller.current?.contains(e.target as Node)) return;
     if (e.key === "ArrowLeft") go(index - 1);
     else if (e.key === "ArrowRight") go(index + 1);
     else return;
@@ -95,30 +111,38 @@ export function Graph({ view }: ArtifactProps<"graph">) {
   const state = graphStateAt(spec, index);
   const hasSteps = steps.length > 0;
   const percent = (value: number, of: number) => `${(value / of) * 100}%`;
+  const titleId = useId();
+  const kindId = useId();
 
   return (
     <Card
       role="region"
-      aria-label={`Graph: ${spec.title}`}
+      aria-labelledby={`${titleId} ${kindId}`}
       tabIndex={hasSteps ? 0 : undefined}
       onKeyDown={hasSteps ? onKeyDown : undefined}
       className="whitespace-normal"
     >
       <CardHeader>
         <CardTitle className="font-heading text-base">
-          <h3>
+          <h3 id={titleId}>
             <MathText text={spec.title} mode="math" />
           </h3>
         </CardTitle>
-        <CardDescription>{spec.directed ? "Directed graph" : "Graph"}</CardDescription>
+        <CardDescription id={kindId}>{spec.directed ? "Directed graph" : "Graph"}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <GraphDescription spec={spec} state={state} />
-        <div ref={scroller} className="max-h-[36rem] overflow-auto" aria-hidden="true" data-testid="graph-scroll">
+        <GraphDescription spec={spec} />
+        <div
+          ref={scroller}
+          className="focus-visible:ring-ring/50 max-h-[36rem] overflow-auto rounded-sm outline-none focus-visible:ring-[3px]"
+          data-testid="graph-scroll"
+          {...(overflows ? { tabIndex: 0, role: "group", "aria-label": "Scrollable graph drawing" } : {})}
+        >
           {/* Everything scales with this box: the SVG by its viewBox, the labels by container units. */}
           <div
             className="@container relative mx-auto w-full"
             style={{ maxWidth: layout.width, minWidth: layout.width * MIN_SCALE, aspectRatio: `${layout.width} / ${layout.height}` }}
+            aria-hidden="true"
             data-testid="graph-canvas"
             data-layout={layout.mode}
           >
@@ -143,7 +167,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
                 return text === undefined ? null : (
                   <span
                     key={i}
-                    className={cn("bg-card absolute w-max -translate-x-1/2 -translate-y-1/2 rounded-sm px-[0.25em] py-[0.1em] text-[0.92em]", tone && EDGE_LABEL_TONES[tone])}
+                    className={cn("bg-card absolute w-max -translate-x-1/2 -translate-y-1/2 rounded-sm px-[0.25em] py-[0.1em]", tone && EDGE_LABEL_TONES[tone])}
                     style={{ left: percent(at.x, layout.width), top: percent(at.y, layout.height) }}
                     data-testid="graph-edge-label"
                   >
@@ -184,7 +208,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
           </div>
         </div>
         {state.variables.length > 0 && (
-          <dl className="flex flex-wrap gap-2">
+          <dl className="flex flex-wrap gap-2" aria-hidden={hasSteps ? true : undefined}>
             {state.variables.map((v, i) => (
               <div key={i} className="bg-muted flex gap-1 rounded-sm px-2 py-0.5 font-mono text-xs">
                 <dt>{v.name}</dt>
@@ -195,7 +219,8 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         )}
         {hasSteps && (
           <>
-            <div aria-live="polite">
+            <GraphStatus spec={spec} state={state} step={index + 1} of={steps.length} />
+            <div aria-hidden="true" data-testid="graph-explanation">
               <MathText text={state.explanation} mode="math" />
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -211,7 +236,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
                 Next
                 <ChevronRight />
               </Button>
-              <Badge variant="outline" className="ml-auto">
+              <Badge variant="outline" className="ml-auto" aria-hidden="true">
                 Step {index + 1} of {steps.length}
               </Badge>
             </div>
@@ -222,30 +247,70 @@ export function Graph({ view }: ArtifactProps<"graph">) {
   );
 }
 
+function NodeName({ spec, id }: { spec: GraphSpec; id: string }) {
+  return <MathText text={spec.nodes.find((node) => node.id === id)?.label ?? id} mode="math" />;
+}
+
+function EdgeWords({ spec, index }: { spec: GraphSpec; index: number }) {
+  const edge = spec.edges[index]!;
+  return (
+    <>
+      {edge.from === edge.to ? (
+        <>
+          <NodeName spec={spec} id={edge.from} /> to itself
+        </>
+      ) : (
+        <>
+          <NodeName spec={spec} id={edge.from} /> {spec.directed ? "to" : "and"} <NodeName spec={spec} id={edge.to} />
+        </>
+      )}
+      {edge.side && `, ${edge.side} child`}
+      {edge.weight !== undefined && `, weight ${edge.weight}`}
+      {edge.label !== undefined && (
+        <>
+          , labelled <MathText text={edge.label} mode="math" />
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * Stays mounted and is read whole on every change. The step number changes every time, so two steps with the
+ * same explanation are still announced, along with what's highlighted, which is otherwise only visible.
+ */
+function GraphStatus({ spec, state, step, of }: { spec: GraphSpec; state: ReturnType<typeof graphStateAt>; step: number; of: number }) {
+  return (
+    <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="graph-status">
+      <p>
+        Step {step} of {of}.
+      </p>
+      <p>
+        <MathText text={state.explanation} mode="math" />
+      </p>
+      <ul>
+        {[...state.nodes].map(([id, tone]) => (
+          <li key={`n-${id}`}>
+            Node <NodeName spec={spec} id={id} /> is {TONE_WORDS[tone]}.
+          </li>
+        ))}
+        {[...state.edges].map(([i, tone]) => (
+          <li key={`e-${i}`}>
+            Edge <EdgeWords spec={spec} index={i} /> is {TONE_WORDS[tone]}.
+          </li>
+        ))}
+        {state.variables.map((v, i) => (
+          <li key={`v-${i}`}>
+            {v.name} = {String(v.value)}.
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** The drawing relates things only by position, so screen readers get this instead. */
-function GraphDescription({ spec, state }: { spec: GraphSpec; state: ReturnType<typeof graphStateAt> }) {
-  const labels = new Map(spec.nodes.map((node) => [node.id, node.label ?? node.id]));
-  const name = (id: string) => <MathText text={labels.get(id) ?? id} mode="math" />;
-  const edgeWords = (i: number) => {
-    const edge = spec.edges[i]!;
-    return (
-      <>
-        {edge.from === edge.to ? (
-          <>{name(edge.from)} to itself</>
-        ) : (
-          <>
-            {name(edge.from)} {spec.directed ? "to" : "and"} {name(edge.to)}
-          </>
-        )}
-        {edge.weight !== undefined && `, weight ${edge.weight}`}
-        {edge.label !== undefined && (
-          <>
-            , labelled <MathText text={edge.label} mode="math" />
-          </>
-        )}
-      </>
-    );
-  };
+function GraphDescription({ spec }: { spec: GraphSpec }) {
   const nodeCount = spec.nodes.length;
   const edgeCount = spec.edges.length;
   return (
@@ -258,21 +323,13 @@ function GraphDescription({ spec, state }: { spec: GraphSpec; state: ReturnType<
         {spec.nodes.map((node, i) => (
           <span key={node.id}>
             {i > 0 && ", "}
-            {name(node.id)}
+            <NodeName spec={spec} id={node.id} />
           </span>
         ))}
       </li>
       {spec.edges.map((_, i) => (
-        <li key={`e-${i}`}>Edge: {edgeWords(i)}</li>
-      ))}
-      {[...state.nodes].map(([id, tone]) => (
-        <li key={`ns-${id}`}>
-          Node {name(id)} is {TONE_WORDS[tone]}
-        </li>
-      ))}
-      {[...state.edges].map(([i, tone]) => (
-        <li key={`es-${i}`}>
-          Edge {edgeWords(i)} is {TONE_WORDS[tone]}
+        <li key={`e-${i}`}>
+          Edge: <EdgeWords spec={spec} index={i} />
         </li>
       ))}
     </ul>

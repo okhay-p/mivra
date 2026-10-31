@@ -106,8 +106,8 @@ const graphTree = {
   title: "Inorder walk of a BST",
   directed: true,
   kind: "tree",
-  nodes: ["8", "3", "10", "1", "6", "14"].map((id) => ({ id })),
-  edges: [["8", "3"], ["8", "10"], ["3", "1"], ["3", "6"], ["10", "14"]].map(([from, to]) => ({ from, to })),
+  nodes: ["8", "3", "10", "1", "6", "14", "13"].map((id) => ({ id })),
+  edges: [["8", "3", "left"], ["8", "10", "right"], ["3", "1", "left"], ["3", "6", "right"], ["10", "14", "right"], ["14", "13", "left"]].map(([from, to, side]) => ({ from, to, side })),
   steps: [
     { explanation: "Go left from the root until there's no left child.", nodeStates: [{ id: "1" }], edgeStates: [{ from: "8", to: "3" }, { from: "3", to: "1" }] },
     { explanation: "Visit 1, then its parent.", nodeStates: [{ id: "1", tone: "done" }, { id: "3" }], variables: [{ name: "visited", value: "1" }] },
@@ -155,7 +155,18 @@ const graphLimit = {
   edges: Array.from({ length: 200 }, (_, i) => ({ from: `n${i % 60}`, to: `n${(i * 7 + 11) % 60}`, weight: i })),
 };
 
+// As deep as the schema allows, all to one side, and with steps so the keyboard has two jobs here.
+const graphSkew = {
+  title: "A degenerate BST",
+  directed: true,
+  kind: "tree",
+  nodes: Array.from({ length: 60 }, (_, i) => ({ id: String(i) })),
+  edges: Array.from({ length: 59 }, (_, i) => ({ from: String(i), to: String(i + 1), side: "right" })),
+  steps: [{ explanation: "Every insert goes right.", nodeStates: [{ id: "0" }] }, { explanation: "So searching is linear.", nodeStates: [{ id: "1" }] }],
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  graphskew: [{ tool: "show_graph", input: graphSkew }, { text: "Here's the skewed tree." }],
   graphtree: [{ tool: "show_graph", input: graphTree }, { text: "Here's the tree." }],
   graphweighted: [{ tool: "show_graph", input: graphWeighted }, { text: "Here's the graph." }],
   graphloop: [{ tool: "show_graph", input: graphLoop }, { text: "Here's the multigraph." }],

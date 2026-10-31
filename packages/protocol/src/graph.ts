@@ -37,7 +37,13 @@ export const GraphNode = z
 export const GraphEdge = z
   .object({
     from: Id.describe("Id of a node. In a tree, the parent."),
-    to: Id.describe("Id of a node, the same as `from` for a self-loop. In a tree, the child; children appear left to right in edge order."),
+    to: Id.describe("Id of a node, the same as `from` for a self-loop. In a tree, the child; children appear left to right in edge order unless they have a `side`."),
+    side: z
+      .enum(["left", "right"])
+      .optional()
+      .describe(
+        "Only when kind is tree: which child this is of `from`, its parent. Set it on every edge of a binary search tree or binary tree traversal, because a lone left child and a lone right child are different trees. A node has at most one child per side, and either all of its children have a side or none do.",
+      ),
     weight: z.number().optional().describe("Numeric weight shown on the edge. Give a weight or a label, not both."),
     label: Text.optional().describe("Text shown on the edge. Only $...$ is a formula."),
   })
@@ -108,6 +114,68 @@ export function graphEdgeLookup(spec: { directed: boolean; edges: readonly { fro
   };
 }
 
+/**
+ * Each node's children in edge order, if the graph is a real tree: one root, connected, no cycles. Shared by
+ * the schema and renderers so they can't disagree. Every edge must join nodes that exist.
+ */
+export function graphTreeShape(spec: {
+  directed: boolean;
+  nodes: readonly { id: string }[];
+  edges: readonly { from: string; to: string }[];
+}): { root: string; children: Map<string, string[]> } | undefined {
+  if (spec.edges.length !== spec.nodes.length - 1) return undefined;
+  const ids = spec.nodes.map((node) => node.id);
+  const adjacent = new Map<string, string[]>(ids.map((id) => [id, []]));
+  for (const { from, to } of spec.edges) {
+    adjacent.get(from)!.push(to);
+    if (!spec.directed && from !== to) adjacent.get(to)!.push(from);
+  }
+  const roots = spec.directed ? ids.filter((id) => !spec.edges.some((edge) => edge.to === id)) : ids.slice(0, 1);
+  const root = roots[0];
+  if (roots.length !== 1 || root === undefined) return undefined;
+
+  const children = new Map<string, string[]>();
+  const pending = [root];
+  while (pending.length) {
+    const id = pending.pop()!;
+    const next = adjacent.get(id)!.filter((other) => !children.has(other));
+    children.set(id, next);
+    pending.push(...next);
+  }
+  // With n - 1 edges, reaching all n nodes means there can't be a cycle.
+  return children.size === ids.length ? { root, children } : undefined;
+}
+
+/** The rules for `side`, which only says anything about a tree that really gets drawn as one. */
+function checkSides(spec: Pick<GraphSpec, "kind" | "directed" | "nodes" | "edges">, ctx: z.RefinementCtx) {
+  const sided = spec.edges.flatMap((edge, i) => (edge.side ? [{ edge, side: edge.side, path: ["edges", i, "side"] }] : []));
+  const first = sided[0];
+  if (!first) return;
+  if (spec.kind !== "tree") {
+    for (const { path } of sided) ctx.addIssue({ code: "custom", path, message: 'side only applies when kind is "tree": remove it, or set kind' });
+    return;
+  }
+  const shape = graphTreeShape(spec);
+  if (!shape) {
+    ctx.addIssue({ code: "custom", path: first.path, message: "side needs a real tree: connected with no cycles, and when directed, edges going parent to child from one root" });
+    return;
+  }
+  const sideOf = new Map<string, "left" | "right">();
+  for (const { edge, side, path } of sided) {
+    if (shape.children.get(edge.from)!.includes(edge.to)) sideOf.set(edge.to, side);
+    else ctx.addIssue({ code: "custom", path, message: `side needs from to be the parent, but ${edge.to} is the parent of ${edge.from} here: swap them` });
+  }
+  for (const [parent, children] of shape.children) {
+    const sides = children.flatMap((child) => sideOf.get(child) ?? []);
+    if (sides.length > 0 && sides.length < children.length) {
+      ctx.addIssue({ code: "custom", path: ["edges"], message: `node ${parent} mixes children with and without a side: give all of them one, or none` });
+    }
+    for (const side of ["left", "right"] as const) {
+      if (sides.filter((s) => s === side).length > 1) ctx.addIssue({ code: "custom", path: ["edges"], message: `node ${parent} has two ${side} children` });
+    }
+  }
+}
+
 export const GraphSpec = z
   .object({
     title: z.string().trim().min(1).max(120),
@@ -116,7 +184,7 @@ export const GraphSpec = z
       .enum(["tree", "graph"])
       .optional()
       .describe(
-        "Layout hint. tree draws a rooted tree top-down, and needs a real tree: connected with no cycles, and when directed, edges going parent to child from one root. When undirected, the first node is the root. Anything else falls back to the general layout. Defaults to graph.",
+        "Layout hint. tree draws a rooted tree top-down, and needs a real tree: connected with no cycles, and when directed, edges going parent to child from one root. When undirected, the first node is the root. Anything else falls back to the general layout, unless an edge has a `side`, which is then an error. Defaults to graph.",
       ),
     nodes: z.array(GraphNode).min(1).max(MAX_NODES),
     edges: z.array(GraphEdge).max(MAX_EDGES).describe("Self-loops and parallel edges are allowed."),
@@ -137,6 +205,7 @@ export const GraphSpec = z
         ctx.addIssue({ code: "custom", path: ["edges", i], message: "give a weight or a label, not both" });
       }
     });
+    if (spec.edges.every((edge) => ids.has(edge.from) && ids.has(edge.to))) checkSides(spec, ctx);
     const lookup = graphEdgeLookup(spec);
     spec.steps?.forEach((step, i) => {
       const seenNodes = new Set<string>();

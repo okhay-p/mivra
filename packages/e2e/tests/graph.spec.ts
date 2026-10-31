@@ -12,7 +12,7 @@ async function showGraph(page: Page, script: string) {
   }
   await page.getByRole("textbox", { name: "Message" }).fill(`${script} ${Date.now()}`);
   await page.getByRole("button", { name: "Send" }).click();
-  const graph = page.getByRole("region", { name: /^Graph:/ });
+  const graph = page.getByRole("region", { name: /graph$/i });
   await expect(graph).toBeVisible();
   return graph;
 }
@@ -51,18 +51,21 @@ test.describe("graph", () => {
     // Not carried over: this step doesn't mention a.
     await expect(a).not.toHaveAttribute("data-tone");
     expect(await centres(page)).toEqual(before);
-    await expect(graph.getByTestId("graph-description")).toContainText("is done");
+    await expect(graph.getByTestId("graph-status")).toContainText("is done");
   });
 
   test("a tree is laid out in levels, with children in edge order", async ({ page }) => {
     const graph = await showGraph(page, "graphtree");
     await expect(graph.getByTestId("graph-canvas")).toHaveAttribute("data-layout", "tree");
     const at = async (id: string) => (await graph.locator(`[data-node="${id}"]`).boundingBox())!;
-    const [root, left, right, leaf] = await Promise.all([at("8"), at("3"), at("10"), at("6")]);
+    const [root, left, right, leaf, loneRight, loneLeft] = await Promise.all([at("8"), at("3"), at("10"), at("6"), at("14"), at("13")]);
     expect(left.y).toBeGreaterThan(root.y);
     expect(left.y).toBe(right.y);
     expect(left.x).toBeLessThan(right.x);
     expect(leaf.y).toBeGreaterThan(left.y);
+    // A lone child keeps its side: 14 is right of its parent 10, and 13 is left of its parent 14.
+    expect(loneRight.x).toBeGreaterThan(right.x);
+    expect(loneLeft.x).toBeLessThan(loneRight.x);
   });
 
   test("self-loops and parallel edges are all drawn apart", async ({ page }) => {
@@ -90,8 +93,51 @@ test.describe("graph", () => {
       // The small graph shrinks to fit; the largest one can't and scrolls in its own box instead.
       expect(fit.scrolls).toBe(script === "graphlimit");
       if (fit.scrolls) expect(fit.left).toBeGreaterThan(0);
-      const size = await graph.getByTestId("graph-node").first().evaluate((node) => parseFloat(getComputedStyle(node.parentElement!).fontSize));
-      expect(size).toBeGreaterThanOrEqual(10.9);
+      const sizes = await graph.locator('[data-testid="graph-node"], [data-testid="graph-edge-label"]').evaluateAll((labels) => labels.map((label) => parseFloat(getComputedStyle(label).fontSize)));
+      expect(sizes.length).toBeGreaterThan(0);
+      expect(Math.min(...sizes)).toBeGreaterThanOrEqual(10.99);
     });
   }
+
+  test("a deep skewed tree scrolls in its box from the root, legibly, and the keyboard scrolls it", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    const graph = await showGraph(page, "graphskew");
+    const box = graph.getByTestId("graph-scroll");
+    await expect(graph.getByTestId("graph-canvas")).toHaveAttribute("data-layout", "tree");
+    await expect(box).toHaveAttribute("tabindex", "0");
+    await expect(graph.getByRole("group", { name: "Scrollable graph drawing" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    const size = await graph.locator('[data-node="59"]').evaluate((node) => parseFloat(getComputedStyle(node).fontSize));
+    expect(size).toBeGreaterThanOrEqual(10.99);
+    const scroll = () => box.evaluate((e) => ({ left: e.scrollLeft, top: e.scrollTop, max: e.scrollWidth - e.clientWidth }));
+    const opening = await scroll();
+    expect(opening.top).toBe(0);
+    expect(opening.max).toBeGreaterThan(0);
+    const inBox = await graph.locator('[data-node="0"]').evaluate((node) => {
+      const { left, right } = node.getBoundingClientRect();
+      const outer = node.closest('[data-testid="graph-scroll"]')!.getBoundingClientRect();
+      return left >= outer.left && right <= outer.right;
+    });
+    expect(inBox).toBe(true);
+
+    await box.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(async () => (await scroll()).left).toBeGreaterThan(opening.left);
+    await page.keyboard.press("ArrowDown");
+    await expect.poll(async () => (await scroll()).top).toBeGreaterThan(0);
+    await expect(graph.getByTestId("graph-status")).toContainText("Step 1 of 2");
+
+    // Outside the box the arrow keys still step.
+    await graph.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(graph.getByTestId("graph-status")).toContainText("Step 2 of 2");
+  });
+
+  test("a graph that fits is not a tab stop, and only its drawing is hidden from screen readers", async ({ page }) => {
+    const graph = await showGraph(page, "graphweighted");
+    const box = graph.getByTestId("graph-scroll");
+    await expect(box).not.toHaveAttribute("tabindex");
+    await expect(box).not.toHaveAttribute("aria-hidden");
+    await expect(graph.getByTestId("graph-canvas")).toHaveAttribute("aria-hidden", "true");
+  });
 });
