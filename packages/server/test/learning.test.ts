@@ -8,6 +8,7 @@ import { openDb, type Db } from "../src/db/client.js";
 import { artifacts, attempts, runs } from "../src/db/schema.js";
 import { coreLearning } from "../src/plugins/core-learning.js";
 import { createCapabilityRegistry, type Plugin } from "../src/runtime/capabilities.js";
+import { createTurnRunner } from "../src/runtime/turn-runner.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
 const TOKEN = "test-token";
@@ -179,6 +180,42 @@ describe("multiple_choice through the agent", () => {
     const prompt = JSON.stringify(model.doStreamCalls[3]?.prompt);
     expect(prompt).toContain("incorrect");
     expect(prompt).toContain('"learnerResult":"incorrect","learnerChose":{"optionIndex":2,"text":"16"}');
+  });
+
+  it("tells a new session what the learner practised in earlier ones, without the answer key", async () => {
+    const { app, db, model } = setup([
+      { text: "Before any evidence." },
+      { toolCall: { name: "ask_multiple_choice", input: check } },
+      { text: "Try it." },
+      { text: "Welcome back." },
+    ]);
+    const first = await newSession(app);
+    await turn(app, db, first, "hello");
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).not.toContain("learner_concepts");
+
+    await turn(app, db, first, "quiz me");
+    await answer(app, db.select().from(artifacts).get()!.id, { answer: { optionIndex: 2 } });
+
+    const sse = await turn(app, db, await newSession(app), "what should I work on?");
+    const prompt = JSON.stringify(model.doStreamCalls[3]?.prompt);
+    expect(prompt).toContain("binary search worst case");
+    expect(prompt).toContain('\\"attempts\\":1,\\"correct\\":0,\\"lastResult\\":\\"incorrect\\"');
+    // The new session's own messages carry no trace of the old conversation.
+    expect(prompt).not.toContain("quiz me");
+    expect(prompt).not.toContain("SECRET");
+    expect(sse).not.toContain("binary search worst case");
+  });
+
+  it("releases the run if the learner's record can't be read", async () => {
+    const db = openDb(":memory:");
+    const store = createSessionStore(db);
+    const session = store.createSession();
+    const broken = { ...store, listRecentAttempts: () => { throw new Error("disk error"); } };
+    const runner = createTurnRunner({ store: broken, registry: createCapabilityRegistry([coreLearning]), model: () => scriptedModel([]) });
+
+    const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hi") });
+    expect(result).toMatchObject({ ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } });
+    expect(db.select().from(runs).get()).toMatchObject({ status: "failed", error: expect.stringContaining("disk error") });
   });
 
   it("rejects attempts on unknown artifacts, non-checks and discarded checks", async () => {

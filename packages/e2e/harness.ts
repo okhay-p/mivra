@@ -101,6 +101,11 @@ function nextStep(prompt: PromptMessage[]): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
   const text = JSON.stringify(prompt[lastUser]?.content);
   if (text.includes("fail")) throw new Error("PROVIDER-SECRET-DETAIL");
+  // Reports what the instructions say about earlier sessions.
+  if (text.includes("recall")) {
+    const concepts = JSON.stringify(prompt[0]?.content).match(/\\"concept\\":\\"([^\\]+)/);
+    return { text: `Your record covers: ${concepts?.[1] ?? "nothing"}.` };
+  }
   const script = Object.keys(SCRIPTS).find((name) => text.includes(name));
   if (script) {
     const toolResults = prompt.slice(lastUser).filter((m) => m.role === "tool").length;

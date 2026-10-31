@@ -143,6 +143,11 @@ export function createSessionStore(db: Db) {
       return db.select().from(attempts).where(eq(attempts.artifactId, artifactId)).get();
     },
 
+    /** The learner's most recent graded attempts across all sessions, newest first. */
+    listRecentAttempts(limit: number): AttemptRow[] {
+      return db.select().from(attempts).orderBy(desc(attempts.createdAt)).limit(limit).all();
+    },
+
     /** Records the learner's single graded attempt. Throws Conflict if one already exists. */
     createAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string }): AttemptRow {
       return db.transaction((tx) => {

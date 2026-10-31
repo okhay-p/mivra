@@ -36,6 +36,10 @@ Workspace packages resolve to their TypeScript source in dev, tests and type-che
 
 Data is stored in `~/.mivra/mivra.db` (override with `MIVRA_DATA_DIR`). The API's OpenAPI document is at `/api/doc`.
 
+## Learner memory
+
+Each turn's instructions include the learner's record across all sessions: per concept, how many checks they answered, how many were right, and the latest result. It is calculated from graded attempts, never stored separately (ADR-009).
+
 ## Web UI
 
 The UI uses [shadcn/ui](https://ui.shadcn.com) with the Paper & Amber theme (ADR-008). Components are copied into `packages/web/src/components/ui`, and theme tokens live in `src/styles.css`. To add a component, run `pnpm dlx shadcn@latest add <name>` from `packages/web`, then check that it didn't overwrite the tokens in `styles.css`. Fonts are bundled through `@fontsource`, so the app needs no network for them. The theme follows the OS until the learner picks Light or Dark in the sidebar; the choice is saved in the browser.
