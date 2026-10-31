@@ -248,36 +248,27 @@ function opensBlock(line: string): ((line: string) => boolean) | undefined {
 }
 
 // Markdown parsing and the DOM get far slower than linearly with nesting: 1,000 nested list items take six seconds
-// to parse and then overflow the stack. Nobody writes these limits' worth of nesting on purpose. The checks are
-// there to catch hostile text, so what they skip must really be what the parser skips: when unsure, they count it.
+// to parse and then overflow the stack. This is a coarse check for text no one would write, not a model of the
+// parser: it looks only at line starts and long literal runs, so it can't misfire on a formula. Spaced nesting like
+// `[a [a [a ` gets past it, and renders slowly. Anything that makes the parser throw lands in the error boundary.
 
+const MAX_BLOCK_CHARS = 50_000;
 const MAX_CONTAINER_DEPTH = 32;
 const MAX_INDENT = 200;
-const MAX_INLINE_DEPTH = 32;
-const MAX_BLOCK_CHARS = 50_000;
-const MAX_FORMULA_CHARS = 5000;
-// Openers with no partner don't nest, but the parser still has to keep them all in play.
-const MAX_OPEN_BRACKETS = 1000;
+const BRACKET_RUN = /\[{33}/;
+// Far beyond any rule or blank to fill in, which are ordinary at 40 or so.
+const DELIMITER_RUN = /\*{1001}|_{1001}|~{1001}/;
 const LINE_CONTAINERS = /^[ \t]*(?:(?:>|[-*+](?=[ \t])|\d{1,9}[.)](?=[ \t]))[ \t]*)+/;
 const CONTAINER_MARKER = />|[-*+]|\d{1,9}[.)]/g;
-const LONG_DELIMITER_RUN = new RegExp(`[*_~]{${MAX_INLINE_DEPTH + 1},}`, "g");
-// What can swallow a backtick or dollar before the parser sees it, so that a span found here isn't one there:
-// inline HTML, an autolink, a link's destination or title, or a reference's label.
-const SWALLOWS_DELIMITERS = /<|\][([][^\]]*[`$]/;
 
 export type BlockSection = { kind: "prose" | "math"; text: string } | { kind: "code"; text: string; code: string };
 
-/**
- * Cuts a block at the fences that are certain to be fences. A definition can run across lines and raw HTML across
- * fences, either of which would make a fence here plain text there, and everything after it live markdown, so
- * from the first line that might start one the rest counts as prose. So does a fence that might be in a list item.
- */
+/** Cuts a block at its unindented fences and `$$` blocks, so plain-text fallback can keep code in its box. */
 export function blockSections(block: string): BlockSection[] {
   const sections: BlockSection[] = [];
   let start = 0;
   let bodyStart = 0;
   let closes: ((line: string) => boolean) | undefined;
-  let certain = true;
   const close = (end: number, bodyEnd: number) => {
     const text = block.slice(start, end);
     sections.push(block[start] === "$" ? { kind: "math", text } : { kind: "code", text, code: block.slice(bodyStart, bodyEnd) });
@@ -287,17 +278,13 @@ export function blockSections(block: string): BlockSection[] {
   for (const line of linesOf(block)) {
     if (closes) {
       if (closes(line.text)) close(line.next, line.start);
-    } else if (certain) {
-      if (/^[[<]/.test(line.text.replace(LINE_CONTAINERS, "").trimStart())) {
-        certain = false;
-      } else {
-        const opens = /^\s/.test(line.text) ? undefined : opensBlock(line.text);
-        if (opens) {
-          if (line.start > start) sections.push({ kind: "prose", text: block.slice(start, line.start) });
-          start = line.start;
-          bodyStart = line.next;
-          closes = opens;
-        }
+    } else {
+      const opens = /^\s/.test(line.text) ? undefined : opensBlock(line.text);
+      if (opens) {
+        if (line.start > start) sections.push({ kind: "prose", text: block.slice(start, line.start) });
+        start = line.start;
+        bodyStart = line.next;
+        closes = opens;
       }
     }
   }
@@ -306,132 +293,20 @@ export function blockSections(block: string): BlockSection[] {
   return sections;
 }
 
-/** Whether a block is nested too deeply, or is too long, to parse without freezing the page. */
+/** Whether a block is too long or too deeply nested to hand to the parser. */
 export function isTooDeep(block: string): boolean {
   if (block.length > MAX_BLOCK_CHARS) return true;
-  return blockSections(block).some((section) => (section.kind === "math" ? section.text.length > MAX_FORMULA_CHARS : section.kind === "prose" && isProseTooDeep(section.text)));
+  // A definition or raw HTML can make a fence plain text to the parser, so nothing in the block is exempt as code.
+  if (DEFINITION.test(block) || RAW_HTML.test(block)) return isProseTooDeep(block);
+  return blockSections(block).some((section) => section.kind === "prose" && isProseTooDeep(section.text));
 }
 
 function isProseTooDeep(prose: string): boolean {
-  // Inline markup can't cross a blank line, so what comes after one starts again from no nesting.
-  let inline: string[] = [];
   for (const { text: line } of linesOf(prose)) {
-    if (line.trim() === "") {
-      if (isInlineTooDeep(inline)) return true;
-      inline = [];
-      continue;
-    }
-    const indent = /^[ \t]*/.exec(line)![0].length;
-    if (indent > MAX_INDENT) return true;
+    if (BRACKET_RUN.test(line) || DELIMITER_RUN.test(line)) return true;
+    if (/^[ \t]*/.exec(line)![0].length > MAX_INDENT) return true;
     const containers = LINE_CONTAINERS.exec(line)?.[0];
     if (containers && (containers.match(CONTAINER_MARKER)?.length ?? 0) > MAX_CONTAINER_DEPTH) return true;
-    inline.push(line);
-  }
-  return isInlineTooDeep(inline);
-}
-
-function isInlineTooDeep(lines: string[]): boolean {
-  const raw = lines.join("\n");
-  const visible = SWALLOWS_DELIMITERS.test(raw) ? [undefined] : lines.map(withoutSpans);
-  if (visible.includes(undefined)) return bracketsCouldNest(raw) || delimitersNest(raw);
-  const text = visible.join("\n");
-  return bracketsNest(text) || delimitersNest(text);
-}
-
-/**
- * A line without its code spans and formulas, or undefined if the line's spans aren't all certain: one left open
- * might continue on the next line, where it isn't safe to follow, and a `|` may be a table cell's edge instead.
- */
-function withoutSpans(line: string): string | undefined {
-  let visible = "";
-  let i = 0;
-  while (i < line.length) {
-    const char = line[i]!;
-    if (char === "\\") {
-      visible += line.slice(i, i + 2);
-      i += 2;
-    } else if (char === "`" || char === "$") {
-      if (char === "$" && line[i + 1] === "$") return undefined;
-      const end = char === "`" ? codeSpanEnd(line, i) : closingDollarEnd(line, i);
-      if (end === undefined) {
-        if (char === "`" || !line.includes("$", i + 1)) return undefined;
-        visible += char;
-        i += 1;
-      } else {
-        if (end - i > MAX_FORMULA_CHARS || line.slice(i, end).includes("|")) return undefined;
-        i = end;
-      }
-    } else {
-      visible += char;
-      i += 1;
-    }
-  }
-  return visible;
-}
-
-function closingDollarEnd(line: string, open: number): number | undefined {
-  const close = closingDollar(line, open);
-  return close === undefined ? undefined : close + 1;
-}
-
-function codeSpanEnd(line: string, open: number): number | undefined {
-  let contentStart = open;
-  while (line[contentStart] === "`") contentStart += 1;
-  const size = contentStart - open;
-  let run = line.indexOf("`", contentStart);
-  while (run !== -1) {
-    let runEnd = run;
-    while (line[runEnd] === "`") runEnd += 1;
-    if (runEnd - run === size) return runEnd;
-    run = line.indexOf("`", runEnd);
-  }
-  return undefined;
-}
-
-/** Nesting of brackets that have partners: half-open intervals like `[0,1)` don't nest however many there are. */
-function bracketsNest(text: string): boolean {
-  const deepestInside: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-    if (char === "\\") {
-      i += 1;
-    } else if (char === "[") {
-      if (deepestInside.push(0) > MAX_OPEN_BRACKETS) return true;
-    } else if (char === "]" && deepestInside.length > 0) {
-      const depth = deepestInside.pop()! + 1;
-      if (depth > MAX_INLINE_DEPTH) return true;
-      const parent = deepestInside.length - 1;
-      if (parent >= 0) deepestInside[parent] = Math.max(deepestInside[parent]!, depth);
-    }
-  }
-  return false;
-}
-
-/** The most they could nest whichever of them turn out to be real: enough openers followed by enough closers. */
-function bracketsCouldNest(text: string): boolean {
-  let openers = 0;
-  let closers = 0;
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\\") i += 1;
-    else if (text[i] === "]") closers += 1;
-  }
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\\") i += 1;
-    else if (text[i] === "[") openers += 1;
-    else if (text[i] === "]") closers -= 1;
-    if (openers > MAX_OPEN_BRACKETS || Math.min(openers, closers) > MAX_INLINE_DEPTH) return true;
-  }
-  return false;
-}
-
-/** A long run only nests with another: one that can open, then one that can close. A rule or a blank to fill in can't. */
-function delimitersNest(text: string): boolean {
-  let canClose = false;
-  for (const run of text.matchAll(LONG_DELIMITER_RUN)) {
-    const before = text[run.index - 1];
-    const after = text[run.index + run[0].length];
-    if (canClose && before !== undefined && !isSpace(before)) return true;
-    canClose ||= after !== undefined && !isSpace(after);
   }
   return false;
 }

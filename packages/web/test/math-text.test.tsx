@@ -368,6 +368,30 @@ describe("MathText guard on ordinary content", () => {
     expect(c.querySelector(".math-text-literal")).toBeNull();
   });
 
+  it("renders every formula in a paragraph with an inequality and closed intervals", () => {
+    const c = block("$a<b$ " + "$[0,1]$ ".repeat(66));
+    expect(formulas(c)).toHaveLength(67);
+    expect(c.querySelector(".math-text-literal")).toBeNull();
+  });
+
+  it("renders a table of inequalities and closed intervals", () => {
+    const body = Array.from({ length: 66 }, (_, i) => `| $a_{${i}}<b$ | $[${i},${i + 1}]$ |`).join("\n");
+    const c = block(`| a | b |\n|---|---|\n${body}`);
+    expect(c.querySelectorAll("tbody tr")).toHaveLength(66);
+    expect(formulas(c)).toHaveLength(132);
+  });
+
+  it("renders inline code with brackets after a `<`", () => {
+    const c = block("When a < b, see " + "`x[0]` ".repeat(66));
+    expect(c.querySelectorAll("code")).toHaveLength(66);
+    expect(c.querySelector("code")?.textContent).toBe("x[0]");
+  });
+
+  it("renders half-open intervals of both kinds in one paragraph", () => {
+    const c = block("$[a,b)$ ".repeat(33) + "$(a,b]$ ".repeat(33));
+    expect(formulas(c)).toHaveLength(66);
+  });
+
   it.each([
     ["closed intervals", Array.from({ length: 80 }, (_, i) => `| $[${i},${i + 1}]$ | $[${i},${i}]$ |`).join("\n")],
     ["half-open intervals without dollars", Array.from({ length: 80 }, (_, i) => `| [${i},${i + 1}) | ${i} |`).join("\n")],
@@ -432,20 +456,14 @@ describe("MathText guard on ordinary content", () => {
 });
 
 describe("MathText guard on hostile content", () => {
-  const hostile = [">".repeat(40) + " x", "- ".repeat(40) + "x", " ".repeat(300) + "x", nested, "*".repeat(40) + "x" + "*".repeat(40)];
+  const hostile = [">".repeat(40) + " x", "- ".repeat(40) + "x", " ".repeat(300) + "x", nested];
 
   it.each(hostile)("doesn't let code excuse what follows a closed fence: %s", (text) => {
     expect(isTooDeep(`\`\`\`\ncode\n\`\`\`\n${text}`)).toBe(true);
     expect(isTooDeep(`$$\nx\n$$\n${text}`)).toBe(true);
   });
 
-  // In each of these a fence or `$$` looks open, but the parser reads the line as something else, so what follows is live.
   it.each([
-    ["a definition's destination", "[a]:\n```\n"],
-    ["a definition's title", '[a]: u "\n```\n"\n'],
-    ["a multiline label", "[a\n```\n]: u\n"],
-    ["an HTML block", "<div>\n```\n\n"],
-    ["an HTML comment", "<!--\n```\n-->\n"],
     ["a list item", "- a\n  ```\nb\n\n"],
     ["a blockquote's list item", "> - a\n  ```\n\n"],
     ["indented code", "    ```\n\n"],
@@ -456,31 +474,23 @@ describe("MathText guard on hostile content", () => {
     for (const text of hostile) expect(isTooDeep(prefix + text)).toBe(true);
   });
 
-  // In each of these a closing bracket looks like markup, or an opening one looks like code, but the parser disagrees.
+  it.each(["`", "$"])("counts a bracket run after an unterminated %s", (prefix) => {
+    expect(isTooDeep(prefix + nested)).toBe(true);
+  });
+
+  // The parser reads each of these fences as something else, so what follows is live.
   it.each([
-    ["an unterminated backtick", "`" + nested],
-    ["an unterminated dollar", "$" + nested],
-    ["closers hidden in code spans", "[ `]` ".repeat(40) + "x" + "](u)".repeat(40)],
-    ["closers hidden in formulas", "[ $]$ ".repeat(40) + "x" + "](u)".repeat(40)],
-    ["closers hidden in multiline code spans", "[ `\n]`\n".repeat(40) + "x" + "](u)".repeat(40)],
-    ["openers behind a dollar in a destination", "[a]($)[$ ".repeat(40) + "x" + "](u)".repeat(40)],
-    ["openers behind a dollar in a title", '[a](u ")$")[$ '.repeat(40) + "x" + "](u)".repeat(40)],
-    ["a code span ended by inline HTML", '<a b="`">' + nested + '<a b="`">'],
-    ["a code span ended by a destination", "[a](`)" + nested + "[a](`)"],
-    ["a code span across table cells", "| ` | " + bare + " | ` |\n|---|---|---|"],
-    ["a formula across table cells", "| $a | " + bare + " | b$ |\n|---|---|---|"],
-    ["a code span across a list item", "`a\n- " + nested + "\n- `"],
-    ["a dollar parity trick across a list item", "`\n- " + "[ `]` ".repeat(40) + "x" + "](u)".repeat(40)],
-  ])("isn't fooled by %s", (_name, text) => {
-    expect(isTooDeep(text)).toBe(true);
+    ["a definition's destination", "[a]:\n```\n"],
+    ["a definition's title", '[a]: u "\n```\n"\n'],
+    ["a multiline label", "[a\n```\n]: u\n"],
+    ["an HTML block", "<div>\n```\n\n"],
+    ["an HTML comment", "<!--\n```\n-->\n"],
+  ])("doesn't exempt the fence in %s", (_name, prefix) => {
+    for (const text of hostile) expect(isTooDeep(prefix + text)).toBe(true);
   });
 
-  it.each([`$$\n${"x ".repeat(3000)}`, `$$\n${"x ".repeat(3000)}\n$$`, `$${"[".repeat(3000)}x${"]".repeat(3000)}$`])("doesn't typeset a formula this long", (text) => {
-    expect(isTooDeep(text)).toBe(true);
-  });
-
-  it.each(["[".repeat(5000), "[x ".repeat(5000), "`" + "[x ".repeat(5000)])("stops a flood of brackets with no partners", (text) => {
-    expect(isTooDeep(text)).toBe(true);
+  it.each(["[a ".repeat(5000) + "x" + "](u)".repeat(5000), "]".repeat(49_000), "[a](u) ".repeat(3000), "*a ".repeat(8000)])("leaves what has no long literal run to the parser: %#", (text) => {
+    expect(isTooDeep(text)).toBe(false);
   });
 
   it.each([
@@ -589,6 +599,9 @@ describe("MathText failure fallback", () => {
     expect(container.textContent).toBe("boom text");
     rerender(<Mocked text="fine" />);
     expect(container.querySelector("em")?.textContent).toBe("fine");
+    rerender(<Mocked text={"boom\n```\ncode\n```"} />);
+    expect(container.querySelector("pre code")?.textContent).toBe("code\n");
+    expect(container.querySelector("p.math-text-literal")?.textContent).toBe("boom\n");
     vi.doUnmock("react-markdown");
   });
 });

@@ -112,6 +112,8 @@ const SCRIPTS: Record<string, Step[]> = {
   ],
   // Too deep to parse in reasonable time, with a normal paragraph after it.
   deepnesting: [{ text: `${">".repeat(2000)} deep\n\n**still fine**`, stream: true }],
+  // An inequality with many closed intervals, which is ordinary discrete maths.
+  intervals: [{ text: `$a<b$ ${"$[0,1]$ ".repeat(66)}` }],
   teach: [
     { tool: "show_algorithm_trace", input: trace },
     { tool: "ask_multiple_choice", input: check },

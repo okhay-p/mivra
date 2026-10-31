@@ -199,6 +199,13 @@ test.describe("markdown and maths", () => {
     await expect(reply.locator(".katex")).toHaveCount(100, { timeout: 60_000 });
   });
 
+  test("a paragraph of intervals after an inequality renders every formula", async ({ page }) => {
+    await send(page, "intervals");
+    const reply = page.locator("main div.math-text");
+    await expect(reply.locator(".katex")).toHaveCount(67);
+    await expect(reply.locator(".math-text-literal")).toHaveCount(0);
+  });
+
   test("a reply nested too deeply shows as text without blocking the page", async ({ page }) => {
     await send(page, "deepnesting");
     const reply = page.locator("main div.math-text");

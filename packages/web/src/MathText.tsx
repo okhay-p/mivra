@@ -108,6 +108,21 @@ const components: Components = {
   h5: "h6",
 };
 
+/** A block as plain text. Code keeps its box, so it still scrolls instead of wrapping. */
+function PlainBlock({ text }: { text: string }) {
+  return blockSections(text).map((section, i) =>
+    section.kind === "code" ? (
+      <pre key={i}>
+        <code>{section.code}</code>
+      </pre>
+    ) : (
+      <p key={i} className="math-text-literal">
+        {section.text}
+      </p>
+    ),
+  );
+}
+
 /** Model text must never take the page down: if rendering it fails anyway, show it as plain text. */
 class PlainTextOnError extends Component<{ text: string; children: ReactNode }, { failedText?: string }> {
   override state: { failedText?: string } = {};
@@ -115,25 +130,13 @@ class PlainTextOnError extends Component<{ text: string; children: ReactNode }, 
     this.setState({ failedText: this.props.text });
   }
   override render() {
-    return this.state.failedText === this.props.text ? <p className="math-text-literal">{this.props.text}</p> : this.props.children;
+    return this.state.failedText === this.props.text ? <PlainBlock text={this.props.text} /> : this.props.children;
   }
 }
 
 /** Memoised on its text, so only the block a delta touches is parsed again. */
 const Block = memo(function Block({ text }: { text: string }) {
-  if (isTooDeep(text)) {
-    return blockSections(text).map((section, i) =>
-      section.kind === "code" ? (
-        <pre key={i}>
-          <code>{section.code}</code>
-        </pre>
-      ) : (
-        <p key={i} className="math-text-literal">
-          {section.text}
-        </p>
-      ),
-    );
-  }
+  if (isTooDeep(text)) return <PlainBlock text={text} />;
   return (
     <PlainTextOnError text={text}>
       <Markdown remarkPlugins={remarkPlugins} urlTransform={safeUrl} components={components}>
