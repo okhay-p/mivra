@@ -2,6 +2,8 @@ import { ArtifactView, type ArtifactKind } from "@mivra/protocol";
 import type { ComponentType } from "react";
 import { AlgorithmTrace } from "./AlgorithmTrace.js";
 import { MultipleChoice } from "./MultipleChoice.js";
+import { TableArtifact } from "./TableArtifact.js";
+import { WorkedSteps } from "./WorkedSteps.js";
 
 export interface ArtifactProps<K extends ArtifactKind> {
   view: Extract<ArtifactView, { kind: K }>;
@@ -17,6 +19,8 @@ export interface ArtifactProps<K extends ArtifactKind> {
 const renderers: { [K in ArtifactKind]: ComponentType<ArtifactProps<K>> } = {
   algorithm_trace: AlgorithmTrace,
   multiple_choice: MultipleChoice,
+  table: TableArtifact,
+  worked_steps: WorkedSteps,
 };
 
 /**

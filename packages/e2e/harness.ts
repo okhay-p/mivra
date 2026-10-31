@@ -102,7 +102,48 @@ const literalCheck = {
   explanation: "2*3*4 is $24$, and 234 isn't.",
 };
 
+const truthTable = {
+  title: "Truth table for $p \\land q$",
+  columns: ["$p$", "$q$", "$p \\land q$"],
+  rows: [
+    [true, true, ""],
+    [true, false, ""],
+    [false, true, ""],
+    [false, false, ""],
+  ],
+  steps: [
+    { explanation: "Both inputs are true.", highlight: [{ row: 0 }], cells: [{ row: 0, column: 2, value: true }] },
+    { explanation: "One input is false.", highlight: [{ row: 1 }], cells: [{ row: 1, column: 2, value: false }] },
+    { explanation: "The rest are false too.", highlight: [{ column: 2, tone: "done" as const }], cells: [{ row: 2, column: 2, value: false }, { row: 3, column: 2, value: false }] },
+  ],
+};
+// The most columns the table schema allows, with wide content.
+const wideTable = {
+  title: "A wide relation matrix",
+  columns: Array.from({ length: 16 }, (_, i) => `$x_{${i}} \\lor y_{${i}}$`),
+  rowHeaders: ["$x$", "$y$"],
+  rows: [Array.from({ length: 16 }, () => true), Array.from({ length: 16 }, () => longValue)],
+};
+const proof = {
+  title: "Sum of the first $n$ integers",
+  goal: "Show $\\sum_{i=1}^n i = n(n+1)/2$",
+  steps: [
+    { label: "Base case", statement: "$1 = 1(1+1)/2$", justification: "by direct calculation" },
+    { label: "Inductive hypothesis", statement: "Assume $\\sum_{i=1}^k i = k(k+1)/2$", justification: "for some $k \\ge 1$" },
+    { label: "Inductive step", statement: `$\\displaystyle \\sum_{i=1}^{k+1} i = \\frac{k(k+1)}{2} + k + 1 = \\frac{(k+1)(k+2)}{2}$`, justification: "by the inductive hypothesis" },
+  ],
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  truthtable: [
+    { tool: "show_table", input: truthTable },
+    { tool: "show_table", input: wideTable },
+    { text: "Step through the table." },
+  ],
+  workedproof: [
+    { tool: "show_worked_steps", input: proof },
+    { text: "Reveal each step." },
+  ],
   literals: [
     { tool: "show_algorithm_trace", input: literalTrace },
     { tool: "ask_multiple_choice", input: literalCheck },

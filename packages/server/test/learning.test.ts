@@ -1,6 +1,7 @@
 import type { UIMessage } from "ai";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
+import { ArtifactView } from "@mivra/protocol";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
@@ -511,6 +512,57 @@ describe("algorithm_trace through the agent", () => {
     expect(sse).toContain('"kind":"algorithm_trace"');
     expect(sse).toContain("First window sums to 4.");
     expect(await messagesJson(app, sessionId)).toContain("First window sums to 4.");
+  });
+});
+
+describe("table and worked_steps through the agent", () => {
+  const table = {
+    title: "Truth table",
+    columns: ["p", "not p"],
+    rows: [[true, ""], [false, ""]],
+    steps: [{ explanation: "Negate the first row.", highlight: [{ row: 0 }], cells: [{ row: 0, column: 1, value: false }] }],
+  };
+  const worked = {
+    title: "A small proof",
+    goal: "Show $1 + 1 = 2$",
+    steps: [{ label: "Only step", statement: "$1 + 1 = 2$", justification: "by the definition of 2" }],
+  };
+
+  it.each([
+    ["show_table", "table", table],
+    ["show_worked_steps", "worked_steps", worked],
+  ])("%s stores the spec and streams and reloads a view that passes the strict schema", async (tool, kind, spec) => {
+    const { app, db } = setup([{ toolCall: { name: tool, input: spec } }, { text: "Have a look." }]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "show me");
+    expect(sse).toContain(`"kind":"${kind}"`);
+    expect(sse).not.toContain(tool); // Raw tool calls never reach a client.
+    expect(db.select().from(artifacts).get()).toMatchObject({ kind, version: 1, spec });
+
+    const messages = JSON.parse(await messagesJson(app, sessionId)) as { messages: UIMessage[] } | UIMessage[];
+    const list = Array.isArray(messages) ? messages : messages.messages;
+    const part = list.flatMap((m) => m.parts).find((p) => p.type === "data-artifact") as { data: unknown };
+    expect(ArtifactView.parse(part.data)).toMatchObject({ kind, version: 1, spec });
+    expect(await messagesJson(app, sessionId)).not.toContain(tool);
+  });
+
+  it("stores nothing for a table whose rows don't match its columns", async () => {
+    const { app, db } = setup([{ toolCall: { name: "show_table", input: { ...table, rows: [[true]] } } }, { text: "Let me fix that." }]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "show me");
+    expect(db.select().from(artifacts).all()).toEqual([]);
+    expect(sse).not.toContain("data-artifact");
+  });
+
+  it("offers both tools to the model and tells it when to use them", async () => {
+    const { app, db, model } = setup([{ text: "Hello." }]);
+    await turn(app, db, await newSession(app), "hi");
+    const { tools, prompt } = model.doStreamCalls[0]!;
+    const described = Object.fromEntries((tools ?? []).map((t) => [t.name, "description" in t ? t.description : ""]));
+    expect(described.show_table).toMatch(/truth table/i);
+    expect(described.show_table).toMatch(/relation matri/i);
+    expect(described.show_worked_steps).toMatch(/proof/i);
+    expect(JSON.stringify(prompt)).toContain("show_worked_steps for proofs");
   });
 });
 

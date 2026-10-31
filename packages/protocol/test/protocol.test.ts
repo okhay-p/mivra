@@ -4,6 +4,8 @@ import {
   AlgorithmTraceSpec,
   ArtifactView,
   MultipleChoiceSpec,
+  TableSpec,
+  WorkedStepsSpec,
   artifactKinds,
   gradeMultipleChoice,
   kindForTool,
@@ -226,5 +228,110 @@ describe("ArtifactView", () => {
       },
     };
     expect(ArtifactView.safeParse(view).success).toBe(true);
+  });
+});
+
+describe("table", () => {
+  const truthTable = {
+    title: "Truth table for $p \\land q$",
+    columns: ["$p$", "$q$", "$p \\land q$"],
+    rows: [
+      [true, true, ""],
+      [true, false, ""],
+    ],
+    steps: [
+      { explanation: "Both true.", highlight: [{ row: 0 }, { column: 2, tone: "done" }, { row: 0, column: 2, tone: "muted" }], cells: [{ row: 0, column: 2, value: true }] },
+      { explanation: "One false.", cells: [{ row: 1, column: 2, value: false }] },
+    ],
+  };
+  const issuePaths = (input: unknown) => TableSpec.safeParse(input).error?.issues.map((issue) => issue.path.join("."));
+
+  it("accepts a stepped truth table and a static matrix with row headers", () => {
+    expect(TableSpec.parse(truthTable)).toEqual(truthTable);
+    const matrix = { title: "R", columns: ["a", "b"], rowHeaders: ["a", "b"], rows: [[1, 0], [0, 1]] };
+    expect(TableSpec.parse(matrix)).toEqual(matrix);
+  });
+
+  it("rejects a row that doesn't match the column count", () => {
+    expect(issuePaths({ ...truthTable, rows: [[true, true, ""], [true, false]] })).toEqual(["rows.1"]);
+  });
+
+  it("rejects the wrong number of row headers", () => {
+    expect(issuePaths({ ...truthTable, rowHeaders: ["only one"] })).toEqual(["rowHeaders"]);
+  });
+
+  it("rejects out-of-range highlights and cell changes at the step they appear in", () => {
+    const steps = [
+      { explanation: "ok", highlight: [{ row: 1, column: 2 }] },
+      { explanation: "bad", highlight: [{ row: 2 }, { column: 3 }], cells: [{ row: 2, column: 0, value: 1 }, { row: 0, column: 3, value: 1 }] },
+    ];
+    expect(issuePaths({ ...truthTable, steps })).toEqual([
+      "steps.1.highlight.0.row",
+      "steps.1.highlight.1.column",
+      "steps.1.cells.0.row",
+      "steps.1.cells.1.column",
+    ]);
+  });
+
+  it("rejects a highlight with neither a row nor a column, and unknown fields", () => {
+    expect(issuePaths({ ...truthTable, steps: [{ explanation: "x", highlight: [{ tone: "done" }] }] })).toEqual(["steps.0.highlight.0"]);
+    expect(TableSpec.safeParse({ ...truthTable, extra: 1 }).success).toBe(false);
+    expect(TableSpec.safeParse({ ...truthTable, steps: [{ explanation: "x", highlight: [{ row: 0, cell: 1 }] }] }).success).toBe(false);
+  });
+
+  it("enforces its limits", () => {
+    const base = { title: "T", columns: ["a"], rows: [[1]] };
+    const of = <T,>(n: number, item: T) => Array.from({ length: n }, () => item);
+    expect(TableSpec.safeParse({ ...base, columns: of(17, "a"), rows: [of(17, 1)] }).success).toBe(false);
+    expect(TableSpec.safeParse({ ...base, columns: of(16, "a"), rows: [of(16, 1)] }).success).toBe(true);
+    expect(TableSpec.safeParse({ ...base, rows: of(65, [1]) }).success).toBe(false);
+    expect(TableSpec.safeParse({ ...base, rows: of(64, [1]) }).success).toBe(true);
+    expect(TableSpec.safeParse({ ...base, steps: [] }).success).toBe(false);
+    expect(TableSpec.safeParse({ ...base, steps: of(101, { explanation: "x" }) }).success).toBe(false);
+    expect(TableSpec.safeParse({ ...base, rows: [["x".repeat(121)]] }).success).toBe(false);
+    expect(TableSpec.safeParse({ ...base, steps: [{ explanation: "x", highlight: of(33, { row: 0 }) }] }).success).toBe(false);
+    expect(TableSpec.safeParse({ ...base, steps: [{ explanation: "x", cells: of(65, { row: 0, column: 0, value: 1 }) }] }).success).toBe(false);
+  });
+
+  it("passes the strict view, which rejects extra fields", () => {
+    const view = { id: "a", createdAt: "2026-10-31T00:00:00.000Z", kind: "table", version: 1, spec: truthTable };
+    expect(ArtifactView.safeParse(view).success).toBe(true);
+    expect(ArtifactView.safeParse({ ...view, latestAttempt: {} }).success).toBe(false);
+  });
+});
+
+describe("worked_steps", () => {
+  const induction = {
+    title: "Sum of the first $n$ integers",
+    goal: "$\\sum_{i=1}^n i = n(n+1)/2$",
+    steps: [
+      { label: "Base case", statement: "$1 = 1(2)/2$", justification: "by calculation" },
+      { statement: "$\\displaystyle \\sum_{i=1}^{k+1} i = k(k+1)/2 + k + 1$", justification: "by the inductive hypothesis" },
+    ],
+  };
+
+  it("accepts an induction proof, with the goal and labels optional", () => {
+    expect(WorkedStepsSpec.parse(induction)).toEqual(induction);
+    expect(WorkedStepsSpec.safeParse({ title: "T", steps: [{ statement: "s", justification: "j" }] }).success).toBe(true);
+  });
+
+  it("requires a statement and a justification, and rejects unknown fields", () => {
+    expect(WorkedStepsSpec.safeParse({ title: "T", steps: [{ statement: "s" }] }).success).toBe(false);
+    expect(WorkedStepsSpec.safeParse({ title: "T", steps: [{ justification: "j" }] }).success).toBe(false);
+    expect(WorkedStepsSpec.safeParse({ title: "T", steps: [{ statement: "s", justification: "j", extra: 1 }] }).success).toBe(false);
+  });
+
+  it("enforces its limits", () => {
+    const step = { statement: "s", justification: "j" };
+    expect(WorkedStepsSpec.safeParse({ title: "T", steps: [] }).success).toBe(false);
+    expect(WorkedStepsSpec.safeParse({ title: "T", steps: Array.from({ length: 51 }, () => step) }).success).toBe(false);
+    expect(WorkedStepsSpec.safeParse({ title: "T", steps: [{ ...step, statement: "x".repeat(1001) }] }).success).toBe(false);
+    expect(WorkedStepsSpec.safeParse({ title: "T", steps: [{ ...step, justification: "x".repeat(501) }] }).success).toBe(false);
+  });
+
+  it("passes the strict view", () => {
+    const view = { id: "a", createdAt: "2026-10-31T00:00:00.000Z", kind: "worked_steps", version: 1, spec: induction };
+    expect(ArtifactView.safeParse(view).success).toBe(true);
+    expect(ArtifactView.safeParse({ ...view, extra: 1 }).success).toBe(false);
   });
 });

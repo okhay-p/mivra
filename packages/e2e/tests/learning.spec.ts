@@ -164,6 +164,75 @@ test.describe("learning flow", () => {
     await expect(check(page).getByText("Correct!")).toBeVisible();
   });
 
+  test("a truth table steps with persistent cells, and a wide table scrolls in its own box at 320px", async ({ page }) => {
+    await startSession(page);
+    await send(page, `truthtable ${Date.now()}`);
+    await expect(page.getByText("Step through the table.")).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 800 });
+
+    const table = page.getByRole("region", { name: /^Table: Truth table/ });
+    const cells = table.getByTestId("table-cell");
+    const texts = () => cells.evaluateAll((all) => all.map((cell) => cell.textContent));
+    // p, q and the result column, row by row.
+    await expect.poll(texts).toEqual(["T", "T", "T", "T", "F", "", "F", "T", "", "F", "F", ""]);
+    await expect(table.getByRole("columnheader")).toHaveCount(3);
+    await expect(cells.nth(0)).toHaveAttribute("data-tone", "active");
+    await expect(table.locator(".katex").first()).toBeVisible();
+
+    const next = table.getByRole("button", { name: "Next" });
+    await next.click();
+    await expect(table.getByText("One input is false.")).toBeVisible();
+    await expect.poll(texts).toEqual(["T", "T", "T", "T", "F", "F", "F", "T", "", "F", "F", ""]);
+    // The first step's highlight has gone; its cell hasn't.
+    await expect(cells.nth(0)).not.toHaveAttribute("data-tone");
+    await expect(cells.nth(3)).toHaveAttribute("data-tone", "active");
+
+    // Stepping to the end keeps the keyboard's place.
+    await next.click();
+    await expect(next).toHaveAttribute("aria-disabled", "true");
+    await expect(next).toBeFocused();
+    await expect.poll(texts).toEqual(["T", "T", "T", "T", "F", "F", "F", "T", "F", "F", "F", "F"]);
+    await page.keyboard.press("ArrowLeft");
+    await expect(table.getByText("One input is false.")).toBeVisible();
+
+    const wide = page.getByRole("region", { name: /wide relation matrix/ });
+    await wide.scrollIntoViewIfNeeded();
+    await expect(wide.getByRole("rowheader")).toHaveCount(2);
+    const fit = await wide.getByTestId("table-scroll").evaluate((box) => ({
+      overflows: box.scrollWidth > box.clientWidth,
+      right: box.getBoundingClientRect().right,
+      page: document.documentElement.scrollWidth,
+    }));
+    expect(fit.overflows).toBe(true);
+    expect(fit.right).toBeLessThanOrEqual(320);
+    expect(fit.page).toBeLessThanOrEqual(320);
+  });
+
+  test("worked steps reveal cumulatively, and show all reveals the rest", async ({ page }) => {
+    await startSession(page);
+    await send(page, `workedproof ${Date.now()}`);
+    await expect(page.getByText("Reveal each step.")).toBeVisible();
+
+    const worked = page.getByRole("region", { name: /^Worked steps/ });
+    const steps = worked.getByTestId("worked-step");
+    await expect(steps).toHaveCount(1);
+    await expect(steps.first()).toContainText("Base case");
+    await expect(worked.getByText("Inductive step")).toHaveCount(0);
+
+    await worked.getByRole("button", { name: "Next" }).click();
+    await expect(steps).toHaveCount(2);
+    await expect(steps.first()).toContainText("by direct calculation");
+
+    const showAll = worked.getByRole("button", { name: "Show all" });
+    await showAll.click();
+    await expect(steps).toHaveCount(3);
+    await expect(steps.last().locator(".katex").first()).toBeVisible();
+    const restart = worked.getByRole("button", { name: "Start over" });
+    await expect(restart).toBeFocused();
+    await restart.click();
+    await expect(steps).toHaveCount(1);
+  });
+
   test("shows a safe error when the model fails, and the session still works", async ({ page }) => {
     await startSession(page);
     await send(page, "fail now");
