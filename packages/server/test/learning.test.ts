@@ -1,13 +1,15 @@
 import type { UIMessage } from "ai";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
 import { artifacts, attempts, runs } from "../src/db/schema.js";
 import { coreLearning } from "../src/plugins/core-learning.js";
 import { createCapabilityRegistry, type Plugin } from "../src/runtime/capabilities.js";
+import { deriveConceptState } from "../src/runtime/learner-context.js";
+import { createTurnRunner } from "../src/runtime/turn-runner.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
 const TOKEN = "test-token";
@@ -179,6 +181,70 @@ describe("multiple_choice through the agent", () => {
     const prompt = JSON.stringify(model.doStreamCalls[3]?.prompt);
     expect(prompt).toContain("incorrect");
     expect(prompt).toContain('"learnerResult":"incorrect","learnerChose":{"optionIndex":2,"text":"16"}');
+  });
+
+  it("tells a new session what the learner practised in earlier ones, without the answer key", async () => {
+    const { app, db, model } = setup([
+      { text: "Before any evidence." },
+      { toolCall: { name: "ask_multiple_choice", input: check } },
+      { text: "Try it." },
+      { text: "Welcome back." },
+    ]);
+    const first = await newSession(app);
+    await turn(app, db, first, "hello");
+    expect(JSON.stringify(model.doStreamCalls[0]?.prompt)).not.toContain("learner_concepts");
+
+    await turn(app, db, first, "quiz me");
+    await answer(app, db.select().from(artifacts).get()!.id, { answer: { optionIndex: 2 } });
+
+    const sse = await turn(app, db, await newSession(app), "what should I work on?");
+    const prompt = JSON.stringify(model.doStreamCalls[3]?.prompt);
+    expect(prompt).toContain("binary search worst case");
+    expect(prompt).toContain('\\"attempts\\":1,\\"correct\\":0,\\"lastResult\\":\\"incorrect\\"');
+    // The new session's own messages carry no trace of the old conversation.
+    expect(prompt).not.toContain("quiz me");
+    expect(prompt).not.toContain("SECRET");
+    expect(sse).not.toContain("binary search worst case");
+  });
+
+  it("takes the latest result from insertion order when timestamps tie, and limits the evidence", () => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 31), toFake: ["Date"] });
+    try {
+      const db = openDb(":memory:");
+      const store = createSessionStore(db);
+      const session = store.createSession();
+      const runId = store.startRun(session, userMessage("hi"));
+      const record = (correct: boolean, toolCallId: string) => {
+        const artifact = store.createArtifact({ sessionId: session.id, runId, toolCallId, kind: "multiple_choice", version: 1, spec: check });
+        store.createAttempt({ artifactId: artifact.id, sessionId: session.id, answer: {}, grade: {}, correct, concept: "ties" });
+      };
+      record(false, "a");
+      record(true, "b");
+      record(false, "c");
+      record(true, "d");
+
+      expect(deriveConceptState(store.listRecentEvidence(1000))).toMatchObject([{ attempts: 4, correct: 2, lastResult: "correct" }]);
+      // Beyond the window, older attempts stop counting.
+      expect(deriveConceptState(store.listRecentEvidence(3))).toMatchObject([{ attempts: 3, correct: 2, lastResult: "correct" }]);
+
+      // The index happens to return ties in this order; without it, only the explicit tie-breaker does.
+      db.run(sql`DROP INDEX attempts_created_idx`);
+      expect(deriveConceptState(store.listRecentEvidence(1000))).toMatchObject([{ lastResult: "correct" }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases the run if the learner's record can't be read", async () => {
+    const db = openDb(":memory:");
+    const store = createSessionStore(db);
+    const session = store.createSession();
+    const broken = { ...store, listRecentEvidence: () => { throw new Error("disk error"); } };
+    const runner = createTurnRunner({ store: broken, registry: createCapabilityRegistry([coreLearning]), model: () => scriptedModel([]) });
+
+    const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hi") });
+    expect(result).toMatchObject({ ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } });
+    expect(db.select().from(runs).get()).toMatchObject({ status: "failed", error: expect.stringContaining("disk error") });
   });
 
   it("rejects attempts on unknown artifacts, non-checks and discarded checks", async () => {

@@ -35,10 +35,13 @@ describe("TurnRunner, used without HTTP", () => {
     const session = store.createSession();
     const llm = mockModel();
     // Stands in for memory: adds a recalled fact ahead of the conversation.
-    const assembleContext = vi.fn(async (conversation: UIMessage[]) => [
-      { role: "user" as const, content: "RECALLED: learner already knows two pointers" },
-      ...(await convertToModelMessages(conversation)),
-    ]);
+    const assembleContext = vi.fn(async (conversation: UIMessage[]) => ({
+      messages: [
+        { role: "user" as const, content: "RECALLED: learner already knows two pointers" },
+        ...(await convertToModelMessages(conversation)),
+      ],
+      instructions: "SUPPLEMENT: learner prefers short answers",
+    }));
     const runner = createTurnRunner({ store, registry, model: () => llm, assembleContext });
 
     const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hello") });
@@ -50,6 +53,8 @@ describe("TurnRunner, used without HTTP", () => {
     const prompt = JSON.stringify(llm.doStreamCalls[0]?.prompt);
     expect(prompt).toContain("RECALLED: learner already knows two pointers");
     expect(prompt).toContain("hello");
+    expect(prompt).toContain("SUPPLEMENT: learner prefers short answers");
+    expect(prompt).toContain("You are Mivra");
     await vi.waitFor(() => expect(store.loadMessages(session.id).map((m) => m.role)).toEqual(["user", "assistant"]));
   });
 

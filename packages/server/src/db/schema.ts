@@ -101,5 +101,5 @@ export const attempts = sqliteTable(
     concept: text("concept"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
-  (t) => [uniqueIndex("attempts_one_per_artifact_idx").on(t.artifactId), index("attempts_session_idx").on(t.sessionId, t.createdAt)],
+  (t) => [uniqueIndex("attempts_one_per_artifact_idx").on(t.artifactId), index("attempts_session_idx").on(t.sessionId, t.createdAt), index("attempts_created_idx").on(t.createdAt)],
 );

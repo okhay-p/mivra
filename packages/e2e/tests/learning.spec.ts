@@ -77,6 +77,22 @@ test.describe("learning flow", () => {
     await expect(check(page).getByText("Correct!")).toBeVisible();
   });
 
+  test("a new session knows what was practised in an earlier one", async ({ page }) => {
+    const concept = `concept${Date.now()}`;
+    await startSession(page);
+    await send(page, `recall ${concept}`);
+    await expect(page.getByText("Record: nothing.")).toBeVisible();
+
+    await startSession(page);
+    await send(page, `practise ${concept}`);
+    await option(page, /^None/).click();
+    await expect(check(page).getByText("Not quite.")).toBeVisible();
+
+    await startSession(page);
+    await send(page, `recall ${concept}`);
+    await expect(page.getByText("Record: 1 answered, 0 right, last incorrect.")).toBeVisible();
+  });
+
   test("never sends the answer key before the learner answers", async ({ page }) => {
     await startSession(page);
     const prompt = teachPrompt();

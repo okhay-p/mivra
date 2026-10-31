@@ -14,6 +14,7 @@ import { Conflict, type RunStatus, type SessionStore } from "../store/session-st
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 import { errorText, publicErrorText } from "./errors.js";
+import { MAX_EVIDENCE, learnerContext } from "./learner-context.js";
 
 export const INSTRUCTIONS = [
   "You are Mivra, a patient tutor. Explain concepts step by step, check the learner's understanding, and adapt to what they already know.",
@@ -25,10 +26,22 @@ export const INSTRUCTIONS = [
 const MAX_STEPS = 5;
 
 /**
- * Turns the stored conversation into what the model sees. This is where learner memory will plug in
- * (ADR-007); for now it sends the whole transcript.
+ * Decides what the model sees for a turn (ADR-007, ADR-009). `instructions` holds what Mivra knows about
+ * the learner and is added to the tutor's own, so it isn't mistaken for something the learner said.
+ * A custom assembler replaces all of this, so including the learner's record is up to it.
  */
-export type AssembleContext = (conversation: UIMessage[], context: { sessionId: string }) => Promise<ModelMessage[]>;
+export type AssembleContext = (
+  conversation: UIMessage[],
+  context: { sessionId: string },
+) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
+
+/** The whole transcript, plus the learner's record across sessions. Summaries will plug in here. */
+const defaultAssembleContext =
+  (store: SessionStore): AssembleContext =>
+  async (conversation) => ({
+    messages: await convertToModelMessages(conversation),
+    instructions: learnerContext(store.listRecentEvidence(MAX_EVIDENCE)),
+  });
 
 export interface TurnRunnerDeps {
   store: SessionStore;
@@ -65,7 +78,7 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, assembleContext = (c) => convertToModelMessages(c) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store) }: TurnRunnerDeps) {
   return {
     async startTurn({ sessionId, message: input, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
@@ -97,11 +110,11 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
       // Load history after claiming the run, so it cannot change underneath this turn.
       const conversation = store.loadMessages(sessionId);
       let turnTools: ReturnType<CapabilityRegistry["toolsFor"]>;
-      let modelMessages: ModelMessage[];
+      let assembled: Awaited<ReturnType<AssembleContext>>;
       try {
         // Plugin code runs here, so any failure must still release the run.
         turnTools = registry.toolsFor({ sessionId, runId, store });
-        modelMessages = await assembleContext(withAttemptResults(conversation, registry, store), { sessionId });
+        assembled = await assembleContext(withAttemptResults(conversation, registry, store), { sessionId });
       } catch (error) {
         store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
         // Plugin or context code failed; its message isn't known to be safe to show.
@@ -114,8 +127,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = (c)
       // If the client disconnects or stops, abort the model call; the run is recorded as cancelled.
       const result = streamText({
         model: languageModel,
-        instructions: INSTRUCTIONS,
-        messages: modelMessages,
+        instructions: assembled.instructions ? `${INSTRUCTIONS}\n\n${assembled.instructions}` : INSTRUCTIONS,
+        messages: assembled.messages,
         tools: turnTools.tools,
         stopWhen: stepCountIs(MAX_STEPS),
         abortSignal,
