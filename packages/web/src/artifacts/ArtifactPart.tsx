@@ -3,6 +3,9 @@ import type { ComponentType } from "react";
 import { AlgorithmTrace } from "./AlgorithmTrace.js";
 import { Graph } from "./Graph.js";
 import { MultipleChoice } from "./MultipleChoice.js";
+import { SetDiagram } from "./SetDiagram.js";
+import { TableArtifact } from "./TableArtifact.js";
+import { WorkedSteps } from "./WorkedSteps.js";
 
 export interface ArtifactProps<K extends ArtifactKind> {
   view: Extract<ArtifactView, { kind: K }>;
@@ -19,6 +22,9 @@ const renderers: { [K in ArtifactKind]: ComponentType<ArtifactProps<K>> } = {
   algorithm_trace: AlgorithmTrace,
   graph: Graph,
   multiple_choice: MultipleChoice,
+  set_diagram: SetDiagram,
+  table: TableArtifact,
+  worked_steps: WorkedSteps,
 };
 
 /**

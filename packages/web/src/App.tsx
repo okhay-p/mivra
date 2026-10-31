@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
 import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ThemeToggle } from "./ThemeToggle.js";
@@ -229,6 +230,7 @@ function Chat({
   onReply: () => void;
 }) {
   const [input, setInput] = useState("");
+  const documents = useDocuments(sessionId);
   // Views the learner changed locally (e.g. a graded check), by artifact id. They win over the view in
   // the message part, so the change survives re-renders; a reload gets it from the server instead.
   const [updatedViews, setUpdatedViews] = useState<Record<string, ArtifactView>>({});
@@ -298,7 +300,9 @@ function Chat({
         </div>
       </div>
       <form onSubmit={submit} className="border-t">
+        <DocumentChips documents={documents} />
         <div className="mx-auto flex max-w-3xl gap-2 p-3">
+          <AttachButton documents={documents} />
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}

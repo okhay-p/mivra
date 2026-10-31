@@ -13,6 +13,7 @@ import {
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
+import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
 
@@ -22,6 +23,7 @@ export const INSTRUCTIONS = [
   "When you ask a check, don't reveal or hint at the answer in your reply; the learner answers in the UI. On later turns the check's tool result tells you how they did; respond to it.",
   // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
   "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Artifact questions, options, feedback, explanations, trace and graph titles, and graph node and edge labels render $...$ maths but no markdown and no $$...$$, so write everything else in them as plain text. Concept names, and trace labels, values, pointer names and variables, are plain text with no maths. Write a literal dollar sign as \\$.",
+  "Use show_table for truth tables, relation matrices and other tabular working, and show_worked_steps for proofs, induction and combinatorics working. Their titles, headers, cells, goals, labels, statements, justifications and explanations render $...$ maths but no markdown and no $$...$$; for a large formula in a statement, start it with \\displaystyle.",
 ].join("\n\n");
 
 /** Upper bound on model steps per turn (a step ends at each round of tool calls). */
@@ -30,6 +32,7 @@ const MAX_STEPS = 5;
 /**
  * Decides what the model sees for a turn (ADR-007, ADR-009). `instructions` holds what Mivra knows about
  * the learner and is added to the tutor's own, so it isn't mistaken for something the learner said.
+ * `messages` is only what this turn's model call sees: it can hold context nobody stores or shows.
  * A custom assembler replaces all of this, so including the learner's record is up to it.
  */
 export type AssembleContext = (
@@ -37,13 +40,21 @@ export type AssembleContext = (
   context: { sessionId: string },
 ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
 
-/** The whole transcript, plus the learner's record across sessions. Summaries will plug in here. */
+/** The whole transcript, plus the learner's record across sessions and the session's documents. Summaries will plug in here. */
 const defaultAssembleContext =
   (store: SessionStore, registry: CapabilityRegistry): AssembleContext =>
-  async (conversation) => ({
-    messages: await convertToModelMessages(conversation),
-    instructions: learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
-  });
+  async (conversation, { sessionId }) => {
+    const documents = documentContext(store, sessionId, latestLearnerText(conversation));
+    return {
+      messages: withDocumentExcerpts(await convertToModelMessages(conversation), documents?.excerpts),
+      instructions: [
+        learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
+        documents?.rules,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    };
+  };
 
 export interface TurnRunnerDeps {
   store: SessionStore;

@@ -231,6 +231,16 @@ div.math-text > * + *,
 .math-text :is(th, td) .katex {
   white-space: nowrap;
 }
+/* The box around it scrolls instead (stepper.tsx). */
+.step-scroll .math-text .katex {
+  max-width: none;
+  overflow: visible;
+}
+/* In a 1px box every formula would overflow, and browsers make a scroller a tab stop nobody can see. */
+.sr-only .math-text .katex {
+  max-width: none;
+  overflow: visible;
+}
 .math-text .katex-display {
   margin: 0.6em 0;
   overflow-x: auto;

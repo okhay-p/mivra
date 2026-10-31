@@ -56,6 +56,111 @@ const wideCheck = {
   explanation: "The second one.",
 };
 
+const ALL_REGIONS = [["a"], ["b"], ["c"], ["a", "b"], ["a", "c"], ["b", "c"], ["a", "b", "c"], []];
+const venn = {
+  title: "Small numbers, $A \\cap B$",
+  sets: [
+    { id: "a", label: "$A$" },
+    { id: "b", label: "$B$" },
+    { id: "c", label: "Multiples of 3" },
+  ],
+  universe: "$U$",
+  regions: [
+    { in: ["a"], elements: [1, 2] },
+    { in: ["b"], elements: [4] },
+    { in: ["c"], elements: [9, "$x^2$"] },
+    { in: ["b", "a"], elements: [5, 7] },
+    { in: ["a", "c"], elements: [] },
+    { in: ["b", "c"], elements: [12] },
+    { in: ["a", "b", "c"], elements: [3, 6] },
+    { in: [], elements: [8, 10] },
+  ],
+  steps: [
+    ...ALL_REGIONS.map((region) => ({ explanation: `Only ${JSON.stringify(region)}.`, highlights: [{ in: region }] })),
+    {
+      explanation: "All three tones.",
+      highlights: [{ in: ["a", "b"] }, { in: ["a", "b", "c"], tone: "done" }, { in: [], tone: "muted" }],
+      variables: [{ name: "$|A \\cap B|$", value: 4 }],
+    },
+  ],
+};
+const many = (from: number, count: number) => Array.from({ length: count }, (_, i) => from + i);
+const crowdedVenn = {
+  title: "Too many to fit",
+  sets: [
+    { id: "p", label: "A rather long set label here" },
+    { id: "q", label: "Another long label for $Q$" },
+    { id: "r", label: "And a third long set label" },
+  ],
+  universe: "Integers up to a lot",
+  regions: [
+    { in: ["p"], elements: many(100, 30) },
+    { in: ["p", "q", "r"], elements: many(200, 30) },
+    { in: ["q", "r"], count: 40, elements: [] },
+    { in: [], elements: many(300, 30) },
+  ],
+};
+
+const threeSets = [
+  { id: "a", label: "$A$" },
+  { id: "b", label: "$B$" },
+  { id: "c", label: "$C$" },
+];
+
+/** Sol's review cases: contents that spill by size though they're short or schema-valid, and small examples that should stay put. */
+const spillVenn = {
+  title: "Contents that could spill",
+  sets: threeSets,
+  regions: [
+    { in: ["a", "b"], elements: [], count: 1_000_000 },
+    { in: ["a"], elements: ["a b c d e f g h i j k l"] },
+    { in: ["b", "c"], elements: ["$\\frac{a+b+c+d}{e+f+g}$"] },
+    { in: ["c"], elements: [1], count: 22 },
+  ],
+};
+const smallVenn = {
+  title: "A small example",
+  sets: threeSets,
+  regions: [
+    { in: ["a", "b"], elements: [4, 5, 6] },
+    { in: ["a"], elements: [1] },
+    { in: ["b"], elements: [], count: 1 },
+  ],
+};
+const repeatedVenn = {
+  title: "Same words, different regions",
+  sets: threeSets,
+  regions: [],
+  steps: [
+    { explanation: "Look here.", highlights: [{ in: ["a"] }] },
+    { explanation: "Look here.", highlights: [{ in: ["b"] }], variables: [{ name: "seen", value: 1 }] },
+  ],
+};
+
+const oneSet = {
+  title: "One set and its complement",
+  sets: [{ id: "a", label: "$A$" }],
+  universe: "$U$",
+  regions: [
+    { in: ["a"], elements: [1, 2, 3, 4], count: 12 },
+    { in: [], elements: [], count: 1_000_000 },
+  ],
+};
+const twoSets = {
+  title: "Two sets",
+  sets: [
+    { id: "a", label: "Evens" },
+    { id: "b", label: "Multiples of 3" },
+  ],
+  universe: "$U$",
+  regions: [
+    { in: ["a"], elements: many(100, 8) },
+    { in: ["b"], elements: [3, 9, 15] },
+    { in: ["a", "b"], elements: [6, 12, 18, 24] },
+    { in: [], elements: [1, 5] },
+  ],
+};
+
 type Step = { tool: string; input: unknown } | { text: string; hold?: boolean; stream?: boolean };
 
 const STREAM_CHUNK_CHARS = 24;
@@ -174,6 +279,60 @@ const graphBst = {
   edges: [["10", "5", "left", 5], ["10", "20", "right", 10], ["5", "6", "right", 1], ["6", "7", "right", 1], ["7", "8", "right", 1]].map(([from, to, side, weight]) => ({ from, to, side, weight })),
 };
 
+const truthTable = {
+  title: "Truth table for $p \\land q$",
+  columns: ["$p$", "$q$", "$p \\land q$"],
+  rows: [
+    [true, true, ""],
+    [true, false, ""],
+    [false, true, ""],
+    [false, false, ""],
+  ],
+  steps: [
+    { explanation: "Both inputs are true.", highlight: [{ row: 0 }], cells: [{ row: 0, column: 2, value: true }] },
+    { explanation: "One input is false.", highlight: [{ row: 1 }], cells: [{ row: 1, column: 2, value: false }] },
+    { explanation: "The rest are false too.", highlight: [{ column: 2, tone: "done" as const }], cells: [{ row: 2, column: 2, value: false }, { row: 3, column: 2, value: false }] },
+  ],
+};
+// The most columns the table schema allows, with wide content.
+const wideTable = {
+  title: "A wide relation matrix",
+  columns: Array.from({ length: 16 }, (_, i) => `$x_{${i}} \\lor y_{${i}}$`),
+  rowHeaders: ["$x$", "$y$"],
+  rows: [Array.from({ length: 16 }, () => true), Array.from({ length: 16 }, () => longValue)],
+};
+const proof = {
+  title: "Sum of the first $n$ integers",
+  goal: "Show $\\sum_{i=1}^n i = n(n+1)/2$",
+  steps: [
+    { label: "Base case", statement: "$1 = 1(1+1)/2$", justification: "by direct calculation" },
+    { label: "Inductive hypothesis", statement: "Assume $\\sum_{i=1}^k i = k(k+1)/2$", justification: "for some $k \\ge 1$" },
+    { label: "Inductive step", statement: `$\\displaystyle \\sum_{i=1}^{k+1} i = \\frac{k(k+1)}{2} + k + 1 = \\frac{(k+1)(k+2)}{2}$`, justification: "by the inductive hypothesis" },
+  ],
+};
+
+// A formula with no operators to break at is wider than a phone, next to short ones that fit.
+const wideProof = {
+  // Short enough for the title's limit, and still too wide for a phone.
+  title: `$${Array.from({ length: 18 }, (_, i) => `a_{${i}}`).join("")}$`,
+  steps: [
+    { label: "Short", statement: "$x = x$", justification: "by reflexivity" },
+    { label: "Long", statement: `$${longFormula}$`, justification: "by adding them up" },
+    { label: "After", statement: "$y = y$", justification: "by reflexivity" },
+  ],
+};
+const wideExplanationTable = {
+  title: "Same words, new cells",
+  columns: ["$a$", "$b$"],
+  rows: [["", ""]],
+  steps: [
+    { explanation: "Fill in a cell.", cells: [{ row: 0, column: 0, value: 1 }] },
+    { explanation: "Fill in a cell.", highlight: [{ column: 1 }], cells: [{ row: 0, column: 1, value: 2 }] },
+    { explanation: `$${longFormula}$` },
+  ],
+};
+const wideTitleTable = { title: wideProof.title, columns: ["$a$"], rows: [[1]] };
+
 const SCRIPTS: Record<string, Step[]> = {
   graphbst: [{ tool: "show_graph", input: graphBst }, { text: "Here's the BST." }],
   graphskew: [{ tool: "show_graph", input: graphSkew }, { text: "Here's the skewed tree." }],
@@ -181,6 +340,21 @@ const SCRIPTS: Record<string, Step[]> = {
   graphweighted: [{ tool: "show_graph", input: graphWeighted }, { text: "Here's the graph." }],
   graphloop: [{ tool: "show_graph", input: graphLoop }, { text: "Here's the multigraph." }],
   graphlimit: [{ tool: "show_graph", input: graphLimit }, { text: "Here's the big one." }],
+  wideproof: [
+    { tool: "show_worked_steps", input: wideProof },
+    { tool: "show_table", input: wideExplanationTable },
+    { tool: "show_table", input: wideTitleTable },
+    { text: "Scroll the long one." },
+  ],
+  truthtable: [
+    { tool: "show_table", input: truthTable },
+    { tool: "show_table", input: wideTable },
+    { text: "Step through the table." },
+  ],
+  workedproof: [
+    { tool: "show_worked_steps", input: proof },
+    { text: "Reveal each step." },
+  ],
   literals: [
     { tool: "show_algorithm_trace", input: literalTrace },
     { tool: "ask_multiple_choice", input: literalCheck },
@@ -209,6 +383,13 @@ const SCRIPTS: Record<string, Step[]> = {
   currencyblocks: [{ text: longReply(currency, 40, 20), stream: true }],
   formulaparagraph: [{ text: longReply(formula, 100, 1), stream: true }],
   formulablocks: [{ text: longReply(formula, 100, 20), stream: true }],
+  venn: [{ tool: "show_set_diagram", input: venn }, { text: "Step through the diagram." }],
+  crowdedsets: [{ tool: "show_set_diagram", input: crowdedVenn }, { text: "A crowded diagram." }],
+  oneset: [{ tool: "show_set_diagram", input: oneSet }, { text: "One set." }],
+  twosets: [{ tool: "show_set_diagram", input: twoSets }, { text: "Two sets." }],
+  spillsets: [{ tool: "show_set_diagram", input: spillVenn }, { text: "Contents that could spill." }],
+  smallsets: [{ tool: "show_set_diagram", input: smallVenn }, { text: "A small example." }],
+  repeatedsets: [{ tool: "show_set_diagram", input: repeatedVenn }, { text: "Same words." }],
   wide: [
     { tool: "show_algorithm_trace", input: wideTrace },
     { tool: "ask_multiple_choice", input: wideCheck },
@@ -239,6 +420,12 @@ function nextStep(prompt: PromptMessage[]): Step {
   // Reports whether the instructions mention a memory.
   const known = /known (\w+)/.exec(text)?.[1];
   if (known) return { text: JSON.stringify(prompt[0]?.content).includes(known) ? "Yes, I know that." : "No, I don't know that." };
+  // Reports whether a document excerpt holding that word reached the model.
+  const excerpt = /excerpt (\w+)/.exec(text)?.[1];
+  if (excerpt) {
+    const block = /<document_excerpts>[\s\S]*<\/document_excerpts>/.exec(JSON.stringify(prompt.slice(1)))?.[0] ?? "";
+    return { text: block.includes(excerpt) ? `Excerpt reached me: ${excerpt}.` : "No excerpt reached me." };
+  }
   // Reports what the instructions say about that concept from earlier sessions.
   const recall = /recall (\w+)/.exec(text)?.[1];
   if (recall) {

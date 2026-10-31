@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = 4198;
+// Override to run alongside another checkout.
+const port = Number(process.env.MIVRA_E2E_PORT ?? 4198);
 
 export default defineConfig({
   testDir: "tests",
