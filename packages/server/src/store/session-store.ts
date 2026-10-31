@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
 import { and, asc, desc, eq, isNotNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { artifacts, attempts, memories, messages, runs, sessions, type RunStatus } from "../db/schema.js";
+import { artifacts, attempts, documentChunks, documents, memories, messages, runs, sessions, type RunStatus } from "../db/schema.js";
 
 export type { RunStatus };
 
@@ -11,6 +11,9 @@ export type ArtifactRow = typeof artifacts.$inferSelect;
 export type AttemptRow = typeof attempts.$inferSelect;
 export type EvidenceRow = Pick<AttemptRow, "id" | "concept" | "correct" | "createdAt">;
 export type MemoryRow = typeof memories.$inferSelect;
+export type DocumentRow = typeof documents.$inferSelect;
+/** A chunk of a document's text with what's needed to cite it. `documentOrder` is the document's rowid, so its upload order. */
+export type DocumentExcerpt = { filename: string; kind: DocumentRow["kind"]; page: number; seq: number; text: string; documentOrder: number };
 
 /** A write was refused because it would break an invariant (reused message id, overlapping run). */
 export class Conflict extends Error {}
@@ -295,6 +298,52 @@ export function createSessionStore(db: Db) {
         }
         return true;
       });
+    },
+
+    /** Saves a document and its text together; triggers index the text for search. */
+    createDocument(
+      input: Pick<DocumentRow, "sessionId" | "filename" | "kind" | "byteSize" | "textChars" | "pageCount" | "pagesWithText">,
+      chunks: { page: number; seq: number; text: string }[],
+    ): DocumentRow {
+      return db.transaction((tx) => {
+        const row = { id: randomUUID(), ...input, status: "ready" as const, createdAt: new Date() };
+        tx.insert(documents).values(row).run();
+        for (const chunk of chunks) tx.insert(documentChunks).values({ documentId: row.id, ...chunk }).run();
+        return row;
+      });
+    },
+
+    /** A session's documents in upload order. */
+    listDocuments(sessionId: string): DocumentRow[] {
+      return db.select().from(documents).where(eq(documents.sessionId, sessionId)).orderBy(asc(sql`rowid`)).all();
+    },
+
+    /** Deletes a document; its chunks follow by cascade and triggers remove them from search. Returns false if unknown. */
+    deleteDocument(id: string): boolean {
+      return db.delete(documents).where(eq(documents.id, id)).run().changes > 0;
+    },
+
+    /** The session's chunks matching an FTS5 query, best first. The query must already be safe: see ftsQuery. */
+    searchDocumentChunks(sessionId: string, query: string, limit: number): DocumentExcerpt[] {
+      return db.all<DocumentExcerpt>(sql`
+        select d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
+        from document_chunks_fts f
+        join document_chunks c on c.id = f.rowid
+        join documents d on d.id = c.document_id
+        where document_chunks_fts match ${query} and d.session_id = ${sessionId}
+        order by f.rank
+        limit ${limit}`);
+    },
+
+    /** Each of the session's documents from its start, taking turns so one long document can't crowd out the others. */
+    firstDocumentChunks(sessionId: string, limit: number): DocumentExcerpt[] {
+      return db.all<DocumentExcerpt>(sql`
+        select d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
+        from document_chunks c
+        join documents d on d.id = c.document_id
+        where d.session_id = ${sessionId}
+        order by c.seq, d.rowid
+        limit ${limit}`);
     },
 
     /** Records the learner's single graded attempt. Throws Conflict if one already exists. */

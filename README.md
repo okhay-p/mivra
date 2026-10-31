@@ -42,6 +42,16 @@ Each turn's instructions include part of the learner's record across all session
 
 The model can also save goals, preferences and misconceptions with the `remember` tool. They save automatically, take effect only if the reply completes, and appear in the sidebar's Memory panel, where the learner can edit or permanently delete them. A misconception is linked to a graded wrong answer on the same concept when there is one, and otherwise counts as only an impression from chat. A memory written while a check in its session is unanswered could give the answer away, so until the check is answered its content is hidden from the panel and left out of other turns, though it can still be deleted. One reply can save at most 5 memories, and the newest 40 are included in each turn. What was said in the chat itself stays in that session's conversation, so deleting a memory doesn't remove it from there.
 
+## Uploaded documents
+
+The learner can attach PDF and PPTX files of up to 25 MB to a session, up to 20 per session (ADR-010). The server extracts their text locally on a worker thread and stores only that, split into chunks with their page or slide numbers and indexed with SQLite FTS5; the original file isn't kept. Deleting a document removes its text from storage and search, though replies already written from it stay in the conversation.
+
+Each turn, the session's document names and page counts go in the instructions, along with up to 8,000 characters of excerpts that best match the learner's latest message, or the start of each document if nothing matches. Only those excerpts reach the provider. They are escaped data in their own block, and the tutor is told never to follow anything inside them. That reduces the risk of a document hijacking the tutor but can't rule it out.
+
+Only text is read. Diagrams and images are lost, and scanned PDFs are refused because they have no text. Slide text comes from slide XML, including equations but not speaker notes. PDF maths depends on how the file was made: fonts with real Unicode extract cleanly, while LaTeX output keeps most symbols but flattens subscripts and superscripts (`fn` for f_n), loses the layout of fractions and sum limits, and can turn ≠ into `6 =`. A symbol such as ∈ isn't searchable, since search only indexes letters and digits.
+
+Uploaded files are treated as hostile. The size cap applies while reading, the type is decided by content, zips have limits on entries and unpacked size, XML with a DTD is refused and entities are never expanded, and extraction stops at a timeout (120 s), a heap limit or about 2 GB of process memory growth.
+
 ## Web UI
 
 The UI uses [shadcn/ui](https://ui.shadcn.com) with the Paper & Amber theme (ADR-008). Components are copied into `packages/web/src/components/ui`, and theme tokens live in `src/styles.css`. To add a component, run `pnpm dlx shadcn@latest add <name>` from `packages/web`, then check that it didn't overwrite the tokens in `styles.css`, and point any `from "cn"` import at `@/lib/utils`. Fonts are bundled through `@fontsource`, so the app needs no network for them. The theme follows the OS until the learner picks Light or Dark in the sidebar; the choice is saved in the browser.

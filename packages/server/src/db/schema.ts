@@ -126,3 +126,47 @@ export const memories = sqliteTable(
   },
   (t) => [index("memories_status_idx").on(t.status, t.createdAt), index("memories_run_idx").on(t.runId)],
 );
+
+export const documentKinds = ["pdf", "pptx"] as const;
+
+/**
+ * A file the learner attached to a session (ADR-010). Only its extracted text is kept, never the file.
+ * Extraction finishes before the row is written, so `status` is always "ready" for now.
+ */
+export const documents = sqliteTable(
+  "documents",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    kind: text("kind", { enum: documentKinds }).notNull(),
+    byteSize: integer("byte_size").notNull(),
+    textChars: integer("text_chars").notNull(),
+    pageCount: integer("page_count").notNull(),
+    pagesWithText: integer("pages_with_text").notNull(),
+    status: text("status", { enum: ["ready"] }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [index("documents_session_idx").on(t.sessionId, t.createdAt)],
+);
+
+/**
+ * A piece of a document's text; `page` is its page or slide number and `seq` its position in the document.
+ * The migration adds the document_chunks_fts FTS5 table, which triggers keep in sync with this one and
+ * which relies on `id` being a stable rowid. Drizzle doesn't model it, so SessionStore queries it in SQL.
+ */
+export const documentChunks = sqliteTable(
+  "document_chunks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    documentId: text("document_id")
+      .notNull()
+      .references(() => documents.id, { onDelete: "cascade" }),
+    page: integer("page").notNull(),
+    seq: integer("seq").notNull(),
+    text: text("text").notNull(),
+  },
+  (t) => [uniqueIndex("document_chunks_document_seq_idx").on(t.documentId, t.seq)],
+);

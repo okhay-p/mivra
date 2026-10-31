@@ -13,6 +13,7 @@ import {
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
+import { documentContext, latestLearnerText } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
 
@@ -37,12 +38,17 @@ export type AssembleContext = (
   context: { sessionId: string },
 ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
 
-/** The whole transcript, plus the learner's record across sessions. Summaries will plug in here. */
+/** The whole transcript, plus the learner's record across sessions and the session's documents. Summaries will plug in here. */
 const defaultAssembleContext =
   (store: SessionStore, registry: CapabilityRegistry): AssembleContext =>
-  async (conversation) => ({
+  async (conversation, { sessionId }) => ({
     messages: await convertToModelMessages(conversation),
-    instructions: learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
+    instructions: [
+      learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
+      documentContext(store, sessionId, latestLearnerText(conversation)),
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
   });
 
 export interface TurnRunnerDeps {

@@ -64,3 +64,4 @@ export const ArtifactView = z.discriminatedUnion("kind", [
 export type ArtifactView = z.infer<typeof ArtifactView>;
 
 export * from "./memory.js";
+export * from "./document.js";
