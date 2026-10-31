@@ -25,6 +25,104 @@ const expectCells = (page: Page, values: string[]) =>
     .poll(() => cells(page).evaluateAll((all) => all.map((cell) => cell.firstChild?.textContent)))
     .toEqual(values);
 
+test.describe("set diagram", () => {
+  const diagram = (page: Page) => page.getByRole("region", { name: /Set diagram/ });
+  const highlighted = (page: Page) =>
+    diagram(page).locator('[data-testid="set-region"]:not([data-tone="none"])').evaluateAll((all) => all.map((g) => `${g.getAttribute("data-mask")}:${g.getAttribute("data-tone")}`));
+
+  async function showAt320(page: Page, prompt: string) {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto("/");
+    await page.getByRole("main").getByRole("button", { name: "Toggle Sidebar" }).click();
+    await page.locator('[data-mobile="true"]').getByRole("button", { name: "New session" }).first().click();
+    await send(page, prompt);
+    await expect(diagram(page)).toBeVisible();
+  }
+
+  test("each step highlights its own region, drawn as its exact shape", async ({ page }) => {
+    await startSession(page);
+    await send(page, `venn ${Date.now()}`);
+    await expect(page.getByText("Step through the diagram.")).toBeVisible();
+    await expect(diagram(page).getByTestId("set-circle")).toHaveCount(3);
+    await expect(diagram(page).getByTestId("set-region")).toHaveCount(8);
+
+    // a=1, b=2, c=4, in the order the script's steps go through them.
+    for (const mask of [1, 2, 4, 3, 5, 6, 7, 0]) {
+      await expect.poll(() => highlighted(page)).toEqual([`${mask}:active`]);
+      await diagram(page).getByRole("button", { name: "Next" }).click();
+    }
+    await expect.poll(() => highlighted(page)).toEqual(["3:active", "7:done", "0:muted"]);
+    await expect(diagram(page).getByTestId("set-key")).toContainText("Ruled out:outside");
+
+    // The browser's own hit test: every point away from an edge is in the one region its circles say it is.
+    const wrong = await diagram(page).evaluate((root) => {
+      const circles = [...root.querySelectorAll('[data-testid="set-circle"]')].map((c) => ({
+        x: Number(c.getAttribute("cx")),
+        y: Number(c.getAttribute("cy")),
+        r: Number(c.getAttribute("r")),
+      }));
+      const shapes = [...root.querySelectorAll('[data-testid="set-region"]')].map((g) => ({
+        mask: Number(g.getAttribute("data-mask")),
+        path: g.querySelector('[data-testid="set-region-shape"]') as SVGPathElement,
+      }));
+      const misses: string[] = [];
+      let checked = 0;
+      for (let x = 4; x < 378; x += 3) {
+        for (let y = 4; y < 408; y += 3) {
+          const distances = circles.map((c) => Math.hypot(x - c.x, y - c.y) - c.r);
+          if (distances.some((d) => Math.abs(d) < 1)) continue;
+          const expected = distances.reduce((mask, d, i) => (d < 0 ? mask | (1 << i) : mask), 0);
+          checked++;
+          const hits = shapes.filter((s) => s.path.isPointInFill(new DOMPoint(x, y))).map((s) => s.mask);
+          if (hits.length !== 1 || hits[0] !== expected) misses.push(`${x},${y}: ${hits.join("/")} not ${expected}`);
+        }
+      }
+      return { checked, misses: misses.slice(0, 5) };
+    });
+    expect(wrong.checked).toBeGreaterThan(10_000);
+    expect(wrong.misses).toEqual([]);
+  });
+
+  test("describes the sets, regions and current highlights in words", async ({ page }) => {
+    await startSession(page);
+    await send(page, `venn ${Date.now()}`);
+    const description = diagram(page).getByTestId("set-description");
+    await expect(description).toContainText("Multiples of 3");
+    await expect(description).toContainText("Focus: in");
+    await expect(diagram(page).getByTestId("set-diagram")).toHaveAttribute("aria-hidden", "true");
+    await diagram(page).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(diagram(page).getByText("Step 2 of 9")).toBeVisible();
+  });
+
+  test("fits at 320px, with every region's contents inside its region", async ({ page }) => {
+    await showAt320(page, `venn ${Date.now()}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(diagram(page).locator(".katex").first()).toBeVisible();
+
+    const outside = await diagram(page).evaluate((root) => {
+      const svg = root.querySelector("svg")!;
+      const ctm = svg.getScreenCTM()!.inverse();
+      return [...root.querySelectorAll('[data-testid="set-elements"] > span')].flatMap((chip) => {
+        const mask = chip.parentElement!.getAttribute("data-mask");
+        const shape = root.querySelector(`[data-testid="set-region"][data-mask="${mask}"] path`) as SVGPathElement;
+        const box = chip.getBoundingClientRect();
+        const corners = [[box.left, box.top], [box.right, box.top], [box.left, box.bottom], [box.right, box.bottom]];
+        return corners.every(([x, y]) => shape.isPointInFill(new DOMPoint(x, y).matrixTransform(ctm))) ? [] : [`${mask}: ${chip.textContent}`];
+      });
+    });
+    expect(outside).toEqual([]);
+  });
+
+  test("too many elements become a count, with the list below the diagram", async ({ page }) => {
+    await showAt320(page, `crowdedsets ${Date.now()}`);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(diagram(page).locator('[data-testid="set-elements"][data-mask="7"]')).toHaveText("30 ↓");
+    await expect(diagram(page).locator('[data-testid="set-elements"][data-mask="6"]')).toHaveText("40");
+    await expect(diagram(page).getByTestId("set-overflow")).toContainText("229");
+  });
+});
+
 test.describe("learning flow", () => {
   test("teaches, grades a wrong answer, keeps it after reload and tells the tutor", async ({ page }) => {
     await startSession(page);

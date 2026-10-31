@@ -8,7 +8,7 @@ An open-source, local-first AI agent harness for learning. Design docs and decis
 |---|---|
 | `packages/server` | Hono API server (Node.js). Owns the agent runtime, the SQLite database (Drizzle + better-sqlite3) and model access (Vercel AI SDK). Binds to `127.0.0.1` only. |
 | `packages/web` | React + Vite web UI (shadcn/ui on Tailwind v4). Talks to the server only through its API. |
-| `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `multiple_choice`), their tool definitions and the deterministic grader. Shared by server and web. |
+| `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `set_diagram`, `multiple_choice`), their tool definitions and the deterministic grader. Shared by server and web. |
 
 ## Setup
 
@@ -61,19 +61,19 @@ Each reply is a *run* (`runs` table). A session has at most one running run, so 
 
 ## Learning artifacts
 
-The agent shows interactive artifacts through tool calls (ADR-006): `show_algorithm_trace` and `ask_multiple_choice`, registered by the first-party `core-learning` plugin (`packages/server/src/plugins/`) through the capability registry (ADR-007).
+The agent shows interactive artifacts through tool calls (ADR-006): `show_algorithm_trace`, `show_set_diagram` and `ask_multiple_choice`, registered by the first-party `core-learning` plugin (`packages/server/src/plugins/`) through the capability registry (ADR-007).
 
 - Each tool call's input is validated against its `packages/protocol` schema and stored in `artifacts` with the full spec. Client output fails closed: the live stream and `GET /api/sessions/{id}/messages` pass only text and lifecycle parts plus `data-artifact` parts with the artifact's public view. Raw tool calls, model reasoning, sources and files never reach a client, so a check's answer key, explanation and feedback stay on the server.
 - `POST /api/artifacts/{id}/attempts` with `{ "answer": { "optionIndex": n } }` grades a check deterministically and returns the view with the grade. One attempt per check, accepted once the reply that asked it has finished.
 - On later turns, each check's tool result tells the model whether the learner answered and how they did.
-- The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. A trace is a stepper (prev/next, play/pause, arrow keys). A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered.
+- The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. A trace is a stepper (prev/next, play/pause, arrow keys). A set diagram is a Venn diagram of 1 to 3 sets with the same stepper when it has steps; each region is computed as its exact shape, so a step can highlight any region, and a region whose elements don't fit shows a count with the list below the diagram. A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered.
 
 ## Markdown and maths
 
 `MathText` (`packages/web/src/MathText.tsx`) renders model-written text in one of two modes:
 
 - `block`, for replies: GitHub-flavoured markdown with KaTeX maths, `$...$` inline and `$$...$$` display.
-- `math`, for artifact text: the trace title and step explanations, and the check's question, option text, feedback and explanation. Only `$...$` is a formula and `\$` a dollar. Everything else is literal, including `$$`, so the options `2*3*4` and `234` stay different. A new artifact field that may hold an answer or a structured value should use this mode; explanatory prose may use `block`.
+- `math`, for artifact text: the trace title and step explanations, every label, element and value in a set diagram, and the check's question, option text, feedback and explanation. Only `$...$` is a formula and `\$` a dollar. Everything else is literal, including `$$`, so the options `2*3*4` and `234` stay different. A new artifact field that may hold an answer or a structured value should use this mode; explanatory prose may use `block`.
 
 Concept labels, pointer and range labels, variable names and values, and trace cell values aren't passed through `MathText`, and learner messages stay plain.
 

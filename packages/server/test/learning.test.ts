@@ -1,3 +1,4 @@
+import { ArtifactView } from "@mivra/protocol";
 import type { UIMessage } from "ai";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
@@ -511,6 +512,39 @@ describe("algorithm_trace through the agent", () => {
     expect(sse).toContain('"kind":"algorithm_trace"');
     expect(sse).toContain("First window sums to 4.");
     expect(await messagesJson(app, sessionId)).toContain("First window sums to 4.");
+  });
+});
+
+describe("set_diagram through the agent", () => {
+  const diagram = {
+    title: "Overlap",
+    sets: [
+      { id: "a", label: "$A$" },
+      { id: "b", label: "$B$" },
+    ],
+    regions: [{ in: ["b", "a"], elements: [3, 5] }],
+    steps: [{ explanation: "These are in both.", highlights: [{ in: ["a", "b"] }] }],
+  };
+
+  it("streams and reloads a view that passes the strict ArtifactView", async () => {
+    const { app, db } = setup([{ toolCall: { name: "show_set_diagram", input: diagram } }, { text: "Step through it." }]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "show me an intersection");
+    expect(sse).toContain('"kind":"set_diagram"');
+    expect(sse).toContain("These are in both.");
+    const messages = JSON.parse(await messagesJson(app, sessionId)) as { parts: { type: string; data?: unknown }[] }[];
+    const part = messages.flatMap((m) => m.parts).find((p) => p.type === "data-artifact");
+    const view = ArtifactView.parse(part?.data);
+    expect(view).toMatchObject({ kind: "set_diagram", version: 1, spec: diagram });
+    expect(db.select().from(artifacts).get()).toMatchObject({ kind: "set_diagram" });
+  });
+
+  it("stores nothing for a diagram that fails its rules", async () => {
+    const bad = { ...diagram, regions: [{ in: ["z"], elements: [] }] };
+    const { app, db } = setup([{ toolCall: { name: "show_set_diagram", input: bad } }, { text: "Let me fix that." }]);
+    const sse = await turn(app, db, await newSession(app), "show me an intersection");
+    expect(db.select().from(artifacts).all()).toEqual([]);
+    expect(sse).not.toContain("data-artifact");
   });
 });
 

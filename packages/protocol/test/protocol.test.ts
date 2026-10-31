@@ -4,9 +4,11 @@ import {
   AlgorithmTraceSpec,
   ArtifactView,
   MultipleChoiceSpec,
+  SetDiagramSpec,
   artifactKinds,
   gradeMultipleChoice,
   kindForTool,
+  setRegionKey,
   toMultipleChoicePublic,
   type ArtifactKind,
 } from "../src/index.js";
@@ -197,6 +199,90 @@ describe("multiple_choice", () => {
     expect(json).not.toContain("correctOptionIndex");
     expect(json).not.toContain("feedback");
     expect(json).not.toContain(binarySearchCheck.explanation);
+  });
+});
+
+describe("set_diagram", () => {
+  const sets = [
+    { id: "a", label: "$A$" },
+    { id: "b", label: "$B$" },
+    { id: "c", label: "Multiples of 3" },
+  ];
+  const diagram = {
+    title: "Inclusion-exclusion",
+    sets,
+    universe: "$U$",
+    regions: [
+      { in: ["a"], elements: [1, "x"] },
+      { in: ["a", "b"], elements: [3], count: 4 },
+      { in: [], elements: [] },
+    ],
+    steps: [{ explanation: "The overlap.", highlights: [{ in: ["b", "a"], tone: "done" }, { in: [] }], variables: [{ name: "n", value: 4 }] }],
+  };
+  const parse = (changes: object) => SetDiagramSpec.safeParse({ ...diagram, ...changes });
+  const messages = (changes: object) => JSON.stringify(parse(changes).error?.issues.map((i) => i.message));
+
+  it("accepts a full diagram, and one with neither steps nor universe", () => {
+    expect(parse({}).success).toBe(true);
+    expect(SetDiagramSpec.safeParse({ title: "One", sets: [sets[0]], regions: [] }).success).toBe(true);
+  });
+
+  it("needs 1 to 3 sets with unique ids", () => {
+    expect(parse({ sets: [] }).success).toBe(false);
+    expect(parse({ sets: [...sets, { id: "d", label: "D" }] }).success).toBe(false);
+    expect(messages({ sets: [sets[0], sets[1], { id: "a", label: "again" }] })).toContain('duplicate set id \\"a\\"');
+  });
+
+  it("rejects a region or highlight naming an unknown set, or the same set twice", () => {
+    expect(messages({ regions: [{ in: ["z"], elements: [] }] })).toContain('unknown set \\"z\\"');
+    expect(messages({ steps: [{ explanation: "x", highlights: [{ in: ["z"] }] }] })).toContain('unknown set \\"z\\"');
+    expect(messages({ regions: [{ in: ["a", "a"], elements: [] }] })).toContain("named twice");
+  });
+
+  it("treats reordered ids as the same region", () => {
+    expect(setRegionKey(["b", "a"])).toBe(setRegionKey(["a", "b"]));
+    expect(setRegionKey(["a"])).not.toBe(setRegionKey(["a", "b"]));
+    const twice = [
+      { in: ["a", "b"], elements: [] },
+      { in: ["b", "a"], elements: [] },
+    ];
+    expect(messages({ regions: twice })).toContain("more than once");
+    expect(messages({ steps: [{ explanation: "x", highlights: [{ in: ["a", "c"] }, { in: ["c", "a"], tone: "muted" }] }] })).toContain("more than once");
+  });
+
+  it("needs a universe for the region outside every set", () => {
+    const { universe: _, ...noUniverse } = diagram;
+    const without = (changes: object) => SetDiagramSpec.safeParse({ ...noUniverse, steps: undefined, regions: [], ...changes });
+    expect(without({}).success).toBe(true);
+    expect(without({ regions: [{ in: [], elements: [1] }] }).success).toBe(false);
+    expect(without({ steps: [{ explanation: "x", highlights: [{ in: [] }] }] }).success).toBe(false);
+  });
+
+  it("keeps an element to one region, and a count at least what's listed", () => {
+    const placedTwice = [
+      { in: ["a"], elements: [1] },
+      { in: ["b"], elements: ["1"] },
+    ];
+    expect(messages({ regions: placedTwice })).toContain("more than once");
+    expect(messages({ regions: [{ in: ["a"], elements: [1, 2], count: 1 }] })).toContain("less than");
+  });
+
+  it("bounds elements, steps and text", () => {
+    const elements = (n: number) => Array.from({ length: n }, (_, i) => i);
+    expect(parse({ regions: [{ in: ["a"], elements: elements(30) }] }).success).toBe(true);
+    expect(parse({ regions: [{ in: ["a"], elements: elements(31) }] }).success).toBe(false);
+    expect(parse({ regions: [{ in: ["a"], elements: ["x".repeat(25)] }] }).success).toBe(false);
+    const step = { explanation: "x" };
+    expect(parse({ steps: Array(40).fill(step) }).success).toBe(true);
+    expect(parse({ steps: Array(41).fill(step) }).success).toBe(false);
+    expect(parse({ steps: [] }).success).toBe(false);
+    expect(parse({ regions: [{ in: ["a"], elements: [], extra: 1 }] }).success).toBe(false);
+  });
+
+  it("tells the model highlights belong to their own step", () => {
+    type Node = { description?: string; properties?: Record<string, Node>; items?: Node };
+    const schema = z.toJSONSchema(artifactKinds.set_diagram.spec) as Node;
+    expect(schema.properties!.steps!.items!.properties!.highlights!.description).toMatch(/this step only/);
   });
 });
 

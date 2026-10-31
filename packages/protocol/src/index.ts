@@ -1,9 +1,11 @@
 import { z } from "zod";
 import { AlgorithmTraceSpec } from "./algorithm-trace.js";
 import { MultipleChoiceAnswer, MultipleChoiceGrade, MultipleChoicePublic, MultipleChoiceSpec } from "./multiple-choice.js";
+import { SetDiagramSpec } from "./set-diagram.js";
 
 export * from "./algorithm-trace.js";
 export * from "./multiple-choice.js";
+export * from "./set-diagram.js";
 
 /**
  * Every artifact kind the agent can produce, one tool per kind (ADR-006). The tool's input schema is
@@ -25,6 +27,13 @@ export const artifactKinds = {
     description:
       "Ask the learner one multiple-choice question to check understanding of a concept you just taught. Exactly one option is correct. Write plausible wrong options that reflect real misconceptions, and give per-option feedback where useful. The learner answers in the UI; the result is reported back to you on the next turn, so do not reveal the answer in your reply.",
     spec: MultipleChoiceSpec,
+  },
+  set_diagram: {
+    version: 1,
+    toolName: "show_set_diagram",
+    description:
+      "Show the learner a Venn diagram of 1 to 3 sets, with what each region contains. Use it for set operations (union, intersection, complement, difference) and inclusion-exclusion, not for more than 3 sets. Keep elements short, because they are drawn in their region. Add steps to walk through it: each step highlights exact regions (any of them, including outside every set, which needs `universe`) and says what changed and why.",
+    spec: SetDiagramSpec,
   },
 } as const;
 
@@ -60,6 +69,7 @@ export const ArtifactView = z.discriminatedUnion("kind", [
       latestAttempt: MultipleChoiceAttempt.optional(),
     })
     .strict(),
+  z.object({ ...ArtifactBase, kind: z.literal("set_diagram"), version: z.literal(1), spec: SetDiagramSpec }).strict(),
 ]);
 export type ArtifactView = z.infer<typeof ArtifactView>;
 
