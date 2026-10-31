@@ -53,7 +53,7 @@ export function TableArtifact({ view }: ArtifactProps<"table">) {
       {...(stepped ? { tabIndex: 0, onKeyDown: stepper.onKeyDown } : {})}
     >
       <CardHeader>
-        <CardTitle className="font-heading text-base">
+        <CardTitle className="min-w-0 font-heading text-base">
           <h3>
             <ScrollableText>
               <MathText text={spec.title} mode="math" />

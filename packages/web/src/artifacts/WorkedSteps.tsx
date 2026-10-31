@@ -18,7 +18,7 @@ export function WorkedSteps({ view }: ArtifactProps<"worked_steps">) {
   return (
     <Card role="region" aria-label={`Worked steps: ${spec.title}`} tabIndex={0} onKeyDown={stepper.onKeyDown} className="whitespace-normal">
       <CardHeader>
-        <CardTitle className="font-heading text-base">
+        <CardTitle className="min-w-0 font-heading text-base">
           <h3>
             <ScrollableText>
               <MathText text={spec.title} mode="math" />

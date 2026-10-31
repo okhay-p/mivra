@@ -288,6 +288,72 @@ test.describe("learning flow", () => {
     await expect(table.getByTestId("step-counter")).toHaveText("Step 3 of 3");
   });
 
+  test("a formula title too wide for a phone stays in its card and scrolls all the way", async ({ page }) => {
+    await startSession(page);
+    await send(page, `wideproof ${Date.now()}`);
+    await expect(page.getByText("Scroll the long one.")).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 800 });
+
+    for (const name of [/^Worked steps/, /^Table: \$a_/]) {
+      const card = page.getByRole("region", { name });
+      const title = card.getByRole("heading").getByTestId("step-scroll");
+      await expect(title).toHaveRole("group");
+      const fit = await title.evaluate((box) => {
+        const bounds = box.getBoundingClientRect();
+        const outer = box.closest('[data-slot="card"]')!.getBoundingClientRect();
+        const distance = box.scrollWidth - box.clientWidth;
+        box.scrollLeft = distance;
+        const end = box.querySelector(".katex")!.getBoundingClientRect().right;
+        return { left: bounds.left, right: bounds.right, cardLeft: outer.left, cardRight: outer.right, distance, end, page: document.documentElement.scrollWidth };
+      });
+      expect(fit.left).toBeGreaterThanOrEqual(fit.cardLeft);
+      expect(fit.right).toBeLessThanOrEqual(fit.cardRight);
+      expect(fit.page).toBeLessThanOrEqual(320);
+      // Well past a rounding error, and enough to bring the end of the formula into the box.
+      expect(fit.distance).toBeGreaterThan(50);
+      expect(fit.end).toBeLessThanOrEqual(fit.right + 1);
+    }
+  });
+
+  test("a formula box keeps focus when it stops overflowing, and leaves no stray stop behind", async ({ page }) => {
+    await startSession(page);
+    await send(page, `wideproof ${Date.now()}`);
+    await expect(page.getByText("Scroll the long one.")).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 800 });
+
+    const worked = page.getByRole("region", { name: /^Worked steps/ });
+    const title = worked.getByRole("heading").getByTestId("step-scroll");
+    await expect(title).toHaveAttribute("tabindex", "0");
+    await title.focus();
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    // No longer named as something that scrolls, but the keyboard is still here.
+    await expect(title).not.toHaveAttribute("role");
+    await expect(title).not.toHaveAttribute("aria-label");
+    await expect(title).toBeFocused();
+    await expect(title).toHaveAttribute("tabindex", "-1");
+
+    // The window losing focus isn't the keyboard leaving: the box is still active, so it has to stay focusable.
+    await title.evaluate((box) => box.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
+    await expect(title).toHaveAttribute("tabindex", "-1");
+
+    await page.keyboard.press("Tab");
+    await expect(worked.getByRole("button", { name: "Prev" })).toBeFocused();
+    await expect(title).not.toHaveAttribute("tabindex");
+    await page.keyboard.press("Shift+Tab");
+    await expect(worked).toBeFocused();
+
+    // Clicking a formula that fits leaves the card focused, so its arrow keys still step.
+    await title.click();
+    await expect(worked).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(worked.getByTestId("worked-step")).toHaveCount(2);
+
+    await page.setViewportSize({ width: 320, height: 800 });
+    await expect(title).toHaveRole("group");
+    await expect(title).toHaveAttribute("tabindex", "0");
+  });
+
   test("the active tone is neutral and stands apart from muted, in both themes", async ({ page }) => {
     await startSession(page);
     await send(page, `truthtable ${Date.now()}`);

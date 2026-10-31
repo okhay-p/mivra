@@ -55,11 +55,13 @@ export function useStepper(count: number) {
 
 /**
  * Text in a stepped artifact whose formula may be too wide for the card. The whole text scrolls as one box, and
- * only when it has to is that box a tab stop, whose arrow keys scroll rather than step.
+ * only when it has to is that box a tab stop, whose arrow keys scroll rather than step. A box that stops
+ * overflowing while focused stays focusable, out of the tab order, until focus leaves, so the keyboard keeps its place.
  */
 export function ScrollableText({ children }: { children: ReactNode }) {
   const box = useRef<HTMLSpanElement>(null);
   const [overflows, setOverflows] = useState(false);
+  const [focused, setFocused] = useState(false);
   const measure = () => {
     if (box.current) setOverflows(box.current.scrollWidth > box.current.clientWidth);
   };
@@ -76,7 +78,11 @@ export function ScrollableText({ children }: { children: ReactNode }) {
       ref={box}
       className="step-scroll block min-w-0 overflow-x-auto overflow-y-hidden"
       data-testid="step-scroll"
-      {...(overflows ? { role: "group", "aria-label": "Formula, scrolls sideways", tabIndex: 0 } : {})}
+      {...(overflows ? { role: "group", "aria-label": "Formula, scrolls sideways" } : {})}
+      tabIndex={overflows ? 0 : focused ? -1 : undefined}
+      onFocus={() => setFocused(true)}
+      // Leaving the window blurs the box but keeps it the active element, for when the window comes back.
+      onBlur={(e) => setFocused(document.activeElement === e.currentTarget)}
       onKeyDown={(e: KeyboardEvent) => {
         if (e.key === "ArrowLeft" || e.key === "ArrowRight") e.stopPropagation();
       }}

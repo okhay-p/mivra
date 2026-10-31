@@ -154,11 +154,13 @@ const wideExplanationTable = {
     { explanation: `$${longFormula}$` },
   ],
 };
+const wideTitleTable = { title: wideProof.title, columns: ["$a$"], rows: [[1]] };
 
 const SCRIPTS: Record<string, Step[]> = {
   wideproof: [
     { tool: "show_worked_steps", input: wideProof },
     { tool: "show_table", input: wideExplanationTable },
+    { tool: "show_table", input: wideTitleTable },
     { text: "Scroll the long one." },
   ],
   truthtable: [
