@@ -164,7 +164,7 @@ function nextStep(prompt: PromptMessage[]): Step {
   // Reports whether a document excerpt holding that word reached the model.
   const excerpt = /excerpt (\w+)/.exec(text)?.[1];
   if (excerpt) {
-    const block = /<document_excerpts>[\s\S]*<\/document_excerpts>/.exec(String(prompt[0]?.content))?.[0] ?? "";
+    const block = /<document_excerpts>[\s\S]*<\/document_excerpts>/.exec(JSON.stringify(prompt.slice(1)))?.[0] ?? "";
     return { text: block.includes(excerpt) ? `Excerpt reached me: ${excerpt}.` : "No excerpt reached me." };
   }
   // Reports what the instructions say about that concept from earlier sessions.

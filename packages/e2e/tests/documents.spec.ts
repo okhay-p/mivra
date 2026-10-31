@@ -53,6 +53,20 @@ test.describe("uploaded documents", () => {
     await expect(chips(page).getByText("Only here.pdf")).toBeVisible();
   });
 
+  test("a long filename stays inside the error at 320px", async ({ page }) => {
+    // The button that starts a session lives in the sidebar, which collapses at this width.
+    await startSession(page);
+    await page.setViewportSize({ width: 320, height: 640 });
+    // Refused in the browser for its size, with its name in the message.
+    await attach(page, `${"x".repeat(180)}.pdf`, Buffer.alloc(25 * 1024 * 1024 + 1));
+    const alert = page.getByRole("alert");
+    await expect(alert).toContainText("over the 25 MB limit");
+    const { scroll, client } = await alert.evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+    expect(scroll).toBeLessThanOrEqual(client);
+    expect((await alert.boundingBox())!.x + client).toBeLessThanOrEqual(320);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  });
+
   test("explains why a file was refused", async ({ page }) => {
     await startSession(page);
     await attach(page, "fake.pdf", Buffer.from("this is not a pdf at all"));

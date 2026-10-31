@@ -32,7 +32,8 @@ function workerTarget(): { url: URL; execArgv?: string[] } {
 
 /**
  * Extracts a file's text on a separate thread, so a slow or hostile file can't stall chat. Terminating
- * the thread stops even a parser stuck in a loop. Rejects only with DocumentError.
+ * the thread stops even a parser stuck in a loop. Rejects only with DocumentError. A subprocess would
+ * also bound native memory and survive a native crash; that's a possible follow-up.
  */
 export const extractInWorker: Extract = (bytes, { timeoutMs = TIMEOUT_MS, maxHeapMb = MAX_HEAP_MB, maxRssGrowthBytes = MAX_RSS_GROWTH_BYTES, signal } = {}) =>
   new Promise((resolve, reject) => {
@@ -56,8 +57,8 @@ export const extractInWorker: Extract = (bytes, { timeoutMs = TIMEOUT_MS, maxHea
       clearTimeout(timer);
       clearInterval(rssCheck);
       signal?.removeEventListener("abort", onAbort);
-      void worker.terminate();
-      act();
+      // The result waits for the thread to exit, so a caller's capacity is only freed once it really has.
+      void worker.terminate().then(act, act);
     };
     const fail = (code: DocumentErrorCode, message: string) => settle(() => reject(new DocumentError(code, message)));
     const onAbort = () => fail("failed", "The upload was cancelled.");

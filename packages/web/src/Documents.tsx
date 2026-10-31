@@ -6,7 +6,13 @@ import { Button } from "@/components/ui/button";
 
 const NOT_READ = "Only text is read: images and diagrams aren't, and formulas may come through garbled.";
 
-/** A session's documents. A response for a session that's no longer showing is dropped; the upload itself still completes there. */
+/** Uploads outlive the view that started them, which unmounts when the learner changes session. */
+const uploadListeners = new Set<(sessionId: string) => void>();
+
+/**
+ * A session's documents. A response for a session that's no longer showing is dropped; the upload itself
+ * still completes there, and a view showing that session again by then refreshes its list.
+ */
 export function useDocuments(sessionId: string) {
   const [documents, setDocuments] = useState<DocumentView[]>([]);
   const [uploading, setUploading] = useState<string>();
@@ -14,19 +20,34 @@ export function useDocuments(sessionId: string) {
   // The session on screen, read when a response arrives to see if it's still wanted.
   const current = useRef(sessionId);
   current.current = sessionId;
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     setDocuments([]);
     setUploading(undefined);
     setError(undefined);
     let stale = false;
-    void listDocuments(sessionId).then((result) => {
-      if (stale) return;
-      if (result.ok) setDocuments((uploaded) => [...result.value, ...uploaded.filter((d) => !result.value.some((v) => v.id === d.id))]);
-      else setError(result.error);
-    });
+    const refresh = () =>
+      void listDocuments(sessionId).then((result) => {
+        if (stale) return;
+        if (result.ok) setDocuments((uploaded) => [...result.value, ...uploaded.filter((d) => !result.value.some((v) => v.id === d.id))]);
+        else setError(result.error);
+      });
+    refresh();
+    const onUploadFinished = (finished: string) => {
+      if (finished === sessionId) refresh();
+    };
+    uploadListeners.add(onUploadFinished);
     return () => {
       stale = true;
+      uploadListeners.delete(onUploadFinished);
     };
   }, [sessionId]);
 
@@ -36,9 +57,13 @@ export function useDocuments(sessionId: string) {
       if (file.size > MAX_DOCUMENT_BYTES) return setError(`${file.name} is over the ${MAX_DOCUMENT_BYTES / (1024 * 1024)} MB limit.`);
       setUploading(file.name);
       const result = await uploadDocument(sessionId, file);
+      if (!mounted.current) {
+        if (result.ok) for (const listener of uploadListeners) listener(sessionId);
+        return;
+      }
       if (current.current !== sessionId) return;
       setUploading(undefined);
-      if (result.ok) setDocuments((prev) => [...prev, result.value]);
+      if (result.ok) setDocuments((prev) => [...prev.filter((d) => d.id !== result.value.id), result.value]);
       else setError(result.error);
     },
     [sessionId],
@@ -117,7 +142,7 @@ export function DocumentChips({ documents: { documents, uploading, error, remove
         </p>
       )}
       {error && (
-        <p role="alert" className="text-destructive">
+        <p role="alert" className="text-destructive wrap-anywhere">
           {error}
         </p>
       )}

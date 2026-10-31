@@ -159,6 +159,66 @@ describe("documents near the composer", () => {
     expect(screen.queryByText("Stale.pdf")).toBeNull();
   });
 
+  it("shows an upload's chip if its session is showing again when it finishes", async () => {
+    const calls = pendingFetch();
+    const keyed = (sessionId: string) => <Harness key={sessionId} sessionId={sessionId} />;
+    const { rerender } = render(keyed("s1"));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    calls[0]!.respond(json([]));
+    choose(file("a.pdf"));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    // Away and back, as the app does: each session gets a new view.
+    rerender(keyed("s2"));
+    await waitFor(() => expect(calls).toHaveLength(3));
+    calls[2]!.respond(json([]));
+    rerender(keyed("s1"));
+    await waitFor(() => expect(calls).toHaveLength(4));
+    calls[3]!.respond(json([]));
+
+    calls[1]!.respond(json(doc({ filename: "a.pdf" }), 201));
+    await waitFor(() => expect(calls).toHaveLength(5));
+    expect(calls[4]).toMatchObject({ method: "GET" });
+    expect(calls[4]!.url).toContain("/api/sessions/s1/documents");
+    calls[4]!.respond(json([doc({ filename: "a.pdf" })]));
+    expect(await screen.findByText("a.pdf")).toBeTruthy();
+  });
+
+  it("doesn't refresh another session's list when an upload finishes", async () => {
+    const calls = pendingFetch();
+    const keyed = (sessionId: string) => <Harness key={sessionId} sessionId={sessionId} />;
+    const { rerender } = render(keyed("s1"));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    calls[0]!.respond(json([]));
+    choose(file("a.pdf"));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    rerender(keyed("s2"));
+    await waitFor(() => expect(calls).toHaveLength(3));
+    calls[2]!.respond(json([]));
+    calls[1]!.respond(json(doc({ filename: "a.pdf" }), 201));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(calls).toHaveLength(3);
+    expect(screen.queryByText("a.pdf")).toBeNull();
+  });
+
+  it("doesn't show a chip twice if the list already has the new document", async () => {
+    const calls = pendingFetch();
+    const { rerender } = render(<Harness sessionId="s1" />);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    calls[0]!.respond(json([]));
+    choose(file("a.pdf"));
+    await waitFor(() => expect(calls).toHaveLength(2));
+    rerender(<Harness sessionId="s2" />);
+    await waitFor(() => expect(calls).toHaveLength(3));
+    calls[2]!.respond(json([]));
+    rerender(<Harness sessionId="s1" />);
+    await waitFor(() => expect(calls).toHaveLength(4));
+    calls[3]!.respond(json([doc({ filename: "a.pdf" })]));
+    expect(await screen.findByText("a.pdf")).toBeTruthy();
+    calls[1]!.respond(json(doc({ filename: "a.pdf" }), 201));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(screen.getAllByText("a.pdf")).toHaveLength(1);
+  });
+
   it("ignores an upload that finishes or fails after the session changed", async () => {
     const calls = pendingFetch();
     const { rerender } = render(<Harness sessionId="s1" />);

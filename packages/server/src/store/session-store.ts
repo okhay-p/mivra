@@ -13,7 +13,7 @@ export type EvidenceRow = Pick<AttemptRow, "id" | "concept" | "correct" | "creat
 export type MemoryRow = typeof memories.$inferSelect;
 export type DocumentRow = typeof documents.$inferSelect;
 /** A chunk of a document's text with what's needed to cite it. `documentOrder` is the document's rowid, so its upload order. */
-export type DocumentExcerpt = { filename: string; kind: DocumentRow["kind"]; page: number; seq: number; text: string; documentOrder: number };
+export type DocumentExcerpt = { documentId: string; filename: string; kind: DocumentRow["kind"]; page: number; seq: number; text: string; documentOrder: number };
 
 /** A write was refused because it would break an invariant (reused message id, overlapping run). */
 export class Conflict extends Error {}
@@ -300,12 +300,19 @@ export function createSessionStore(db: Db) {
       });
     },
 
-    /** Saves a document and its text together; triggers index the text for search. */
+    /**
+     * Saves a document and its text together; triggers index the text for search. Throws Conflict if the
+     * session already has `maxDocuments`, which other uploads may have filled since this one started.
+     */
     createDocument(
       input: Pick<DocumentRow, "sessionId" | "filename" | "kind" | "byteSize" | "textChars" | "pageCount" | "pagesWithText">,
       chunks: { page: number; seq: number; text: string }[],
+      maxDocuments: number,
     ): DocumentRow {
       return db.transaction((tx) => {
+        if (tx.select({ id: documents.id }).from(documents).where(eq(documents.sessionId, input.sessionId)).all().length >= maxDocuments) {
+          throw new Conflict(`A session can have at most ${maxDocuments} documents`);
+        }
         const row = { id: randomUUID(), ...input, status: "ready" as const, createdAt: new Date() };
         tx.insert(documents).values(row).run();
         for (const chunk of chunks) tx.insert(documentChunks).values({ documentId: row.id, ...chunk }).run();
@@ -326,7 +333,7 @@ export function createSessionStore(db: Db) {
     /** The session's chunks matching an FTS5 query, best first. The query must already be safe: see ftsQuery. */
     searchDocumentChunks(sessionId: string, query: string, limit: number): DocumentExcerpt[] {
       return db.all<DocumentExcerpt>(sql`
-        select d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
+        select d.id as documentId, d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
         from document_chunks_fts f
         join document_chunks c on c.id = f.rowid
         join documents d on d.id = c.document_id
@@ -338,11 +345,22 @@ export function createSessionStore(db: Db) {
     /** Each of the session's documents from its start, taking turns so one long document can't crowd out the others. */
     firstDocumentChunks(sessionId: string, limit: number): DocumentExcerpt[] {
       return db.all<DocumentExcerpt>(sql`
-        select d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
+        select d.id as documentId, d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
         from document_chunks c
         join documents d on d.id = c.document_id
         where d.session_id = ${sessionId}
         order by c.seq, d.rowid
+        limit ${limit}`);
+    },
+
+    /** One page or slide of a document, in reading order. */
+    documentPageChunks(documentId: string, page: number, limit: number): DocumentExcerpt[] {
+      return db.all<DocumentExcerpt>(sql`
+        select d.id as documentId, d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
+        from document_chunks c
+        join documents d on d.id = c.document_id
+        where c.document_id = ${documentId} and c.page = ${page}
+        order by c.seq
         limit ${limit}`);
     },
 
