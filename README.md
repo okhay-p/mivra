@@ -40,9 +40,11 @@ Data is stored in `~/.mivra/mivra.db` (override with `MIVRA_DATA_DIR`). The API'
 
 Each turn's instructions include part of the learner's record across all sessions: up to 30 recently practised concepts, each with how many checks were answered, how many were right, and the latest result. It is calculated from the latest 1000 graded attempts and never stored separately, so older practice stops counting (ADR-009).
 
+The model can also save goals, preferences and misconceptions with the `remember` tool. They save automatically, take effect only if the reply completes, and appear in the sidebar's Memory panel, where the learner can edit or permanently delete them. A misconception is linked to a graded wrong answer on the same concept when there is one, and otherwise counts as only an impression from chat. The newest 40 memories are included in each turn. What was said in the chat itself stays in that session's conversation, so deleting a memory doesn't remove it from there.
+
 ## Web UI
 
-The UI uses [shadcn/ui](https://ui.shadcn.com) with the Paper & Amber theme (ADR-008). Components are copied into `packages/web/src/components/ui`, and theme tokens live in `src/styles.css`. To add a component, run `pnpm dlx shadcn@latest add <name>` from `packages/web`, then check that it didn't overwrite the tokens in `styles.css`. Fonts are bundled through `@fontsource`, so the app needs no network for them. The theme follows the OS until the learner picks Light or Dark in the sidebar; the choice is saved in the browser.
+The UI uses [shadcn/ui](https://ui.shadcn.com) with the Paper & Amber theme (ADR-008). Components are copied into `packages/web/src/components/ui`, and theme tokens live in `src/styles.css`. To add a component, run `pnpm dlx shadcn@latest add <name>` from `packages/web`, then check that it didn't overwrite the tokens in `styles.css`, and point any `from "cn"` import at `@/lib/utils`. Fonts are bundled through `@fontsource`, so the app needs no network for them. The theme follows the OS until the learner picks Light or Dark in the sidebar; the choice is saved in the browser.
 
 ## Access and security
 

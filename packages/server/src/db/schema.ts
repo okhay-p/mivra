@@ -103,3 +103,26 @@ export const attempts = sqliteTable(
   },
   (t) => [uniqueIndex("attempts_one_per_artifact_idx").on(t.artifactId), index("attempts_session_idx").on(t.sessionId, t.createdAt), index("attempts_created_idx").on(t.createdAt)],
 );
+
+export const memoryStatuses = ["pending", "active", "superseded"] as const;
+
+/** The model's inferences about the learner (ADR-009). Pending until the reply that wrote them completes. */
+export const memories = sqliteTable(
+  "memories",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind", { enum: ["goal", "preference", "misconception"] }).notNull(),
+    text: text("text").notNull(),
+    concept: text("concept"),
+    basis: text("basis", { enum: ["wrong_answer", "chat"] }).notNull(),
+    attemptId: text("attempt_id").references(() => attempts.id, { onDelete: "set null" }),
+    sessionId: text("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+    status: text("status", { enum: memoryStatuses }).notNull(),
+    /** The memory this one corrects, kept until this one is deleted. */
+    replacesId: text("replaces_id"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    editedAt: integer("edited_at", { mode: "timestamp_ms" }),
+  },
+  (t) => [index("memories_status_idx").on(t.status, t.createdAt), index("memories_run_idx").on(t.runId)],
+);

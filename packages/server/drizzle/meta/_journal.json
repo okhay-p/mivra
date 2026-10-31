@@ -22,6 +22,13 @@
       "when": 1793405554770,
       "tag": "0002_cloudy_supreme_intelligence",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793406512858,
+      "tag": "0003_dark_shooting_star",
+      "breakpoints": true
     }
   ]
 }

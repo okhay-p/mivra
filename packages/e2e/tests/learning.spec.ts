@@ -93,6 +93,43 @@ test.describe("learning flow", () => {
     await expect(page.getByText("Record: 1 answered, 0 right, last incorrect.")).toBeVisible();
   });
 
+  test("a memory reaches new sessions, and can be edited and deleted from the panel", async ({ page }) => {
+    const topic = `topic${Date.now()}`;
+    const edited = `edited${Date.now()}`;
+    await startSession(page);
+    await send(page, `note ${topic}`);
+    await expect(page.getByText("Noted.")).toBeVisible();
+
+    await startSession(page);
+    await send(page, `known ${topic}`);
+    await expect(page.getByText("Yes, I know that.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Memory", exact: true }).click();
+    const panel = page.getByRole("dialog", { name: "Memory" });
+    const entry = panel.getByRole("listitem").filter({ hasText: topic });
+    await expect(entry).toContainText("From chat");
+    await entry.getByRole("button", { name: "Edit" }).click();
+    await panel.getByRole("textbox", { name: "Memory text" }).fill(`Wants to learn ${edited}`);
+    await panel.getByRole("button", { name: "Save" }).click();
+    const editedEntry = panel.getByRole("listitem").filter({ hasText: edited });
+    await expect(editedEntry).toBeVisible();
+    await page.keyboard.press("Escape");
+
+    await startSession(page);
+    await send(page, `known ${edited}`);
+    await expect(page.getByText("Yes, I know that.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Memory", exact: true }).click();
+    await editedEntry.getByRole("button", { name: "Delete" }).click();
+    await editedEntry.getByRole("button", { name: "Yes, delete" }).click();
+    await expect(editedEntry).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await startSession(page);
+    await send(page, `known ${edited}`);
+    await expect(page.getByText("No, I don't know that.")).toBeVisible();
+  });
+
   test("never sends the answer key before the learner answers", async ({ page }) => {
     await startSession(page);
     const prompt = teachPrompt();

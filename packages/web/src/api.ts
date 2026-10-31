@@ -1,4 +1,4 @@
-import { ArtifactView } from "@mivra/protocol";
+import { ArtifactView, MemoryView } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc } from "hono/client";
@@ -48,3 +48,34 @@ export async function loadMessages(
     return { ok: false, error: "Can't reach the Mivra server." };
   }
 }
+
+type Result<T> = { ok: true; value: T } | { ok: false; error: string };
+
+/** Runs a request, reading a failure as the server's message. */
+async function request<T>(send: () => Promise<Response>, read: (res: Response) => Promise<T> | T): Promise<Result<T>> {
+  try {
+    const res = await send();
+    if (!res.ok) return { ok: false, error: await errorMessage(res) };
+    return { ok: true, value: await read(res) };
+  } catch {
+    return { ok: false, error: "Can't reach the Mivra server." };
+  }
+}
+
+export const listMemories = () =>
+  request(
+    () => api.memories.$get(),
+    async (res) => MemoryView.array().parse(await res.json()),
+  );
+
+export const editMemory = (id: string, text: string) =>
+  request(
+    () => api.memories[":id"].$patch({ param: { id }, json: { text } }),
+    async (res) => MemoryView.parse(await res.json()),
+  );
+
+export const deleteMemory = (id: string) =>
+  request(
+    () => api.memories[":id"].$delete({ param: { id } }),
+    () => undefined,
+  );

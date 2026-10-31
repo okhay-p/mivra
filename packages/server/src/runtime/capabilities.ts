@@ -43,7 +43,8 @@ export type Capability = "artifactKinds" | "tools";
 
 export interface PluginApi {
   registerArtifactKind(definition: ArtifactKindDefinition): void;
-  registerTool(name: string, factory: ToolFactory): void;
+  /** With keepInTranscript false, calls to the tool are left out of the stored conversation. */
+  registerTool(name: string, factory: ToolFactory, options?: { keepInTranscript?: boolean }): void;
 }
 
 export interface Plugin {
@@ -66,6 +67,7 @@ export function createCapabilityRegistry(plugins: Plugin[]) {
   const kinds = new Map<string, ArtifactKindDefinition>();
   const kindsByTool = new Map<string, ArtifactKindDefinition>();
   const toolFactories = new Map<string, ToolFactory>();
+  const untranscribedTools = new Set<string>();
 
   const claimToolName = (name: string, plugin: string) => {
     if (kindsByTool.has(name) || toolFactories.has(name)) {
@@ -86,10 +88,11 @@ export function createCapabilityRegistry(plugins: Plugin[]) {
         kinds.set(definition.kind, definition);
         kindsByTool.set(definition.toolName, definition);
       },
-      registerTool(name, factory) {
+      registerTool(name, factory, options) {
         require("tools");
         claimToolName(name, plugin.name);
         toolFactories.set(name, factory);
+        if (options?.keepInTranscript === false) untranscribedTools.add(name);
       },
     });
   }
@@ -102,6 +105,8 @@ export function createCapabilityRegistry(plugins: Plugin[]) {
     artifactKind: (kind: string) => kinds.get(kind),
     artifactKindForTool: (toolName: string) => kindsByTool.get(toolName),
     viewOf,
+    /** Whether a stored message part should be kept when saving a reply. */
+    keepsInTranscript: (partType: string) => !partType.startsWith("tool-") || !untranscribedTools.has(partType.slice(5)),
 
     /** The tools for one turn. Artifact tools validate their input, save the artifact and return its id. */
     toolsFor(ctx: TurnContext): TurnTools {

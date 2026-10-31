@@ -1,20 +1,21 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { LanguageModel } from "ai";
-import { ArtifactView } from "@mivra/protocol";
+import { ArtifactView, MemoryEdit, MemoryView } from "@mivra/protocol";
 import type { Db } from "./db/client.js";
 import { coreLearning } from "./plugins/core-learning.js";
+import { coreMemory } from "./plugins/core-memory.js";
 import { presentMessages } from "./runtime/artifacts.js";
 import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
-import { createSessionStore, type SessionRow } from "./store/session-store.js";
+import { createSessionStore, type MemoryRow, type SessionRow } from "./store/session-store.js";
 
 export interface AppDeps {
   db: Db;
   model: () => LanguageModel;
   security: SecurityConfig;
-  /** Defaults to the first-party core-learning plugin. */
+  /** Defaults to the first-party core-learning and core-memory plugins. */
   plugins?: Plugin[];
 }
 
@@ -118,6 +119,39 @@ const submitAttemptRoute = createRoute({
   },
 });
 
+const listMemories = createRoute({
+  method: "get",
+  path: "/memories",
+  responses: {
+    200: { description: "Memories in force, newest first", content: { "application/json": { schema: z.array(MemoryView) } } },
+  },
+});
+
+const editMemory = createRoute({
+  method: "patch",
+  path: "/memories/{id}",
+  description: "The learner's correction of a memory.",
+  request: {
+    params: z.object({ id: z.string() }),
+    body: { content: { "application/json": { schema: MemoryEdit } } },
+  },
+  responses: {
+    200: { description: "The edited memory", content: { "application/json": { schema: MemoryView } } },
+    404: errorResponse("Unknown memory"),
+  },
+});
+
+const deleteMemory = createRoute({
+  method: "delete",
+  path: "/memories/{id}",
+  description: "Permanently deletes a memory and the earlier versions it replaced.",
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    204: { description: "Deleted" },
+    404: errorResponse("Unknown memory"),
+  },
+});
+
 const turnErrorStatus = { not_found: 404, invalid: 400, conflict: 409, unavailable: 500 } as const satisfies Record<
   TurnError["kind"],
   number
@@ -134,7 +168,19 @@ function toSessionJson(row: SessionRow) {
   };
 }
 
-export function createApp({ db, model, security, plugins = [coreLearning] }: AppDeps) {
+function toMemoryJson(row: MemoryRow): MemoryView {
+  return {
+    id: row.id,
+    kind: row.kind,
+    text: row.text,
+    concept: row.concept,
+    basis: row.basis,
+    createdAt: row.createdAt.toISOString(),
+    editedAt: row.editedAt?.toISOString() ?? null,
+  };
+}
+
+export function createApp({ db, model, security, plugins = [coreLearning, coreMemory] }: AppDeps) {
   const store = createSessionStore(db);
   store.recoverInterruptedRuns();
   const registry = createCapabilityRegistry(plugins);
@@ -168,7 +214,15 @@ export function createApp({ db, model, security, plugins = [coreLearning] }: App
       if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
       // Cast for the same reason as messages: hono's JSON typing recurses too deeply on the view type.
       return c.json(result.view as never, 201);
-    });
+    })
+    .openapi(listMemories, (c) => c.json(store.listActiveMemories().map(toMemoryJson), 200))
+    .openapi(editMemory, (c) => {
+      const row = store.editMemory(c.req.valid("param").id, c.req.valid("json").text);
+      return row ? c.json(toMemoryJson(row), 200) : c.json({ error: "Memory not found" }, 404);
+    })
+    .openapi(deleteMemory, (c) =>
+      store.deleteMemory(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Memory not found" }, 404),
+    );
 
   api.doc("/doc", {
     openapi: "3.1.0",

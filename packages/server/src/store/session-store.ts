@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
-import { and, asc, desc, eq, max, sql } from "drizzle-orm";
+import { and, asc, desc, eq, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { artifacts, attempts, messages, runs, sessions, type RunStatus } from "../db/schema.js";
+import { artifacts, attempts, memories, messages, runs, sessions, type RunStatus } from "../db/schema.js";
 
 export type { RunStatus };
 
 export type SessionRow = typeof sessions.$inferSelect;
 export type ArtifactRow = typeof artifacts.$inferSelect;
 export type AttemptRow = typeof attempts.$inferSelect;
-export type EvidenceRow = Pick<AttemptRow, "concept" | "correct" | "createdAt">;
+export type EvidenceRow = Pick<AttemptRow, "id" | "concept" | "correct" | "createdAt">;
+export type MemoryRow = typeof memories.$inferSelect;
 
 /** A write was refused because it would break an invariant (reused message id, overlapping run). */
 export class Conflict extends Error {}
@@ -37,6 +38,8 @@ export function createSessionStore(db: Db) {
         .set({ status: "failed", error: "The server stopped before the reply finished", endedAt: new Date() })
         .where(eq(runs.status, "running"))
         .run();
+      // Their replies never completed, so neither did anything they tried to remember.
+      db.delete(memories).where(eq(memories.status, "pending")).run();
     },
 
     listSessions(): SessionRow[] {
@@ -119,6 +122,16 @@ export function createSessionStore(db: Db) {
           .set({ status, assistantMessageId, error, endedAt: now })
           .where(and(eq(runs.id, runId), eq(runs.status, "running")))
           .run();
+
+        const pending = and(eq(memories.runId, runId), eq(memories.status, "pending"));
+        if (status !== "completed") {
+          tx.delete(memories).where(pending).run();
+          return;
+        }
+        for (const memory of tx.select().from(memories).where(pending).all()) {
+          if (memory.replacesId) tx.update(memories).set({ status: "superseded" }).where(eq(memories.id, memory.replacesId)).run();
+          tx.update(memories).set({ status: "active" }).where(eq(memories.id, memory.id)).run();
+        }
       });
     },
 
@@ -147,11 +160,67 @@ export function createSessionStore(db: Db) {
     /** The learner's most recent graded attempts across all sessions, newest first. Rowid breaks timestamp ties. */
     listRecentEvidence(limit: number): EvidenceRow[] {
       return db
-        .select({ concept: attempts.concept, correct: attempts.correct, createdAt: attempts.createdAt })
+        .select({ id: attempts.id, concept: attempts.concept, correct: attempts.correct, createdAt: attempts.createdAt })
         .from(attempts)
         .orderBy(desc(attempts.createdAt), desc(sql`rowid`))
         .limit(limit)
         .all();
+    },
+
+    /**
+     * Saves a memory written during a run; it becomes active when the run completes. Repeating a known
+     * memory returns the existing one. Returns undefined if `replaces` isn't an active memory.
+     */
+    saveMemory(input: Pick<MemoryRow, "sessionId" | "runId" | "kind" | "text" | "concept" | "basis" | "attemptId"> & { replaces: string | null }) {
+      return db.transaction((tx) => {
+        const { replaces, ...fields } = input;
+        if (replaces && tx.select({ status: memories.status }).from(memories).where(eq(memories.id, replaces)).get()?.status !== "active") {
+          return undefined;
+        }
+        if (!replaces) {
+          const same = (text: string) => text.trim().toLowerCase() === input.text.trim().toLowerCase();
+          const known = tx
+            .select()
+            .from(memories)
+            .where(and(eq(memories.kind, input.kind), or(eq(memories.status, "active"), and(eq(memories.status, "pending"), eq(memories.runId, input.runId!)))))
+            .all();
+          const existing = known.find((m) => same(m.text));
+          if (existing) return existing;
+        }
+        const row = { id: randomUUID(), ...fields, status: "pending" as const, replacesId: replaces, createdAt: new Date(), editedAt: null };
+        tx.insert(memories).values(row).run();
+        return row;
+      });
+    },
+
+    /** Memories currently in force, newest first. */
+    listActiveMemories(limit?: number): MemoryRow[] {
+      const query = db.select().from(memories).where(eq(memories.status, "active")).orderBy(desc(memories.createdAt), desc(sql`rowid`));
+      return limit === undefined ? query.all() : query.limit(limit).all();
+    },
+
+    /** The learner's correction of a memory. Returns undefined unless it is active. */
+    editMemory(id: string, text: string): MemoryRow | undefined {
+      return db
+        .update(memories)
+        .set({ text, editedAt: new Date() })
+        .where(and(eq(memories.id, id), eq(memories.status, "active")))
+        .returning()
+        .get();
+    },
+
+    /** Permanently deletes a memory and the earlier versions it replaced. Returns false unless it is active. */
+    deleteMemory(id: string): boolean {
+      return db.transaction((tx) => {
+        let current = tx.select().from(memories).where(and(eq(memories.id, id), eq(memories.status, "active"))).get();
+        if (!current) return false;
+        while (current) {
+          tx.delete(memories).where(eq(memories.id, current.id)).run();
+          const replaced: string | null = current.replacesId;
+          current = replaced ? tx.select().from(memories).where(eq(memories.id, replaced)).get() : undefined;
+        }
+        return true;
+      });
     },
 
     /** Records the learner's single graded attempt. Throws Conflict if one already exists. */

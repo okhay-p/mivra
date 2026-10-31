@@ -1,11 +1,12 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView } from "@mivra/protocol";
-import { MessageSquare, Plus } from "lucide-react";
+import { Brain, MessageSquare, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { MemoryPanel } from "./MemoryPanel.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
@@ -71,6 +72,8 @@ export function App() {
   const active = sessions.find((s) => s.id === activeId);
   // Lives here because the mobile sidebar unmounts its content when closed, and the theme must keep following the OS.
   const [theme, setTheme] = useTheme();
+  // Lives here for the same reason: it has to stay open after the mobile sidebar closes.
+  const [memoryOpen, setMemoryOpen] = useState(false);
 
   return (
     <SidebarProvider>
@@ -81,7 +84,9 @@ export function App() {
         onThemeChange={setTheme}
         onSelect={setActiveId}
         onNew={newSession}
+        onOpenMemory={() => setMemoryOpen(true)}
       />
+      <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
         <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
@@ -113,6 +118,7 @@ function SessionSidebar({
   onThemeChange,
   onSelect,
   onNew,
+  onOpenMemory,
 }: {
   sessions: Session[];
   activeId: string | undefined;
@@ -120,6 +126,7 @@ function SessionSidebar({
   onThemeChange: (theme: ThemeChoice) => void;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onOpenMemory: () => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
   // On mobile the sidebar is an overlay, so close it once the choice is made.
@@ -177,6 +184,20 @@ function SessionSidebar({
         ))}
       </SidebarContent>
       <SidebarFooter>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Memory"
+              onClick={() => {
+                onOpenMemory();
+                closeOnMobile();
+              }}
+            >
+              <Brain />
+              <span>Memory</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         <ThemeToggle choice={theme} onChange={onThemeChange} />
       </SidebarFooter>
       <SidebarRail />
