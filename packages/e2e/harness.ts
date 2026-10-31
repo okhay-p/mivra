@@ -107,6 +107,14 @@ function nextStep(prompt: PromptMessage[]): Step {
   if (practise) {
     return toolResults === 0 ? { tool: "ask_multiple_choice", input: { ...check, concept: practise } } : { text: "Answer it." };
   }
+  // Saves a memory for a test to find in the panel.
+  const note = /note (\w+)/.exec(text)?.[1];
+  if (note) {
+    return toolResults === 0 ? { tool: "remember", input: { kind: "goal", text: `Wants to learn ${note}` } } : { text: "Noted." };
+  }
+  // Reports whether the instructions mention a memory.
+  const known = /known (\w+)/.exec(text)?.[1];
+  if (known) return { text: JSON.stringify(prompt[0]?.content).includes(known) ? "Yes, I know that." : "No, I don't know that." };
   // Reports what the instructions say about that concept from earlier sessions.
   const recall = /recall (\w+)/.exec(text)?.[1];
   if (recall) {

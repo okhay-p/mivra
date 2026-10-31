@@ -14,7 +14,7 @@ import { Conflict, type RunStatus, type SessionStore } from "../store/session-st
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 import { errorText, publicErrorText } from "./errors.js";
-import { MAX_EVIDENCE, learnerContext } from "./learner-context.js";
+import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
 
 export const INSTRUCTIONS = [
   "You are Mivra, a patient tutor. Explain concepts step by step, check the learner's understanding, and adapt to what they already know.",
@@ -37,10 +37,10 @@ export type AssembleContext = (
 
 /** The whole transcript, plus the learner's record across sessions. Summaries will plug in here. */
 const defaultAssembleContext =
-  (store: SessionStore): AssembleContext =>
+  (store: SessionStore, registry: CapabilityRegistry): AssembleContext =>
   async (conversation) => ({
     messages: await convertToModelMessages(conversation),
-    instructions: learnerContext(store.listRecentEvidence(MAX_EVIDENCE)),
+    instructions: learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
   });
 
 export interface TurnRunnerDeps {
@@ -78,7 +78,7 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
   return {
     async startTurn({ sessionId, message: input, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
@@ -151,7 +151,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
           }
           const status = runStatusFor(outcome);
           const error = outcome.status === "failed" ? errorText(outcome.error ?? streamError) : undefined;
-          store.finishRun(runId, sessionId, status, responseMessage, error);
+          const reply = { ...responseMessage, parts: responseMessage.parts.filter((part) => registry.keepsInTranscript(part.type)) };
+          store.finishRun(runId, sessionId, status, reply, error);
         },
         // Only known-safe errors reach the learner (e.g. a missing API key); detail stays in runs.error.
         onError: publicErrorText,
