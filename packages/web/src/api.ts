@@ -1,4 +1,4 @@
-import { ArtifactView, MemoryView } from "@mivra/protocol";
+import { ArtifactView, DocumentView, MemoryView } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc } from "hono/client";
@@ -77,5 +77,27 @@ export const editMemory = (id: string, text: string) =>
 export const deleteMemory = (id: string) =>
   request(
     () => api.memories[":id"].$delete({ param: { id } }),
+    () => undefined,
+  );
+
+export const listDocuments = (sessionId: string) =>
+  request(
+    () => api.sessions[":id"].documents.$get({ param: { id: sessionId } }),
+    async (res) => DocumentView.array().parse(await res.json()),
+  );
+
+/** Sent by hand: the typed client has no multipart body for this route, which the server reads as a stream. */
+export const uploadDocument = (sessionId: string, file: File) => {
+  const body = new FormData();
+  body.append("file", file);
+  return request(
+    () => fetch(`/api/sessions/${sessionId}/documents`, { method: "POST", headers: authHeaders, body }),
+    async (res) => DocumentView.parse(await res.json()),
+  );
+};
+
+export const deleteDocument = (id: string) =>
+  request(
+    () => api.documents[":id"].$delete({ param: { id } }),
     () => undefined,
   );
