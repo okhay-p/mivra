@@ -28,6 +28,7 @@ const MAX_STEPS = 5;
 /**
  * Decides what the model sees for a turn (ADR-007, ADR-009). `instructions` holds what Mivra knows about
  * the learner and is added to the tutor's own, so it isn't mistaken for something the learner said.
+ * A custom assembler replaces all of this, so including the learner's record is up to it.
  */
 export type AssembleContext = (
   conversation: UIMessage[],

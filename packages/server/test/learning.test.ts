@@ -1,7 +1,7 @@
 import type { UIMessage } from "ai";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
@@ -226,6 +226,10 @@ describe("multiple_choice through the agent", () => {
       expect(deriveConceptState(store.listRecentEvidence(1000))).toMatchObject([{ attempts: 4, correct: 2, lastResult: "correct" }]);
       // Beyond the window, older attempts stop counting.
       expect(deriveConceptState(store.listRecentEvidence(3))).toMatchObject([{ attempts: 3, correct: 2, lastResult: "correct" }]);
+
+      // The index happens to return ties in this order; without it, only the explicit tie-breaker does.
+      db.run(sql`DROP INDEX attempts_created_idx`);
+      expect(deriveConceptState(store.listRecentEvidence(1000))).toMatchObject([{ lastResult: "correct" }]);
     } finally {
       vi.useRealTimers();
     }
