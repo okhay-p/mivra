@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ArtifactPart } from "../src/artifacts/ArtifactPart.js";
 import { tableStateAt } from "../src/artifacts/TableArtifact.js";
 import { relationMatrix, truthTable } from "./fixtures.js";
@@ -24,12 +24,6 @@ describe("tableStateAt", () => {
 });
 
 describe("TableArtifact", () => {
-  // The first render and role query in a file take far longer than the rest, so a busy machine can time that test out.
-  beforeAll(() => {
-    renderTable(truthTable);
-    next();
-    cleanup();
-  });
   afterEach(() => void vi.useRealTimers());
 
   it("persists changed cells and shows booleans as T and F", () => {

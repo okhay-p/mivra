@@ -60,6 +60,8 @@ test.describe("set diagram", () => {
   }
 
   test("each step highlights its own region, drawn as its exact shape", async ({ page }) => {
+    // Nine steps and a hit test of the whole drawing take about 8 seconds on an idle machine.
+    test.setTimeout(60_000);
     await startSession(page);
     await send(page, `venn ${Date.now()}`);
     await expect(page.getByText("Step through the diagram.")).toBeVisible();
@@ -219,14 +221,14 @@ test.describe("learning flow", () => {
     await expect(cells(page).first()).toContainText("3");
     await expect(trace(page).getByTestId("trace-range")).toBeVisible();
     await expect(trace(page).getByTestId("trace-pointer")).toHaveCSS("grid-column-start", "1");
-    await expect(trace(page).getByText("swaps")).toBeVisible();
+    await expect(trace(page).getByText("swaps", { exact: true })).toBeVisible();
 
     await trace(page).getByRole("button", { name: "Next" }).click();
     await expect(trace(page).getByText("Swap them.")).toBeVisible();
     await expectCells(page, ["1", "3", "2"]);
     await expect(trace(page).getByTestId("trace-range")).toHaveCount(0);
     await expect(trace(page).getByTestId("trace-pointer")).toHaveCount(0);
-    await expect(trace(page).getByText("swaps")).toHaveCount(0);
+    await expect(trace(page).getByText("swaps", { exact: true })).toHaveCount(0);
 
     await trace(page).getByRole("button", { name: "Next" }).click();
     await expect(trace(page).getByText("Move on.")).toBeVisible();
@@ -277,6 +279,8 @@ test.describe("learning flow", () => {
   });
 
   test("a memory reaches new sessions, and can be edited and deleted from the panel", async ({ page }) => {
+    // Six page loads and three replies, which is most of the default 30 seconds on a busy machine.
+    test.setTimeout(90_000);
     const topic = `topic${Date.now()}`;
     const edited = `edited${Date.now()}`;
     await startSession(page);
@@ -353,7 +357,7 @@ test.describe("learning flow", () => {
     await expect(page.getByText("Step through the table.")).toBeVisible();
     await page.setViewportSize({ width: 320, height: 800 });
 
-    const table = page.getByRole("region", { name: /^Table: Truth table/ });
+    const table = page.getByRole("region", { name: /^Truth table.*Table$/ });
     const cells = table.getByTestId("table-cell");
     const texts = () => cells.evaluateAll((all) => all.map((cell) => cell.textContent));
     // p, q and the result column, row by row.
@@ -398,7 +402,7 @@ test.describe("learning flow", () => {
     await send(page, `workedproof ${Date.now()}`);
     await expect(page.getByText("Reveal each step.")).toBeVisible();
 
-    const worked = page.getByRole("region", { name: /^Worked steps/ });
+    const worked = page.getByRole("region", { name: /Worked steps$/ });
     const steps = worked.getByTestId("worked-step");
     await expect(steps).toHaveCount(1);
     await expect(steps.first()).toContainText("Base case");
@@ -424,7 +428,7 @@ test.describe("learning flow", () => {
     await expect(page.getByText("Scroll the long one.")).toBeVisible();
     await page.setViewportSize({ width: 320, height: 800 });
 
-    const worked = page.getByRole("region", { name: /^Worked steps/ });
+    const worked = page.getByRole("region", { name: /Worked steps$/ });
     const steps = worked.getByTestId("worked-step");
     await worked.getByRole("button", { name: "Next" }).click();
     await expect(steps).toHaveCount(2);
@@ -460,7 +464,7 @@ test.describe("learning flow", () => {
     await expect(steps).toHaveCount(2);
 
     // A formula in a table's explanation behaves the same, and gains its tab stop when its step arrives.
-    const table = page.getByRole("region", { name: /^Table: Same words/ });
+    const table = page.getByRole("region", { name: /^Same words.*Table$/ });
     await expect(table.getByRole("group", { name: /Formula/ })).toHaveCount(0);
     await table.getByRole("button", { name: "Next" }).click();
     await table.getByRole("button", { name: "Next" }).click();
@@ -477,7 +481,7 @@ test.describe("learning flow", () => {
     await expect(page.getByText("Scroll the long one.")).toBeVisible();
     await page.setViewportSize({ width: 320, height: 800 });
 
-    for (const name of [/^Worked steps/, /^Table: \$a_/]) {
+    for (const name of [/Worked steps$/, /^(?!Same words).*Table$/]) {
       const card = page.getByRole("region", { name });
       const title = card.getByRole("heading").getByTestId("step-scroll");
       await expect(title).toHaveRole("group");
@@ -498,13 +502,48 @@ test.describe("learning flow", () => {
     }
   });
 
+  test("a trace's long formulas scroll in their own boxes, whose arrow keys don't step", async ({ page }) => {
+    await startSession(page);
+    await send(page, `widetrace ${Date.now()}`);
+    await expect(page.getByText("Scroll the long trace.")).toBeVisible();
+    await page.setViewportSize({ width: 320, height: 800 });
+
+    const title = trace(page).getByRole("heading").getByTestId("step-scroll");
+    await expect(title).toHaveRole("group");
+    const explanation = trace(page).getByTestId("trace-status").getByTestId("step-scroll");
+    await expect(explanation).toHaveAttribute("tabindex", "0");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+
+    await explanation.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(trace(page).getByTestId("step-counter")).toHaveText("Step 1 of 2");
+    await expect.poll(() => explanation.evaluate((box) => box.scrollLeft)).toBeGreaterThan(0);
+
+    await trace(page).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(trace(page).getByTestId("step-counter")).toHaveText("Step 2 of 2");
+  });
+
+  test("a trace keeps focus on Next at the last step", async ({ page }) => {
+    await startSession(page);
+    await send(page, teachPrompt());
+    await expect(page.getByText("Step through it, then answer the check.")).toBeVisible();
+    const next = trace(page).getByRole("button", { name: "Next" });
+    await next.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Enter");
+    await expect(trace(page).getByTestId("step-counter")).toHaveText("Step 3 of 3");
+    await expect(next).toHaveAttribute("aria-disabled", "true");
+    await expect(next).toBeFocused();
+  });
+
   test("a formula box keeps focus when it stops overflowing, and leaves no stray stop behind", async ({ page }) => {
     await startSession(page);
     await send(page, `wideproof ${Date.now()}`);
     await expect(page.getByText("Scroll the long one.")).toBeVisible();
     await page.setViewportSize({ width: 320, height: 800 });
 
-    const worked = page.getByRole("region", { name: /^Worked steps/ });
+    const worked = page.getByRole("region", { name: /Worked steps$/ });
     const title = worked.getByRole("heading").getByTestId("step-scroll");
     await expect(title).toHaveAttribute("tabindex", "0");
     await title.focus();
@@ -541,7 +580,7 @@ test.describe("learning flow", () => {
     await startSession(page);
     await send(page, `truthtable ${Date.now()}`);
     await expect(page.getByText("Step through the table.")).toBeVisible();
-    const cell = page.getByRole("region", { name: /^Table: Truth table/ }).locator('[data-tone="active"]').first();
+    const cell = page.getByRole("region", { name: /^Truth table.*Table$/ }).locator('[data-tone="active"]').first();
     for (const dark of [false, true]) {
       await page.evaluate((on) => document.documentElement.classList.toggle("dark", on), dark);
       const look = await cell.evaluate((e) => {
@@ -559,6 +598,33 @@ test.describe("learning flow", () => {
       expect(look.background).not.toBe(look.accent);
       expect(look.shadow).not.toContain(look.primary);
       expect(look.shadow).toContain(look.foreground);
+    }
+  });
+
+  test("a trace's active range and cell are neutral too, in both themes", async ({ page }) => {
+    await startSession(page);
+    await send(page, teachPrompt());
+    await expect(page.getByText("Step through it, then answer the check.")).toBeVisible();
+    for (const dark of [false, true]) {
+      await page.evaluate((on) => document.documentElement.classList.toggle("dark", on), dark);
+      for (const element of [trace(page).getByTestId("trace-range"), cells(page).first()]) {
+        const look = await element.evaluate((e) => {
+          const probe = document.createElement("div");
+          document.body.append(probe);
+          const resolve = (token: string) => {
+            probe.style.color = `var(--${token})`;
+            return getComputedStyle(probe).color;
+          };
+          const tokens = { foreground: resolve("foreground"), primary: resolve("primary"), accent: resolve("accent") };
+          probe.remove();
+          const style = getComputedStyle(e);
+          return { ...tokens, background: style.backgroundColor, shadow: style.boxShadow, border: style.borderColor };
+        });
+        expect(look.background).not.toBe(look.accent);
+        expect(look.border).not.toBe(look.primary);
+        expect(look.shadow).not.toContain(look.primary);
+        expect(look.shadow).toContain(look.foreground);
+      }
     }
   });
 

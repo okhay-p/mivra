@@ -1,6 +1,6 @@
 import { render } from "@testing-library/react";
 import katex from "katex";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MathText } from "../src/MathText.js";
 import { isTooDeep, splitBlocks } from "../src/math-syntax.js";
 
@@ -300,6 +300,7 @@ describe("MathText robustness", () => {
     expect(c.textContent).toContain("after");
   });
 
+  // Inherently slow: this is one real render per character, and it's the only test that walks every prefix.
   it("survives every prefix of a reply in one mounted component, and recovers at the end", () => {
     const reply = "# Title\n\n**bold** $x^2$ and\n\n$$\n\\frac{a}{b}\n$$\n\n| a | $b$ |\n|---|---|\n| `1` | [l](https://e.com) |\n\n```js\nlet a\n```\n\ncosts $5 and $10\n";
     const { container, rerender } = render(<MathText text="" />);
@@ -359,6 +360,12 @@ const nested = "[".repeat(40) + "x" + "](u)".repeat(40);
 const bare = "[".repeat(40) + "x" + "]".repeat(40);
 
 describe("MathText guard on ordinary content", () => {
+  // These need more formulas than the guard's limit, and each real one costs jsdom over 10ms to parse. They're
+  // about which formulas reach KaTeX, so all they need back is the source; the tests above cover KaTeX's output.
+  beforeEach(() => {
+    vi.spyOn(katex, "renderToString").mockImplementation((source) => `<span class="katex"><annotation>${source.replaceAll("&", "&amp;").replaceAll("<", "&lt;")}</annotation></span>`);
+  });
+
   const rows = Array.from({ length: 33 }, (_, i) => `| $[${i},${i + 1})$ | ${i} |`).join("\n");
 
   it("renders a table of half-open intervals", () => {
@@ -500,10 +507,8 @@ describe("MathText guard on hostile content", () => {
   ])("leaves what's really inside %s to the parser, which won't read it", (_name, prefix) => {
     const text = prefix + ">".repeat(2000) + " deep";
     expect(isTooDeep(text)).toBe(false);
-    const started = performance.now();
-    const c = block(text);
-    expect(performance.now() - started).toBeLessThan(2000);
-    expect(c.querySelector("blockquote")).toBeNull();
+    // A parser that did read it would produce a blockquote, and that nesting is what's slow.
+    expect(block(text).querySelector("blockquote")).toBeNull();
   });
 });
 

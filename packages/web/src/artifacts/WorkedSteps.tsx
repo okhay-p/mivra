@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -14,18 +15,23 @@ export function WorkedSteps({ view }: ArtifactProps<"worked_steps">) {
   const stepper = useStepper(spec.steps.length);
   const { index, last, go } = stepper;
   const allShown = index === last;
+  const titleId = useId();
+  const kindId = useId();
 
   return (
-    <Card role="region" aria-label={`Worked steps: ${spec.title}`} tabIndex={0} onKeyDown={stepper.onKeyDown} className="whitespace-normal">
+    <Card role="region" aria-labelledby={`${titleId} ${kindId}`} tabIndex={0} onKeyDown={stepper.onKeyDown} className="whitespace-normal">
       <CardHeader>
         <CardTitle className="min-w-0 font-heading text-base">
           <h3>
             <ScrollableText>
-              <MathText text={spec.title} mode="math" />
+              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
+              <span id={titleId}>
+                <MathText text={spec.title} mode="math" />
+              </span>
             </ScrollableText>
           </h3>
         </CardTitle>
-        <CardDescription>Worked steps</CardDescription>
+        <CardDescription id={kindId}>Worked steps</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {spec.goal && (

@@ -71,7 +71,7 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 className={cn(
                   "h-auto flex-wrap justify-between gap-x-3 gap-y-1 py-2 text-left font-normal whitespace-normal",
                   answered && "disabled:opacity-100",
-                  submitting === i && "border-primary dark:border-primary",
+                  submitting === i && "border-foreground dark:border-foreground",
                   // The dark: variants beat the outline button's own dark border and background.
                   result === "correct" && "border-success bg-success/10 dark:border-success dark:bg-success/15",
                   result === "incorrect" && "border-destructive bg-destructive/10 dark:border-destructive dark:bg-destructive/15",

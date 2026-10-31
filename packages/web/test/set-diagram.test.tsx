@@ -261,6 +261,6 @@ describe("SetDiagram", () => {
     fireEvent.keyDown(region, { key: "ArrowLeft" });
     fireEvent.keyDown(region, { key: "ArrowLeft" });
     expect(screen.getByText("Step 1 of 3")).toBeTruthy();
-    expect((screen.getByRole("button", { name: /prev/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: /prev/i }).getAttribute("aria-disabled")).toBe("true");
   });
 });

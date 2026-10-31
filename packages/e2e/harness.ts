@@ -333,7 +333,15 @@ const wideExplanationTable = {
 };
 const wideTitleTable = { title: wideProof.title, columns: ["$a$"], rows: [[1]] };
 
+const wideFormula = "$\\displaystyle {\\sum_{i=1}^{n} i + \\sum_{j=1}^{m} j + \\sum_{k=1}^{p} k + \\sum_{l=1}^{q} l + \\sum_{r=1}^{s} r}$";
+const wideFormulaTrace = {
+  title: wideFormula,
+  values: [1, 2],
+  steps: [{ explanation: wideFormula }, { explanation: "Then this." }],
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  widetrace: [{ tool: "show_algorithm_trace", input: wideFormulaTrace }, { text: "Scroll the long trace." }],
   graphbst: [{ tool: "show_graph", input: graphBst }, { text: "Here's the BST." }],
   graphskew: [{ tool: "show_graph", input: graphSkew }, { text: "Here's the skewed tree." }],
   graphtree: [{ tool: "show_graph", input: graphTree }, { text: "Here's the tree." }],

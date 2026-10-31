@@ -1,15 +1,11 @@
 import type { SetDiagramHighlight, SetDiagramSpec } from "@mivra/protocol";
-import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { FRAME_INSET, ROW_HEIGHT, VENN_LAYOUTS, chooseRegionFit, regionMasks, regionPath, slotBox, type RegionFit, type RegionSlot, type Size, type VennLayout } from "./set-diagram-geometry.js";
-
-const PLAY_INTERVAL_MS = 1500;
+import { StepperControls, useStepper } from "./stepper.js";
 
 type Tone = NonNullable<SetDiagramHighlight["tone"]>;
 type Region = SetDiagramSpec["regions"][number];
@@ -273,35 +269,10 @@ function Diagram({ spec, layout, tones, fits, drawing }: { spec: SetDiagramSpec;
 export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
   const { spec } = view;
   const stepCount = spec.steps?.length ?? 0;
-  const last = stepCount - 1;
-  const [index, setIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
-
-  useEffect(() => {
-    if (!playing) return;
-    if (index >= last) {
-      setPlaying(false);
-      return;
-    }
-    const timer = setTimeout(() => setIndex((i) => Math.min(i + 1, last)), PLAY_INTERVAL_MS);
-    return () => clearTimeout(timer);
-  }, [playing, index, last]);
-
-  const go = (next: number) => {
-    setPlaying(false);
-    setIndex(Math.max(0, Math.min(next, last)));
-  };
-  const togglePlay = () => {
-    if (playing) return setPlaying(false);
-    if (index >= last) setIndex(0); // Replay from the start.
-    setPlaying(true);
-  };
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "ArrowLeft") go(index - 1);
-    else if (e.key === "ArrowRight") go(index + 1);
-    else return;
-    e.preventDefault();
-  };
+  const stepper = useStepper(stepCount);
+  const { index } = stepper;
+  const titleId = useId();
+  const kindId = useId();
 
   const layout = VENN_LAYOUTS[spec.sets.length]!;
   const state = setDiagramStateAt(spec, index);
@@ -312,14 +283,14 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
   const overflowing = masks.filter((mask) => (fits.get(mask) ?? "contents") !== "contents");
 
   return (
-    <Card role="region" aria-label={`Set diagram: ${spec.title}`} {...(stepCount > 0 ? { tabIndex: 0, onKeyDown } : {})} className="whitespace-normal">
+    <Card role="region" aria-labelledby={`${titleId} ${kindId}`} {...(stepCount > 0 ? { tabIndex: 0, onKeyDown: stepper.onKeyDown } : {})} className="whitespace-normal">
       <CardHeader>
         <CardTitle className="font-heading text-base">
-          <h3>
+          <h3 id={titleId}>
             <MathText text={spec.title} mode="math" />
           </h3>
         </CardTitle>
-        <CardDescription>Set diagram</CardDescription>
+        <CardDescription id={kindId}>Set diagram</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {/* The drawing relates elements to sets only by position, so screen readers get this instead. */}
@@ -416,23 +387,7 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
             <div aria-hidden="true" data-testid="set-explanation">
               <MathText text={state.explanation} mode="math" />
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => go(index - 1)} disabled={index === 0}>
-                <ChevronLeft />
-                Prev
-              </Button>
-              <Button type="button" size="sm" onClick={togglePlay} aria-pressed={playing}>
-                {playing ? <Pause /> : <Play />}
-                {playing ? "Pause" : "Play"}
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => go(index + 1)} disabled={index === last}>
-                Next
-                <ChevronRight />
-              </Button>
-              <Badge variant="outline" className="ml-auto">
-                Step {index + 1} of {stepCount}
-              </Badge>
-            </div>
+            <StepperControls stepper={stepper} play announce={false} />
           </>
         )}
       </CardContent>

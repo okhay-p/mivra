@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ArtifactPart } from "../src/artifacts/ArtifactPart.js";
 import { induction } from "./fixtures.js";
 
@@ -8,12 +8,6 @@ const steps = () => screen.getAllByTestId("worked-step");
 const next = () => fireEvent.click(screen.getByRole("button", { name: /next/i }));
 
 describe("WorkedSteps", () => {
-  // The first render and role query in a file take far longer than the rest, so a busy machine can time that test out.
-  beforeAll(() => {
-    renderSteps();
-    next();
-    cleanup();
-  });
 
   it("marks the current step with neutral tokens, not amber, and a thicker rule", () => {
     renderSteps();

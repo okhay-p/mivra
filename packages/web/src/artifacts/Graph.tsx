@@ -1,15 +1,13 @@
 import { graphEdgeLookup, type GraphSpec, type GraphTone } from "@mivra/protocol";
-import { Check, ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Check } from "lucide-react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { edgeText, LABEL_FONT_PX, layoutGraph } from "./graph-layout.js";
+import { StepperControls, useStepper } from "./stepper.js";
 
-const PLAY_INTERVAL_MS = 1500;
 /** The smallest the graph is drawn, so labels stay at 11px or more. Past this it scrolls in its own box. */
 const MIN_SCALE = 11 / LABEL_FONT_PX;
 
@@ -49,9 +47,7 @@ export function graphStateAt(spec: GraphSpec, index: number) {
 export function Graph({ view }: ArtifactProps<"graph">) {
   const { spec } = view;
   const steps = spec.steps ?? [];
-  const last = steps.length - 1;
-  const [index, setIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
+  const stepper = useStepper(steps.length);
 
   // The view is parsed afresh on every parent render, so the key is what the layout reads, not the object.
   const shape = JSON.stringify([spec.directed, spec.kind, spec.nodes, spec.edges]);
@@ -80,35 +76,12 @@ export function Graph({ view }: ArtifactProps<"graph">) {
     return () => observer.disconnect();
   }, [layout]);
 
-  useEffect(() => {
-    if (!playing) return;
-    if (index >= last) {
-      setPlaying(false);
-      return;
-    }
-    const timer = setTimeout(() => setIndex((i) => Math.min(i + 1, last)), PLAY_INTERVAL_MS);
-    return () => clearTimeout(timer);
-  }, [playing, index, last]);
-
-  const go = (next: number) => {
-    setPlaying(false);
-    setIndex(Math.max(0, Math.min(next, last)));
-  };
-  const togglePlay = () => {
-    if (playing) return setPlaying(false);
-    if (index >= last) setIndex(0); // Replay from the start.
-    setPlaying(true);
-  };
   const onKeyDown = (e: KeyboardEvent) => {
     // In the drawing's scrolling box the arrow keys scroll it.
-    if (scroller.current?.contains(e.target as Node)) return;
-    if (e.key === "ArrowLeft") go(index - 1);
-    else if (e.key === "ArrowRight") go(index + 1);
-    else return;
-    e.preventDefault();
+    if (!scroller.current?.contains(e.target as Node)) stepper.onKeyDown(e);
   };
 
-  const state = graphStateAt(spec, index);
+  const state = graphStateAt(spec, stepper.index);
   const hasSteps = steps.length > 0;
   const percent = (value: number, of: number) => `${(value / of) * 100}%`;
   const titleId = useId();
@@ -219,27 +192,11 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         )}
         {hasSteps && (
           <>
-            <GraphStatus spec={spec} state={state} step={index + 1} of={steps.length} />
+            <GraphStatus spec={spec} state={state} step={stepper.index + 1} of={steps.length} />
             <div aria-hidden="true" data-testid="graph-explanation">
               <MathText text={state.explanation} mode="math" />
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => go(index - 1)} disabled={index === 0}>
-                <ChevronLeft />
-                Prev
-              </Button>
-              <Button type="button" size="sm" onClick={togglePlay} aria-pressed={playing}>
-                {playing ? <Pause /> : <Play />}
-                {playing ? "Pause" : "Play"}
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => go(index + 1)} disabled={index === last}>
-                Next
-                <ChevronRight />
-              </Button>
-              <Badge variant="outline" className="ml-auto" aria-hidden="true">
-                Step {index + 1} of {steps.length}
-              </Badge>
-            </div>
+            <StepperControls stepper={stepper} play announce={false} />
           </>
         )}
       </CardContent>
