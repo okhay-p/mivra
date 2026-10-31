@@ -55,11 +55,11 @@ function withinBudget(excerpts: DocumentExcerpt[]): DocumentExcerpt[] {
   return chosen.sort((a, b) => a.documentOrder - b.documentOrder || a.seq - b.seq);
 }
 
-/** "page 3", "pages 3-5", "slides 2, 4 and 6", "p. 3", "pp. 3-5". Spelled-out numbers aren't recognised. */
-const PAGE_REFERENCE = /(?<![\p{L}\p{N}])(pages?|slides?|pp?\.)\s*(\d+(?:\s*(?:-|–|—|,|&|and|to)\s*\d+)*)(?![\p{L}\p{N}])/giu;
+/** "page 3", "pages 3-5", "slides 2, 4 and 6", "pages 2, 4, and 6", "p. 3", "pp. 3-5". Spelled-out numbers aren't recognised. */
+const PAGE_REFERENCE = /(?<![\p{L}\p{N}])(pages?|slides?|pp?\.)\s*(\d+(?:\s*(?:-|–|—|,\s*and|,|&|and|to)\s*\d+)*)(?![\p{L}\p{N}])/giu;
 
 function pageNumbers(list: string): number[] {
-  const numbers = list.split(/\s*(?:,|&|and)\s*/i).flatMap((part) => {
+  const numbers = list.split(/\s*(?:,\s*and|,|&|and)\s*/i).flatMap((part) => {
     const ends = part.split(/\s*(?:-|–|—|to)\s*/i).map(Number);
     const [from, to] = [Math.min(...ends), Math.max(...ends)];
     return Array.from({ length: Math.min(to - from + 1, MAX_REQUESTED_PAGES) }, (_, i) => from + i);

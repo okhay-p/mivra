@@ -632,6 +632,7 @@ describe("asking for a page by number", () => {
   it.each([
     ["pages 2-3", [2, 3]],
     ["pages 1 and 3", [1, 3]],
+    ["pages 1, 2, and 3", [1, 2, 3]],
     ["p. 2", [2]],
     ["pp. 1–2", [1, 2]],
     ["PAGE 2", [2]],
