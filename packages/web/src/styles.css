@@ -129,6 +129,17 @@ div.math-text {
   display: flow-root;
   width: 100%;
 }
+/* Literal text keeps its line breaks. KaTeX's markup is spaced by its own rules. */
+.math-text-literal {
+  white-space: pre-wrap;
+}
+.math-text-literal .katex {
+  white-space: normal;
+}
+/* Only there to hold KaTeX's HTML, so it stays out of the layout. */
+.math-text-formula {
+  display: contents;
+}
 div.math-text > * + *,
 .math-text li > * + *,
 .math-text blockquote > * + * {

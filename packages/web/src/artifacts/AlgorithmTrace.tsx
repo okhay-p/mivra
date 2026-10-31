@@ -90,7 +90,7 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
       <CardHeader>
         <CardTitle className="font-heading text-base">
           <h3>
-            <MathText text={spec.title} mode="inline" />
+            <MathText text={spec.title} mode="math" />
           </h3>
         </CardTitle>
         <CardDescription>Algorithm trace</CardDescription>
@@ -165,7 +165,7 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
           </dl>
         )}
         <div aria-live="polite">
-          <MathText text={state.explanation} />
+          <MathText text={state.explanation} mode="math" />
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => go(index - 1)} disabled={index === 0}>

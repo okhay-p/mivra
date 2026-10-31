@@ -70,5 +70,11 @@ The agent shows interactive artifacts through tool calls (ADR-006): `show_algori
 
 ## Markdown and maths
 
-`MathText` (`packages/web/src/MathText.tsx`) renders model-written text as GitHub-flavoured markdown with KaTeX maths: `$...$` inline, `$$...$$` display. It is used for replies and for artifact text, apart from trace cell values; learner messages stay plain. A dollar with whitespace just inside it, or a digit just after its closing dollar, is plain text, so "costs $5 and $10" isn't a formula. Raw HTML shows as text, images show their alt text and never load, and only `http`, `https` and `mailto` links work. Keep the `katex` dependency on the version `rehype-katex` uses, since its stylesheet has to match the markup.
+`MathText` (`packages/web/src/MathText.tsx`) renders model-written text in one of two modes:
 
+- `block`, for replies: GitHub-flavoured markdown with KaTeX maths, `$...$` inline and `$$...$$` display.
+- `math`, for artifact text: the trace title and step explanations, and the check's question, option text, feedback and explanation. Only `$...$` is a formula and `\$` a dollar. Everything else is literal, including `$$`, so the options `2*3*4` and `234` stay different. A new artifact field that may hold an answer or a structured value should use this mode; explanatory prose may use `block`.
+
+Concept labels, pointer and range labels, variable names and values, and trace cell values aren't passed through `MathText`, and learner messages stay plain.
+
+A `$...$` is maths only if there's no whitespace just inside its dollars, no digit just after the closing one, and no backtick between them, and the first dollar after the opening one decides. So "costs $5 and $10" isn't a formula. In `block` mode, code and `\$` take precedence over a dollar. Raw HTML shows as text, images show their alt text and never load, and only `http`, `https` and `mailto` links work. A reply is rendered block by block, so a streamed delta only re-renders its last block; a block nested too deeply to parse quickly shows as plain text.

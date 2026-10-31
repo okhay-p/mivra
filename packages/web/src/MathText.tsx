@@ -1,21 +1,24 @@
+import katex from "katex";
 import "katex/dist/katex.min.css";
-import { Component, memo, useDeferredValue, type ComponentProps, type ReactNode } from "react";
+import { Component, isValidElement, memo, useDeferredValue, useMemo, type ComponentProps, type ReactElement, type ReactNode } from "react";
 import Markdown, { type Components, type Options } from "react-markdown";
-import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-
-type Plugins = NonNullable<Options["remarkPlugins"]>;
+import { isTooDeep, remarkDollarRule, splitBlocks, splitMath } from "./math-syntax.js";
 
 interface MathTextProps {
-  /** Markdown with `$...$` and `$$...$$` maths. May be half-written, while a reply streams. */
+  /** The text. May be half-written, while a reply streams. */
   text: string;
   /**
-   * "block" (the default) renders paragraphs, lists, code, tables and display maths inside a `div`.
-   * "inline" renders one `span` for titles, table cells and option text: only inline markdown and maths
-   * count, so "1. Sort" stays as written, and links show as their text because a link can't sit in a button.
+   * What the text is allowed to mean. Choose by what a change of meaning would cost:
+   *
+   * - "math" is for artifact fields, and anything that may hold an answer or a structured value. Only `$...$`
+   *   is a formula and `\$` a dollar; all else is literal, so the options `2*3*4` and `234` stay different.
+   *   Renders a `span`, so it fits in a button or heading. Line breaks are kept.
+   * - "block" (the default) is for explanatory prose, such as replies: GitHub-flavoured markdown with `$...$`
+   *   and display `$$...$$` maths, inside a `div`. It can reformat what it shows, so `2*3*4` loses its stars.
    */
-  mode?: "block" | "inline";
+  mode?: "block" | "math";
   className?: string;
 }
 
@@ -31,101 +34,48 @@ export function safeUrl(url: string): string {
   }
 }
 
-interface MdNode {
-  type: string;
-  children?: MdNode[];
-  position?: { start: { offset?: number }; end: { offset?: number } };
-  data?: { hProperties?: Record<string, unknown> };
-}
-
-function inlineMathIn(node: MdNode, visit: (math: MdNode, parent: MdNode) => void) {
-  for (const child of node.children ?? []) {
-    if (child.type === "inlineMath") visit(child, node);
-    inlineMathIn(child, visit);
-  }
-}
-
-/** Each pass fixes one dollar per paragraph. A paragraph with more than this many plain dollars can keep a false formula. */
-const MAX_DOLLAR_PASSES = 32;
-
-function isPlainDollars(source: string, start: number, end: number) {
-  const raw = source.slice(start, end);
-  if (raw.startsWith("$$")) return false;
-  return /^\$\s|\s\$$/.test(raw) || /\d/.test(source[end] ?? "");
-}
-
-/**
- * `$x$` is maths, so the parser also pairs up the dollars in "costs $5 and $10". This applies Pandoc's rule:
- * a `$...$` with whitespace just inside a delimiter, or a digit just after it, isn't maths, so its opening
- * dollar is escaped and the text parsed again. Only the first in a paragraph is escaped per pass, because
- * the pairs after it were made by counting that dollar. Going through the parser leaves code alone, and text
- * with no such dollars is only parsed once. "$5 or 6$" still reads as a formula.
- */
-function dollarsToText(source: string, parse: (source: string) => MdNode) {
-  let tree = parse(source);
-  for (let pass = 0; pass < MAX_DOLLAR_PASSES; pass++) {
-    const firstByParent = new Map<MdNode, number>();
-    inlineMathIn(tree, (math, parent) => {
-      const start = math.position?.start.offset;
-      const end = math.position?.end.offset;
-      if (start === undefined || end === undefined || firstByParent.has(parent)) return;
-      if (isPlainDollars(source, start, end)) firstByParent.set(parent, start);
-    });
-    if (firstByParent.size === 0) break;
-    for (const start of [...firstByParent.values()].sort((a, b) => b - a)) source = `${source.slice(0, start)}\\${source.slice(start)}`;
-    tree = parse(source);
-  }
-  return { tree, source };
-}
-
-/** Replaces the parser, since only it can change the source. `display` makes a one-line `$$x$$` display maths, as it reads. */
-function remarkDollars(this: { parser?: unknown }, { display }: { display: boolean }) {
-  const parse = this.parser as (source: string, file: unknown) => MdNode;
-  this.parser = (doc: unknown, file: unknown) => {
-    const { tree, source } = dollarsToText(String(doc), (text) => parse(text, file));
-    if (display) {
-      inlineMathIn(tree, (node) => {
-        const start = node.position?.start.offset;
-        if (start !== undefined && source.startsWith("$$", start)) {
-          node.data = { ...node.data, hProperties: { ...node.data?.hProperties, className: ["language-math", "math-display"] } };
+/** Replaces the parser's verdict on a one-line `$$x$$`, which it calls inline, with the display maths it reads as. */
+function remarkDisplayDollars() {
+  return (tree: MdNode, file: { value: unknown }) => {
+    const source = String(file.value);
+    const visit = (node: MdNode) => {
+      for (const child of node.children ?? []) {
+        const start = child.position?.start.offset;
+        if (child.type === "inlineMath" && start !== undefined && source.startsWith("$$", start)) {
+          child.data = { ...child.data, hProperties: { ...child.data?.hProperties, className: ["language-math", "math-display"] } };
         }
-      });
-    }
-    return tree;
+        visit(child);
+      }
+    };
+    visit(tree);
   };
 }
 
-/** Turns off everything that makes a block, by the names micromark gives those constructs. */
-function remarkInlineOnly(this: { data: () => { micromarkExtensions?: unknown[] } }) {
-  const data = this.data();
-  (data.micromarkExtensions ??= []).push({
-    disable: {
-      null: [
-        "blockQuote",
-        "codeFenced",
-        "codeIndented",
-        "definition",
-        "gfmFootnoteDefinition",
-        "headingAtx",
-        "htmlFlow",
-        "list",
-        "mathFlow",
-        "setextUnderline",
-        "table",
-        "thematicBreak",
-      ],
-    },
-  });
+interface MdNode {
+  type: string;
+  children?: MdNode[];
+  position?: { start: { offset?: number } };
+  data?: { hProperties?: Record<string, unknown> };
 }
 
-const remarkPlugins = {
-  block: [remarkGfm, remarkMath, [remarkDollars, { display: true }]] as unknown as Plugins,
-  inline: [remarkGfm, remarkMath, remarkInlineOnly, [remarkDollars, { display: false }]] as unknown as Plugins,
-};
+const remarkPlugins = [remarkGfm, remarkMath, remarkDollarRule, remarkDisplayDollars] as unknown as NonNullable<Options["remarkPlugins"]>;
 
-// trust: false keeps \href and \includegraphics from producing anything active. rehype-katex shows invalid
-// LaTeX as its source in errorColor rather than throwing. strict: "ignore" only silences console warnings.
-const rehypePlugins: Options["rehypePlugins"] = [[rehypeKatex, { trust: false, strict: "ignore", errorColor: "var(--destructive)" }]];
+/**
+ * One formula. Memoised, so a streaming paragraph doesn't typeset the same 100 formulas again per delta. KaTeX
+ * escapes its input and, with trust: false, won't produce anything active (\href, \includegraphics), which is
+ * why its HTML is safe to insert. Invalid LaTeX shows as its source in errorColor. strict: "ignore" only
+ * silences console warnings.
+ */
+const Formula = memo(function Formula({ source, display }: { source: string; display: boolean }) {
+  try {
+    const html = katex.renderToString(source, { displayMode: display, trust: false, strict: "ignore", throwOnError: false, errorColor: "var(--destructive)" });
+    return <span className="math-text-formula" dangerouslySetInnerHTML={{ __html: html }} />;
+  } catch {
+    return <span className="katex-error">{source}</span>;
+  }
+});
+
+const isMath = (className: string | undefined) => className?.split(" ").includes("language-math") ?? false;
 
 const components: Components = {
   a: ({ href, children }) =>
@@ -136,6 +86,13 @@ const components: Components = {
     ) : (
       <span>{children}</span>
     ),
+  code: ({ className, children }) =>
+    isMath(className) ? <Formula source={String(children)} display={className!.includes("math-display")} /> : <code className={className}>{children}</code>,
+  // `$$` blocks and ```math fences arrive as a <pre> around the <code> above.
+  pre: ({ children }) => {
+    const code = isValidElement(children) ? (children as ReactElement<{ className?: string; children?: ReactNode }>) : undefined;
+    return code && isMath(code.props.className) ? <Formula source={String(code.props.children).replace(/\n$/, "")} display /> : <pre>{children}</pre>;
+  },
   // A remote image would send data to whoever hosts it, so show its description instead.
   img: ({ alt }) => (alt ? <span>{alt}</span> : null),
   table: (props: ComponentProps<"table">) => (
@@ -151,21 +108,6 @@ const components: Components = {
   h5: "h6",
 };
 
-const Rendered = memo(function Rendered({ text, mode }: { text: string; mode: "block" | "inline" }) {
-  return (
-    <Markdown
-      remarkPlugins={remarkPlugins[mode]}
-      rehypePlugins={rehypePlugins}
-      urlTransform={safeUrl}
-      components={components}
-      disallowedElements={mode === "inline" ? ["p", "a"] : undefined}
-      unwrapDisallowed={mode === "inline"}
-    >
-      {text}
-    </Markdown>
-  );
-});
-
 /** Model text must never take the page down: if rendering it fails anyway, show it as plain text. */
 class PlainTextOnError extends Component<{ text: string; children: ReactNode }, { failedText?: string }> {
   override state: { failedText?: string } = {};
@@ -173,23 +115,49 @@ class PlainTextOnError extends Component<{ text: string; children: ReactNode }, 
     this.setState({ failedText: this.props.text });
   }
   override render() {
-    return this.state.failedText === this.props.text ? this.props.text : this.props.children;
+    return this.state.failedText === this.props.text ? <p className="math-text-literal">{this.props.text}</p> : this.props.children;
   }
 }
 
-/**
- * Renders model-written markdown and LaTeX safely: raw HTML shows as text, remote images as their alt text,
- * and only http, https and mailto links work. Long maths, code and tables scroll in their own box.
- */
-export function MathText({ text, mode = "block", className }: MathTextProps) {
+/** Memoised on its text, so only the block a delta touches is parsed again. */
+const Block = memo(function Block({ text }: { text: string }) {
+  if (isTooDeep(text)) return <p className="math-text-literal">{text}</p>;
+  return (
+    <PlainTextOnError text={text}>
+      <Markdown remarkPlugins={remarkPlugins} urlTransform={safeUrl} components={components}>
+        {text}
+      </Markdown>
+    </PlainTextOnError>
+  );
+});
+
+function BlockText({ text, className }: { text: string; className: string }) {
   // Keeps typing and scrolling responsive during a long reply: a render that falls behind skips to the latest delta.
   const deferred = useDeferredValue(text);
-  const Root = mode === "inline" ? "span" : "div";
+  const blocks = useMemo(() => splitBlocks(deferred), [deferred]);
   return (
-    <Root className={className ? `math-text ${className}` : "math-text"}>
-      <PlainTextOnError text={deferred}>
-        <Rendered text={deferred} mode={mode} />
-      </PlainTextOnError>
-    </Root>
+    <div className={className}>
+      {blocks.map((block, i) => (
+        <Block key={i} text={block} />
+      ))}
+    </div>
   );
+}
+
+function LiteralText({ text, className }: { text: string; className: string }) {
+  const pieces = useMemo(() => splitMath(text), [text]);
+  return (
+    <span className={`${className} math-text-literal`}>
+      {pieces.map((piece, i) => ("formula" in piece ? <Formula key={i} source={piece.formula} display={false} /> : piece.text))}
+    </span>
+  );
+}
+
+/**
+ * Renders model-written text safely: raw HTML shows as text, remote images as their alt text, and only http,
+ * https and mailto links work. Long maths, code and tables scroll in their own box. See `mode` for which to use.
+ */
+export function MathText({ text, mode = "block", className }: MathTextProps) {
+  const classes = className ? `math-text ${className}` : "math-text";
+  return mode === "math" ? <LiteralText text={text} className={classes} /> : <BlockText text={text} className={classes} />;
 }

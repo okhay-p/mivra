@@ -56,7 +56,21 @@ const wideCheck = {
   explanation: "The second one.",
 };
 
-type Step = { tool: string; input: unknown } | { text: string; hold?: boolean };
+type Step = { tool: string; input: unknown } | { text: string; hold?: boolean; stream?: boolean };
+
+const STREAM_CHUNK_CHARS = 24;
+const STREAM_CHUNK_DELAY_MS = 16;
+
+/** About 14k characters of prose around `count` copies of `item`, in `paragraphs` paragraphs. */
+function longReply(item: (i: number) => string, count: number, paragraphs: number) {
+  const filler = "The window slides one place to the right and only the changed elements are recomputed. ";
+  const perItem = Math.round(14_000 / count) - 8;
+  const parts = Array.from({ length: count }, (_, i) => `${filler.repeat(Math.ceil(perItem / filler.length)).slice(0, perItem)}${item(i)}`);
+  const perParagraph = Math.ceil(count / paragraphs);
+  return Array.from({ length: paragraphs }, (_, p) => parts.slice(p * perParagraph, (p + 1) * perParagraph).join(" ")).join("\n\n");
+}
+const currency = (i: number) => `$${i + 5} `;
+const formula = (i: number) => `$x_{${i}}^2$ `;
 
 /**
  * Held steps wait for POST /e2e/release. A release that arrives first is remembered, because a test
@@ -79,7 +93,25 @@ function held() {
 
 const longFormula = Array.from({ length: 40 }, (_, i) => `a_{${i}}`).join("");
 
+const literalTrace = { ...trace, title: "Swap *demo* in $O(n^2)$", steps: [{ explanation: "Multiply 2*3*4 and compare with $x_1 + \\frac{a}{b}$, for $5 or $10." }] };
+const literalCheck = {
+  concept: "literal answers",
+  question: "Which is *the* product, given $x^2$?",
+  options: [{ text: "2*3*4" }, { text: "234" }, { text: "$2 \\times 3 \\times 4$" }],
+  correctOptionIndex: 0,
+  explanation: "2*3*4 is $24$, and 234 isn't.",
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  literals: [
+    { tool: "show_algorithm_trace", input: literalTrace },
+    { tool: "ask_multiple_choice", input: literalCheck },
+    {
+      text: `## Why it matters\n\nA **sum** like $\\sum_{i=1}^n i$ costs $5 and $10, see \`$x$\`.\n\n- one\n- two with [a link](https://example.com)\n\n$$\\left(${longFormula}\\right)$$\n\n| a | b |\n|---|---|\n| $x$ | \`y\` |\n\n\`\`\`js\nconst cost = "$5";\n\`\`\``,
+    },
+  ],
+  // Too deep to parse in reasonable time, with a normal paragraph after it.
+  deepnesting: [{ text: `${">".repeat(2000)} deep\n\n**still fine**`, stream: true }],
   teach: [
     { tool: "show_algorithm_trace", input: trace },
     { tool: "ask_multiple_choice", input: check },
@@ -92,6 +124,11 @@ const SCRIPTS: Record<string, Step[]> = {
       text: `This is **really bold**, with $x^2$ inline, and it costs $5 and $10.\n\n$$\\left(${longFormula}\\right)$$\n\nInline too: $\\left(${longFormula}\\right)$`,
     },
   ],
+  // Long replies that arrive in many small deltas, like a real model's.
+  currencyparagraph: [{ text: longReply(currency, 40, 1), stream: true }],
+  currencyblocks: [{ text: longReply(currency, 40, 20), stream: true }],
+  formulaparagraph: [{ text: longReply(formula, 100, 1), stream: true }],
+  formulablocks: [{ text: longReply(formula, 100, 20), stream: true }],
   wide: [
     { tool: "show_algorithm_trace", input: wideTrace },
     { tool: "ask_multiple_choice", input: wideCheck },
@@ -149,12 +186,15 @@ const model = new MockLanguageModelV4({
           ]
         : [
             { type: "text-start" as const, id: "t" },
-            { type: "text-delta" as const, id: "t", delta: step.text },
+            ...("stream" in step && step.stream
+              ? (step.text.match(new RegExp(`[\\s\\S]{1,${STREAM_CHUNK_CHARS}}`, "g")) ?? []).map((delta) => ({ type: "text-delta" as const, id: "t", delta }))
+              : [{ type: "text-delta" as const, id: "t", delta: step.text }]),
             { type: "text-end" as const, id: "t" },
             { type: "finish" as const, finishReason: { unified: "stop" as const, raw: "stop" }, usage },
           ];
     if ("hold" in step) await held();
-    return { stream: simulateReadableStream({ chunks, initialDelayInMs: null }) as never };
+    const chunkDelayInMs = "stream" in step && step.stream ? STREAM_CHUNK_DELAY_MS : null;
+    return { stream: simulateReadableStream({ chunks, initialDelayInMs: null, chunkDelayInMs }) as never };
   },
 });
 

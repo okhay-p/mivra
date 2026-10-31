@@ -55,7 +55,7 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
       <CardHeader>
         <CardDescription>Check · {spec.concept}</CardDescription>
         <CardTitle className="font-heading text-base">
-          <MathText text={spec.question} />
+          <MathText text={spec.question} mode="math" />
         </CardTitle>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -80,7 +80,7 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 onClick={() => void answer(i)}
               >
                 <span className="min-w-0 flex-[1_1_12rem] wrap-anywhere">
-                  <MathText text={option.text} mode="inline" />
+                  <MathText text={option.text} mode="math" />
                 </span>
                 {optionMark(i) && (
                   <span className={cn("shrink-0 text-xs font-medium", result === "incorrect" ? "text-destructive" : "text-success")}>
@@ -100,8 +100,14 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 {grade.correct ? "Correct!" : "Not quite."}
               </AlertTitle>
               <AlertDescription className="text-foreground">
-                {grade.feedback && <MathText text={grade.feedback} />}
-                <MathText text={grade.explanation} />
+                {grade.feedback && (
+                  <p>
+                    <MathText text={grade.feedback} mode="math" />
+                  </p>
+                )}
+                <p>
+                  <MathText text={grade.explanation} mode="math" />
+                </p>
               </AlertDescription>
             </Alert>
           )}
