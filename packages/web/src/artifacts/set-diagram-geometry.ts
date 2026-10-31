@@ -77,15 +77,33 @@ export const VENN_LAYOUTS: Record<number, VennLayout> = {
   },
 };
 
-/** The narrowest the diagram is drawn at (a 320px screen), and its text there, which set how much fits in a slot. */
+/** The narrowest the diagram is drawn at (a 320px screen), and a row of its text, which set how tall a slot's box is. */
 const NARROW_SCALE = 230 / WIDTH;
-const CHAR_PX = 7.2;
 const ROW_PX = 16;
 export const ROW_HEIGHT = ROW_PX / NARROW_SCALE;
 
-/** How many characters of contents are sure to fit in a slot, at any size the diagram is drawn. */
-export function slotCapacity(slot: RegionSlot): number {
-  return Math.floor((slot.width * NARROW_SCALE) / CHAR_PX) * slot.rows;
+export interface Size {
+  width: number;
+  height: number;
+}
+
+/** A slot's box in pixels when the diagram is drawn `drawnWidth` wide. It's centred on the slot, like its contents. */
+export function slotBox(layout: VennLayout, slot: RegionSlot, drawnWidth: number): Size {
+  const scale = drawnWidth / layout.width;
+  return { width: slot.width * scale, height: slot.rows * ROW_HEIGHT * scale };
+}
+
+/** What a region's slot shows: its contents, a marker with its size, or only an arrow to the list below the diagram. */
+export type RegionFit = "contents" | "marker" | "arrow";
+
+/** Absorbs sub-pixel rounding in the browser's layout. */
+const FIT_TOLERANCE_PX = 0.5;
+const fits = (content: Size, box: Size) => content.width <= box.width + FIT_TOLERANCE_PX && content.height <= box.height + FIT_TOLERANCE_PX;
+
+/** The fullest thing that stays inside the box, given the rendered size of the contents and of the marker. */
+export function chooseRegionFit(box: Size, contents: Size, marker: Size): RegionFit {
+  if (fits(contents, box)) return "contents";
+  return fits(marker, box) ? "marker" : "arrow";
 }
 
 export function regionMasks(setCount: number): number[] {

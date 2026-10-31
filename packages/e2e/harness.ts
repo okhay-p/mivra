@@ -101,6 +101,66 @@ const crowdedVenn = {
   ],
 };
 
+const threeSets = [
+  { id: "a", label: "$A$" },
+  { id: "b", label: "$B$" },
+  { id: "c", label: "$C$" },
+];
+
+/** Sol's review cases: contents that spill by size though they're short or schema-valid, and small examples that should stay put. */
+const spillVenn = {
+  title: "Contents that could spill",
+  sets: threeSets,
+  regions: [
+    { in: ["a", "b"], elements: [], count: 1_000_000 },
+    { in: ["a"], elements: ["a b c d e f g h i j k l"] },
+    { in: ["b", "c"], elements: ["$\\frac{a+b+c+d}{e+f+g}$"] },
+    { in: ["c"], elements: [1], count: 22 },
+  ],
+};
+const smallVenn = {
+  title: "A small example",
+  sets: threeSets,
+  regions: [
+    { in: ["a", "b"], elements: [4, 5, 6] },
+    { in: ["a"], elements: [1] },
+    { in: ["b"], elements: [], count: 1 },
+  ],
+};
+const repeatedVenn = {
+  title: "Same words, different regions",
+  sets: threeSets,
+  regions: [],
+  steps: [
+    { explanation: "Look here.", highlights: [{ in: ["a"] }] },
+    { explanation: "Look here.", highlights: [{ in: ["b"] }], variables: [{ name: "seen", value: 1 }] },
+  ],
+};
+
+const oneSet = {
+  title: "One set and its complement",
+  sets: [{ id: "a", label: "$A$" }],
+  universe: "$U$",
+  regions: [
+    { in: ["a"], elements: [1, 2, 3, 4], count: 12 },
+    { in: [], elements: [], count: 1_000_000 },
+  ],
+};
+const twoSets = {
+  title: "Two sets",
+  sets: [
+    { id: "a", label: "Evens" },
+    { id: "b", label: "Multiples of 3" },
+  ],
+  universe: "$U$",
+  regions: [
+    { in: ["a"], elements: many(100, 8) },
+    { in: ["b"], elements: [3, 9, 15] },
+    { in: ["a", "b"], elements: [6, 12, 18, 24] },
+    { in: [], elements: [1, 5] },
+  ],
+};
+
 type Step = { tool: string; input: unknown } | { text: string; hold?: boolean; stream?: boolean };
 
 const STREAM_CHUNK_CHARS = 24;
@@ -178,6 +238,11 @@ const SCRIPTS: Record<string, Step[]> = {
   formulablocks: [{ text: longReply(formula, 100, 20), stream: true }],
   venn: [{ tool: "show_set_diagram", input: venn }, { text: "Step through the diagram." }],
   crowdedsets: [{ tool: "show_set_diagram", input: crowdedVenn }, { text: "A crowded diagram." }],
+  oneset: [{ tool: "show_set_diagram", input: oneSet }, { text: "One set." }],
+  twosets: [{ tool: "show_set_diagram", input: twoSets }, { text: "Two sets." }],
+  spillsets: [{ tool: "show_set_diagram", input: spillVenn }, { text: "Contents that could spill." }],
+  smallsets: [{ tool: "show_set_diagram", input: smallVenn }, { text: "A small example." }],
+  repeatedsets: [{ tool: "show_set_diagram", input: repeatedVenn }, { text: "Same words." }],
   wide: [
     { tool: "show_algorithm_trace", input: wideTrace },
     { tool: "ask_multiple_choice", input: wideCheck },

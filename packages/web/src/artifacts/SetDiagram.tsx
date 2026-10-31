@@ -1,12 +1,13 @@
 import type { SetDiagramHighlight, SetDiagramSpec } from "@mivra/protocol";
 import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
-import { Fragment, useEffect, useId, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { flushSync } from "react-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
-import { FRAME_INSET, ROW_HEIGHT, VENN_LAYOUTS, regionMasks, regionPath, slotCapacity, type VennLayout } from "./set-diagram-geometry.js";
+import { FRAME_INSET, ROW_HEIGHT, VENN_LAYOUTS, chooseRegionFit, regionMasks, regionPath, slotBox, type RegionFit, type RegionSlot, type Size, type VennLayout } from "./set-diagram-geometry.js";
 
 const PLAY_INTERVAL_MS = 1500;
 
@@ -78,15 +79,87 @@ function RegionName({ spec, mask }: { spec: SetDiagramSpec; mask: number }) {
   );
 }
 
-/** What's shown in a region's slot, or that it's too much to fit, in which case the list below the diagram has it. */
-export function regionContents(region: Region | undefined, capacity: number) {
-  if (!region) return { kind: "none" as const };
-  const total = region.count ?? region.elements.length;
-  if (total === 0) return { kind: "empty" as const };
-  const suffix = region.count !== undefined && region.elements.length > 0 && region.count !== region.elements.length ? ` (${region.count})` : "";
-  const length = region.elements.map(elementText).join(", ").length + suffix.length;
-  if (region.elements.length === 0) return { kind: "count" as const, total };
-  return length <= capacity ? { kind: "elements" as const, elements: region.elements, suffix } : { kind: "overflow" as const, total };
+const regionTotal = (region: Region) => region.count ?? region.elements.length;
+
+function RegionSize({ total }: { total: number }) {
+  return <span className="whitespace-nowrap">n = {total}</span>;
+}
+
+/** A region's elements, and its size as `n = ...` when that isn't simply how many are listed, so a count never reads as an element. */
+function RegionContents({ region }: { region: Region }) {
+  const total = regionTotal(region);
+  if (region.elements.length === 0) return <RegionSize total={total} />;
+  return (
+    <>
+      <Elements elements={region.elements} />
+      {total !== region.elements.length && (
+        <>
+          {" "}
+          (<RegionSize total={total} />)
+        </>
+      )}
+    </>
+  );
+}
+
+/** A region's box in the drawing, centred on its slot. */
+function RegionBox({ slot, layout, children, ...attributes }: { slot: RegionSlot; layout: VennLayout; children: ReactNode; [attribute: `data-${string}`]: unknown }) {
+  const percent = (value: number, of: number) => `${(value / of) * 100}%`;
+  return (
+    <div
+      className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center text-center font-mono text-xs leading-4"
+      style={{ left: percent(slot.x, layout.width), top: percent(slot.y, layout.height), width: percent(slot.width, layout.width), height: percent(slot.rows * ROW_HEIGHT, layout.height) }}
+      {...attributes}
+    >
+      <span className="bg-card/85 rounded-sm px-0.5">{children}</span>
+    </div>
+  );
+}
+
+/** A probe's rendered size. A formula too wide for its box scrolls inside it, so what's scrolled out of view counts too. */
+function renderedSize(probe: Element): Size {
+  const { width, height } = probe.getBoundingClientRect();
+  const scrolled = [...probe.querySelectorAll(".katex")].reduce((sum, formula) => sum + Math.max(0, formula.scrollWidth - formula.clientWidth), 0);
+  return { width: width + scrolled, height };
+}
+
+/**
+ * Decides what each region shows from the hidden probes `Diagram` renders, which lay out like the real contents.
+ * This runs before paint, and again before paint on each change of width or when fonts arrive.
+ * Without layout, as in jsdom, nothing is measured and every region shows its contents.
+ */
+function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTMLDivElement | null>, ReadonlyMap<number, RegionFit>] {
+  const ref = useRef<HTMLDivElement>(null);
+  const [fits, setFits] = useState<ReadonlyMap<number, RegionFit>>(new Map());
+
+  useLayoutEffect(() => {
+    const root = ref.current!;
+    let measuredWidth = 0;
+    const measure = () => {
+      measuredWidth = root.getBoundingClientRect().width;
+      if (measuredWidth === 0) return;
+      const next = new Map<number, RegionFit>();
+      for (const mask of drawnMasks(spec)) {
+        const contents = root.querySelector(`[data-probe="contents"][data-mask="${mask}"] > span`);
+        const marker = root.querySelector(`[data-probe="marker"][data-mask="${mask}"] > span`);
+        if (contents && marker) next.set(mask, chooseRegionFit(slotBox(layout, layout.slots[mask]!, measuredWidth), renderedSize(contents), renderedSize(marker)));
+      }
+      setFits((current) => (next.size === current.size && [...next].every(([mask, fit]) => current.get(mask) === fit) ? current : next));
+    };
+    measure();
+    // The drawing's width doesn't depend on what's decided here, so this can't feed back into itself.
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(() => {
+      if (root.getBoundingClientRect().width !== measuredWidth) flushSync(measure);
+    });
+    observer?.observe(root);
+    document.fonts?.addEventListener("loadingdone", measure);
+    return () => {
+      observer?.disconnect();
+      document.fonts?.removeEventListener("loadingdone", measure);
+    };
+  }, [spec, layout]);
+
+  return [ref, fits];
 }
 
 /** A set's label goes in a corner next to its circle. */
@@ -116,16 +189,15 @@ function RegionShape({ d, mask, tone, ids }: { d: string; mask: number; tone: To
   );
 }
 
-function Diagram({ spec, layout, tones }: { spec: SetDiagramSpec; layout: VennLayout; tones: Map<number, Tone> }) {
+function Diagram({ spec, layout, tones, fits, drawing }: { spec: SetDiagramSpec; layout: VennLayout; tones: Map<number, Tone>; fits: ReadonlyMap<number, RegionFit>; drawing: RefObject<HTMLDivElement | null> }) {
   const id = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const ids = { hatch: `${id}-hatch`, dots: `${id}-dots`, clip: `${id}-clip` };
   const { width, height, radius, circles, slots } = layout;
   const masks = drawnMasks(spec);
   const regions = new Map(spec.regions.map((r) => [regionMask(spec, r.in), r]));
-  const percent = (value: number, of: number) => `${(value / of) * 100}%`;
 
   return (
-    <div className="relative mx-auto w-full max-w-md" style={{ aspectRatio: `${width} / ${height}` }} aria-hidden="true" data-testid="set-diagram">
+    <div ref={drawing} className="relative mx-auto w-full max-w-md" style={{ aspectRatio: `${width} / ${height}` }} aria-hidden="true" data-testid="set-diagram">
       <svg viewBox={`0 0 ${width} ${height}`} className="absolute inset-0 size-full">
         <defs>
           <pattern id={ids.hatch} patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)">
@@ -168,31 +240,32 @@ function Diagram({ spec, layout, tones }: { spec: SetDiagramSpec; layout: VennLa
         </div>
       )}
       {masks.map((mask) => {
-        const slot = slots[mask]!;
-        const contents = regionContents(regions.get(mask), slotCapacity(slot));
-        if (contents.kind === "none") return null;
+        const region = regions.get(mask);
+        if (!region) return null;
+        const fit = fits.get(mask) ?? "contents";
         return (
-          <div
-            key={mask}
-            className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center justify-center text-center font-mono text-xs leading-4"
-            style={{ left: percent(slot.x, width), top: percent(slot.y, height), width: percent(slot.width, width), height: percent(slot.rows * ROW_HEIGHT, height) }}
-            data-testid="set-elements"
-            data-mask={mask}
-          >
-            <span className="bg-card/85 rounded-sm px-0.5">
-              {contents.kind === "elements" && (
-                <>
-                  <Elements elements={contents.elements} />
-                  {contents.suffix}
-                </>
-              )}
-              {contents.kind === "count" && contents.total}
-              {contents.kind === "empty" && "∅"}
-              {contents.kind === "overflow" && `${contents.total} ↓`}
-            </span>
-          </div>
+          <RegionBox key={mask} slot={slots[mask]!} layout={layout} data-testid="set-elements" data-mask={mask} data-fit={fit}>
+            {regionTotal(region) === 0 ? "∅" : fit === "contents" ? <RegionContents region={region} /> : fit === "marker" ? <><RegionSize total={regionTotal(region)} /> ↓</> : "↓"}
+          </RegionBox>
         );
       })}
+      {/* Clipped, because what's being measured can be much bigger than the drawing. */}
+      <div className="invisible absolute inset-0 overflow-hidden">
+        {masks.map((mask) => {
+          const region = regions.get(mask);
+          if (!region || regionTotal(region) === 0) return null;
+          return (
+            <Fragment key={mask}>
+              <RegionBox slot={slots[mask]!} layout={layout} data-probe="contents" data-mask={mask}>
+                <RegionContents region={region} />
+              </RegionBox>
+              <RegionBox slot={slots[mask]!} layout={layout} data-probe="marker" data-mask={mask}>
+                <RegionSize total={regionTotal(region)} /> ↓
+              </RegionBox>
+            </Fragment>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -235,7 +308,8 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
   const masks = drawnMasks(spec);
   const regions = new Map(spec.regions.map((r) => [regionMask(spec, r.in), r]));
   const highlighted = masks.filter((mask) => state.tones.has(mask));
-  const overflowing = masks.filter((mask) => regionContents(regions.get(mask), slotCapacity(layout.slots[mask]!)).kind === "overflow");
+  const [drawing, fits] = useRegionFits(spec, layout);
+  const overflowing = masks.filter((mask) => (fits.get(mask) ?? "contents") !== "contents");
 
   return (
     <Card role="region" aria-label={`Set diagram: ${spec.title}`} {...(stepCount > 0 ? { tabIndex: 0, onKeyDown } : {})} className="whitespace-normal">
@@ -272,16 +346,28 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
               </li>
             );
           })}
-          {highlighted.map((mask) => (
-            <li key={`highlight-${mask}`}>
-              {TONES[state.tones.get(mask)!].word}: <RegionName spec={spec} mask={mask} />
-            </li>
-          ))}
         </ul>
-        <Diagram spec={spec} layout={layout} tones={state.tones} />
+        {/* Always there, and always different from one step to the next, so every step is announced. The visible versions of what's in it are hidden from screen readers. */}
+        {stepCount > 0 && (
+          <div className="sr-only" aria-live="polite" aria-atomic="true" data-testid="set-announcement">
+            Step {index + 1} of {stepCount}: <MathText text={state.explanation} mode="math" />{" "}
+            {highlighted.length === 0 && "Nothing highlighted. "}
+            {highlighted.map((mask) => (
+              <Fragment key={mask}>
+                {TONES[state.tones.get(mask)!].word}: <RegionName spec={spec} mask={mask} />.{" "}
+              </Fragment>
+            ))}
+            {state.variables.map((v, i) => (
+              <Fragment key={i}>
+                <Inline text={v.name} /> = <Inline text={String(v.value)} />.{" "}
+              </Fragment>
+            ))}
+          </div>
+        )}
+        <Diagram spec={spec} layout={layout} tones={state.tones} fits={fits} drawing={drawing} />
         {overflowing.length > 0 && (
           <div aria-hidden="true" className="flex flex-col gap-1 text-xs" data-testid="set-overflow">
-            <p className="text-muted-foreground">↓ Too many to fit in the diagram:</p>
+            <p className="text-muted-foreground">↓ Doesn't fit in the diagram:</p>
             <ul className="flex flex-col gap-1">
               {overflowing.map((mask) => (
                 <li key={mask}>
@@ -289,7 +375,7 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
                     <RegionName spec={spec} mask={mask} />:
                   </span>{" "}
                   <span className="font-mono">
-                    <Elements elements={regions.get(mask)!.elements} />
+                    <RegionContents region={regions.get(mask)!} />
                   </span>
                 </li>
               ))}
@@ -312,7 +398,7 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
           </ul>
         )}
         {state.variables.length > 0 && (
-          <dl className="flex flex-wrap gap-2">
+          <dl aria-hidden="true" className="flex flex-wrap gap-2">
             {state.variables.map((v, i) => (
               <div key={i} className="bg-muted flex gap-1 rounded-sm px-2 py-0.5 font-mono text-xs">
                 <dt>
@@ -327,7 +413,7 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
         )}
         {stepCount > 0 && (
           <>
-            <div aria-live="polite">
+            <div aria-hidden="true" data-testid="set-explanation">
               <MathText text={state.explanation} mode="math" />
             </div>
             <div className="flex flex-wrap items-center gap-2">

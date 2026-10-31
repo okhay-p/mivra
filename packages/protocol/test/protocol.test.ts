@@ -267,6 +267,26 @@ describe("set_diagram", () => {
     expect(messages({ regions: [{ in: ["a"], elements: [1, 2], count: 1 }] })).toContain("less than");
   });
 
+  it("keeps elements unique within a list too, whether written as a number or a string", () => {
+    expect(messages({ regions: [{ in: ["a"], elements: [1, 1] }] })).toContain("more than once");
+    expect(messages({ regions: [{ in: ["a"], elements: [1, "1"] }] })).toContain("more than once");
+  });
+
+  it("keeps what's drawn in the diagram to one line", () => {
+    expect(messages({ regions: [{ in: ["a"], elements: ["1\n2\n3\n4\n5\n6"] }] })).toContain("line breaks");
+    for (const elements of [["1\r2"], ["1\u20282"]]) expect(parse({ regions: [{ in: ["a"], elements }] }).success).toBe(false);
+    expect(parse({ universe: "U\nV" }).success).toBe(false);
+    expect(parse({ sets: [{ id: "a", label: "A\nB" }] }).success).toBe(false);
+    expect(parse({ regions: [{ in: ["a"], elements: ["a b"] }] }).success).toBe(true);
+  });
+
+  it("tells the model every uniqueness rule", () => {
+    const { regions } = SetDiagramSpec.shape;
+    const region = regions.element;
+    expect(region.shape.in.description).toContain("No id twice");
+    expect(region.shape.elements.description).toMatch(/twice.*across regions.*1 and "1"/);
+  });
+
   it("bounds elements, steps and text", () => {
     const elements = (n: number) => Array.from({ length: n }, (_, i) => i);
     expect(parse({ regions: [{ in: ["a"], elements: elements(30) }] }).success).toBe(true);

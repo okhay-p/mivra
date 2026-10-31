@@ -19,7 +19,10 @@ const MAX_ELEMENTS = 30;
 const MAX_STEPS = 40;
 
 const SetId = z.string().trim().min(1).max(24);
-const Element = z.union([z.number(), z.string().trim().min(1).max(24)]);
+/** Text drawn in a tight spot in the diagram, so it stays on one line. */
+const ONE_LINE = /^[^\n\r\v\f\u0085\u2028\u2029]*$/;
+const oneLine = (max: number) => z.string().trim().min(1).max(max).regex(ONE_LINE, "must not contain line breaks");
+const Element = z.union([z.number(), oneLine(24)]);
 
 /** The same string for any ordering of the same set ids, so a region can be compared and looked up. */
 export function setRegionKey(ids: readonly string[]): string {
@@ -31,14 +34,14 @@ const RegionIn = z.array(SetId).max(MAX_SETS);
 export const SetDiagramSet = z
   .object({
     id: SetId.describe('Short id used to refer to this set, e.g. "a". Unique within the diagram.'),
-    label: z.string().trim().min(1).max(32).describe('Shown next to the circle, e.g. "$A$" or "Multiples of 3". Only $...$ is a formula.'),
+    label: oneLine(32).describe('Shown next to the circle, e.g. "$A$" or "Multiples of 3", on one line. Only $...$ is a formula.'),
   })
   .strict();
 
 export const SetDiagramRegion = z
   .object({
-    in: RegionIn.describe('Ids of the sets this region is inside. It is outside all the others: with sets a, b, c, ["a","b"] means in a and b, not c. [] means outside every set and needs `universe`.'),
-    elements: z.array(Element).max(MAX_ELEMENTS).describe("What the region contains. No element may appear in two regions. Empty if you only know the count, or the region is empty."),
+    in: RegionIn.describe('Ids of the sets this region is inside. It is outside all the others: with sets a, b, c, ["a","b"] means in a and b, not c. [] means outside every set and needs `universe`. No id twice.'),
+    elements: z.array(Element).max(MAX_ELEMENTS).describe("What the region contains, each short and on one line. No element may appear twice, in this list or across regions, and 1 and \"1\" count as the same element. Empty if you only know the count, or the region is empty."),
     count: z
       .number()
       .int()
@@ -51,7 +54,7 @@ export const SetDiagramRegion = z
 
 export const SetDiagramHighlight = z
   .object({
-    in: RegionIn.describe("The region to highlight, named like a region's `in`. Any region of the diagram can be highlighted, listed or not."),
+    in: RegionIn.describe("The region to highlight, named like a region's `in`, with no id twice. Any region of the diagram can be highlighted, listed or not."),
     tone: z.enum(["active", "done", "muted"]).optional().describe("active = current focus, done = finished, muted = ruled out. Defaults to active."),
   })
   .strict();
@@ -72,7 +75,7 @@ export const SetDiagramSpec = z
   .object({
     title: z.string().trim().min(1).max(120),
     sets: z.array(SetDiagramSet).min(1).max(MAX_SETS).describe("The circles, 1 to 3."),
-    universe: z.string().trim().min(1).max(24).optional().describe('Label of the rectangle around the sets, e.g. "$U$". Needed to show or highlight the region outside every set, such as a complement.'),
+    universe: oneLine(24).optional().describe('Label of the rectangle around the sets, e.g. "$U$", on one line. Needed to show or highlight the region outside every set, such as a complement.'),
     regions: z.array(SetDiagramRegion).max(MAX_REGIONS).describe("What each region contains, each region at most once."),
     steps: z.array(SetDiagramStep).min(1).max(MAX_STEPS).optional().describe("Optional walk through the diagram. Omit for a static diagram."),
   })
