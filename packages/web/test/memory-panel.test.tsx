@@ -56,7 +56,8 @@ describe("MemoryPanel", () => {
     await screen.findByText("Hidden until you answer the check in that session.");
     fireEvent.focus(window);
     expect(await screen.findByText("Wants to pass interviews")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect((screen.getByRole("textbox", { name: "Memory text" }) as HTMLTextAreaElement).value).toBe("Wants to pass interviews");
   });
 
   it("saves an edit and shows the result", async () => {

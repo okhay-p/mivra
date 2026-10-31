@@ -158,7 +158,15 @@ function MemoryEntry({
           ) : (
             <div className="flex gap-2">
               {!memory.held && (
-                <Button type="button" variant="outline" size="sm" onClick={() => setMode("edit")}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setDraft(memory.text ?? "");
+                    setMode("edit");
+                  }}
+                >
                   Edit
                 </Button>
               )}
