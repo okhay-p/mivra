@@ -38,7 +38,7 @@ Data is stored in `~/.mivra/mivra.db` (override with `MIVRA_DATA_DIR`). The API'
 
 ## Learner memory
 
-Each turn's instructions include the learner's record across all sessions: per concept, how many checks they answered, how many were right, and the latest result. It is calculated from graded attempts, never stored separately (ADR-009).
+Each turn's instructions include part of the learner's record across all sessions: up to 30 recently practised concepts, each with how many checks were answered, how many were right, and the latest result. It is calculated from the latest 1000 graded attempts and never stored separately, so older practice stops counting (ADR-009).
 
 ## Web UI
 

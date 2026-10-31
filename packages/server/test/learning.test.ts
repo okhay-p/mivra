@@ -8,6 +8,7 @@ import { openDb, type Db } from "../src/db/client.js";
 import { artifacts, attempts, runs } from "../src/db/schema.js";
 import { coreLearning } from "../src/plugins/core-learning.js";
 import { createCapabilityRegistry, type Plugin } from "../src/runtime/capabilities.js";
+import { deriveConceptState } from "../src/runtime/learner-context.js";
 import { createTurnRunner } from "../src/runtime/turn-runner.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
@@ -206,11 +207,35 @@ describe("multiple_choice through the agent", () => {
     expect(sse).not.toContain("binary search worst case");
   });
 
+  it("takes the latest result from insertion order when timestamps tie, and limits the evidence", () => {
+    vi.useFakeTimers({ now: new Date(2026, 9, 31), toFake: ["Date"] });
+    try {
+      const db = openDb(":memory:");
+      const store = createSessionStore(db);
+      const session = store.createSession();
+      const runId = store.startRun(session, userMessage("hi"));
+      const record = (correct: boolean, toolCallId: string) => {
+        const artifact = store.createArtifact({ sessionId: session.id, runId, toolCallId, kind: "multiple_choice", version: 1, spec: check });
+        store.createAttempt({ artifactId: artifact.id, sessionId: session.id, answer: {}, grade: {}, correct, concept: "ties" });
+      };
+      record(false, "a");
+      record(true, "b");
+      record(false, "c");
+      record(true, "d");
+
+      expect(deriveConceptState(store.listRecentEvidence(1000))).toMatchObject([{ attempts: 4, correct: 2, lastResult: "correct" }]);
+      // Beyond the window, older attempts stop counting.
+      expect(deriveConceptState(store.listRecentEvidence(3))).toMatchObject([{ attempts: 3, correct: 2, lastResult: "correct" }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("releases the run if the learner's record can't be read", async () => {
     const db = openDb(":memory:");
     const store = createSessionStore(db);
     const session = store.createSession();
-    const broken = { ...store, listRecentAttempts: () => { throw new Error("disk error"); } };
+    const broken = { ...store, listRecentEvidence: () => { throw new Error("disk error"); } };
     const runner = createTurnRunner({ store: broken, registry: createCapabilityRegistry([coreLearning]), model: () => scriptedModel([]) });
 
     const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hi") });

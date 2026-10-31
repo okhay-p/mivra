@@ -101,14 +101,21 @@ function nextStep(prompt: PromptMessage[]): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
   const text = JSON.stringify(prompt[lastUser]?.content);
   if (text.includes("fail")) throw new Error("PROVIDER-SECRET-DETAIL");
-  // Reports what the instructions say about earlier sessions.
-  if (text.includes("recall")) {
-    const concepts = JSON.stringify(prompt[0]?.content).match(/\\"concept\\":\\"([^\\]+)/);
-    return { text: `Your record covers: ${concepts?.[1] ?? "nothing"}.` };
+  const toolResults = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
+  // Asks a check on a concept named by the test, so its evidence is the test's own.
+  const practise = /practise (\w+)/.exec(text)?.[1];
+  if (practise) {
+    return toolResults === 0 ? { tool: "ask_multiple_choice", input: { ...check, concept: practise } } : { text: "Answer it." };
+  }
+  // Reports what the instructions say about that concept from earlier sessions.
+  const recall = /recall (\w+)/.exec(text)?.[1];
+  if (recall) {
+    const row = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");
+    const state = new RegExp(`"concept":"${recall}","attempts":(\\d+),"correct":(\\d+),"lastResult":"(\\w+)"`).exec(row);
+    return { text: `Record: ${state ? `${state[1]} answered, ${state[2]} right, last ${state[3]}` : "nothing"}.` };
   }
   const script = Object.keys(SCRIPTS).find((name) => text.includes(name));
   if (script) {
-    const toolResults = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
     return SCRIPTS[script]![toolResults] ?? { text: "Done." };
   }
   // Anything else is a follow-up: report what the server told the model about the learner's answer.

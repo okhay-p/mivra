@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
-import { and, asc, desc, eq, max } from "drizzle-orm";
+import { and, asc, desc, eq, max, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { artifacts, attempts, messages, runs, sessions, type RunStatus } from "../db/schema.js";
 
@@ -9,6 +9,7 @@ export type { RunStatus };
 export type SessionRow = typeof sessions.$inferSelect;
 export type ArtifactRow = typeof artifacts.$inferSelect;
 export type AttemptRow = typeof attempts.$inferSelect;
+export type EvidenceRow = Pick<AttemptRow, "concept" | "correct" | "createdAt">;
 
 /** A write was refused because it would break an invariant (reused message id, overlapping run). */
 export class Conflict extends Error {}
@@ -143,9 +144,14 @@ export function createSessionStore(db: Db) {
       return db.select().from(attempts).where(eq(attempts.artifactId, artifactId)).get();
     },
 
-    /** The learner's most recent graded attempts across all sessions, newest first. */
-    listRecentAttempts(limit: number): AttemptRow[] {
-      return db.select().from(attempts).orderBy(desc(attempts.createdAt)).limit(limit).all();
+    /** The learner's most recent graded attempts across all sessions, newest first. Rowid breaks timestamp ties. */
+    listRecentEvidence(limit: number): EvidenceRow[] {
+      return db
+        .select({ concept: attempts.concept, correct: attempts.correct, createdAt: attempts.createdAt })
+        .from(attempts)
+        .orderBy(desc(attempts.createdAt), desc(sql`rowid`))
+        .limit(limit)
+        .all();
     },
 
     /** Records the learner's single graded attempt. Throws Conflict if one already exists. */
