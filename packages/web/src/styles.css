@@ -117,3 +117,116 @@
     @apply font-heading;
   }
 }
+
+/*
+ * Model-written markdown and maths (MathText.tsx). These stay outside the layers on purpose: KaTeX's own
+ * CSS isn't layered, so a layered rule couldn't override it.
+ */
+.math-text {
+  overflow-wrap: anywhere;
+}
+div.math-text {
+  display: flow-root;
+  width: 100%;
+}
+div.math-text > * + *,
+.math-text li > * + *,
+.math-text blockquote > * + * {
+  margin-top: 0.6em;
+}
+.math-text :is(h4, h5, h6) {
+  font-family: var(--font-heading);
+  font-weight: 600;
+  line-height: 1.3;
+}
+/* Card titles are text-base. */
+.math-text h4 {
+  font-size: 0.95rem;
+}
+.math-text :is(h5, h6) {
+  font-size: 0.875rem;
+}
+.math-text a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.math-text :is(ul, ol) {
+  padding-left: 1.4em;
+}
+.math-text ul {
+  list-style: disc;
+}
+.math-text ol {
+  list-style: decimal;
+}
+.math-text li + li {
+  margin-top: 0.2em;
+}
+.math-text blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 0.75em;
+  color: var(--muted-foreground);
+}
+.math-text hr {
+  border-top: 1px solid var(--border);
+}
+.math-text code {
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  padding: 0.1em 0.3em;
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+}
+.math-text pre {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  padding: 0.6em 0.8em;
+  overflow-wrap: normal;
+  white-space: pre;
+}
+.math-text pre code {
+  background: none;
+  padding: 0;
+}
+.math-text-scroll {
+  overflow-x: auto;
+}
+/* Wrapping anywhere would squeeze narrow columns to a letter per line; the table scrolls instead. */
+.math-text table {
+  border-collapse: collapse;
+  overflow-wrap: normal;
+  font-size: 0.925em;
+}
+.math-text :is(th, td) {
+  border: 1px solid var(--border);
+  padding: 0.25em 0.6em;
+  text-align: left;
+}
+.math-text th {
+  background: var(--muted);
+  font-weight: 600;
+}
+.math-text .katex {
+  /* inline-flex, unlike inline-block, keeps the text baseline while being a scroll container. */
+  display: inline-flex;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overflow-wrap: normal;
+  vertical-align: baseline;
+}
+.math-text :is(th, td) .katex {
+  white-space: nowrap;
+}
+.math-text .katex-display {
+  margin: 0.6em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.math-text .katex-display > .katex {
+  display: block;
+  max-width: none;
+  overflow: visible;
+}

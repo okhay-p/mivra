@@ -77,6 +77,8 @@ function held() {
   return new Promise<void>((resolve) => (waiting = resolve));
 }
 
+const longFormula = Array.from({ length: 40 }, (_, i) => `a_{${i}}`).join("");
+
 const SCRIPTS: Record<string, Step[]> = {
   teach: [
     { tool: "show_algorithm_trace", input: trace },
@@ -85,6 +87,11 @@ const SCRIPTS: Record<string, Step[]> = {
   ],
   // Holds the reply open after the check, so a test can see it while it's still streaming.
   slow: [{ tool: "ask_multiple_choice", input: check }, { text: "Take your time.", hold: true }],
+  maths: [
+    {
+      text: `This is **really bold**, with $x^2$ inline, and it costs $5 and $10.\n\n$$\\left(${longFormula}\\right)$$\n\nInline too: $\\left(${longFormula}\\right)$`,
+    },
+  ],
   wide: [
     { tool: "show_algorithm_trace", input: wideTrace },
     { tool: "ask_multiple_choice", input: wideCheck },

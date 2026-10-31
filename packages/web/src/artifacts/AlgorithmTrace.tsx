@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 
 const PLAY_INTERVAL_MS = 1500;
@@ -88,7 +89,9 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
     <Card role="region" aria-label={`Algorithm trace: ${spec.title}`} tabIndex={0} onKeyDown={onKeyDown} className="whitespace-normal">
       <CardHeader>
         <CardTitle className="font-heading text-base">
-          <h3>{spec.title}</h3>
+          <h3>
+            <MathText text={spec.title} mode="inline" />
+          </h3>
         </CardTitle>
         <CardDescription>Algorithm trace</CardDescription>
       </CardHeader>
@@ -161,7 +164,9 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
             ))}
           </dl>
         )}
-        <p aria-live="polite">{state.explanation}</p>
+        <div aria-live="polite">
+          <MathText text={state.explanation} />
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => go(index - 1)} disabled={index === 0}>
             <ChevronLeft />

@@ -124,3 +124,33 @@ test.describe("narrow screens", () => {
     });
   }
 });
+
+test.describe("markdown and maths", () => {
+  test("a reply renders real markup, and a long formula scrolls in its own box at 320px", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto("/");
+    await page.getByRole("main").getByRole("button", { name: "Toggle Sidebar" }).click();
+    await page.locator('[data-mobile="true"]').getByRole("button", { name: "New session" }).first().click();
+    await page.getByRole("textbox", { name: "Message" }).fill("maths please");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    const reply = page.locator("main .math-text");
+    await expect(reply.locator("strong")).toHaveText("really bold");
+    await expect(reply.locator(".katex").first()).toBeVisible();
+    await expect(reply.locator(".katex-display")).toHaveCount(1);
+    await expect(reply).toContainText("it costs $5 and $10.");
+    const text = await reply.locator("p").first().evaluate((p) => p.cloneNode(true).textContent);
+    expect(text).not.toContain("**");
+    expect(text).not.toContain("$x^2$");
+    // KaTeX's stylesheet matches its markup: a superscript is smaller than the base text.
+    const sizes = await reply.locator(".katex .msupsub .sizing").first().evaluate((sup) => [parseFloat(getComputedStyle(sup).fontSize), parseFloat(getComputedStyle(sup.closest(".katex")!).fontSize)]);
+    expect(sizes[0]!).toBeLessThan(sizes[1]!);
+
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    for (const box of [reply.locator(".katex-display"), reply.locator("p .katex").last()]) {
+      const fit = await box.evaluate((e) => ({ scrolls: e.scrollWidth > e.clientWidth, right: e.getBoundingClientRect().right }));
+      expect(fit.scrolls).toBe(true);
+      expect(fit.right).toBeLessThanOrEqual(320);
+    }
+  });
+});

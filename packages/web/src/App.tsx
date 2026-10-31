@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
@@ -270,12 +271,12 @@ function Chat({
             <div
               key={m.id}
               className={cn(
-                "flex min-w-0 flex-col gap-2 whitespace-pre-wrap wrap-anywhere",
-                m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2",
+                "flex min-w-0 flex-col gap-2",
+                m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2 whitespace-pre-wrap wrap-anywhere",
               )}
             >
               {m.parts.map((part, i) => {
-                if (part.type === "text") return <p key={i}>{part.text}</p>;
+                if (part.type === "text") return m.role === "user" ? <p key={i}>{part.text}</p> : <MathText key={i} text={part.text} />;
                 if (part.type === "data-artifact") {
                   return (
                     <ArtifactPart

@@ -68,3 +68,7 @@ The agent shows interactive artifacts through tool calls (ADR-006): `show_algori
 - On later turns, each check's tool result tells the model whether the learner answered and how they did.
 - The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. A trace is a stepper (prev/next, play/pause, arrow keys). A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered.
 
+## Markdown and maths
+
+`MathText` (`packages/web/src/MathText.tsx`) renders model-written text as GitHub-flavoured markdown with KaTeX maths: `$...$` inline, `$$...$$` display. It is used for replies and for artifact text, apart from trace cell values; learner messages stay plain. A dollar with whitespace just inside it, or a digit just after its closing dollar, is plain text, so "costs $5 and $10" isn't a formula. Raw HTML shows as text, images show their alt text and never load, and only `http`, `https` and `mailto` links work. Keep the `katex` dependency on the version `rehype-katex` uses, since its stylesheet has to match the markup.
+
