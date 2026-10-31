@@ -51,6 +51,14 @@ describe("MemoryPanel", () => {
     expect(screen.queryByText("From chat")).toBeNull();
   });
 
+  it("refreshes when the window regains focus, so a released memory appears", async () => {
+    openPanel(json([memory({ held: true, text: null, basis: null })]), json([memory()]));
+    await screen.findByText("Hidden until you answer the check in that session.");
+    fireEvent.focus(window);
+    expect(await screen.findByText("Wants to pass interviews")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+  });
+
   it("saves an edit and shows the result", async () => {
     const fetch = openPanel(json([memory()]), json(memory({ text: "Wants a new job", editedAt: "2026-10-31T00:00:00.000Z" })));
     fireEvent.click(await button("Edit"));

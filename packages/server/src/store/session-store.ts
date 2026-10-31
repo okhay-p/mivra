@@ -151,9 +151,11 @@ export function createSessionStore(db: Db) {
           return;
         }
         // Other runs and the learner may have changed things since these were written, so check again now.
+        const startedAt = tx.select({ startedAt: runs.startedAt }).from(runs).where(eq(runs.id, runId)).get()!.startedAt;
         for (const memory of tx.select().from(memories).where(pending).orderBy(sql`rowid`).all()) {
           const target = memory.replacesId ? tx.select().from(memories).where(eq(memories.id, memory.replacesId)).get() : undefined;
-          const staleTarget = memory.replacesId && (target?.status !== "active" || (target.editedAt && target.editedAt >= memory.createdAt));
+          // The model read its context when the run started, so it can't have seen an edit made since then.
+          const staleTarget = memory.replacesId && (target?.status !== "active" || (target.editedAt && target.editedAt >= startedAt));
           const duplicate = tx
             .select()
             .from(memories)

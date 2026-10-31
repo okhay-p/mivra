@@ -303,12 +303,32 @@ describe("memory changing while another reply is running", () => {
     try {
       const store = createSessionStore(openDb(":memory:"));
       const a = seed(store);
-      const run = start(store);
-      run.save("B", a.id);
-      vi.advanceTimersByTime(1000);
-      expect(store.editMemory(a.id, "Learner's words", []).ok).toBe(true);
-      run.finish();
+      const edit = (id: string, text: string) => {
+        vi.advanceTimersByTime(1000);
+        expect(store.editMemory(id, text, []).ok).toBe(true);
+        vi.advanceTimersByTime(1000);
+      };
+
+      // Edited after the replacement was written.
+      const afterSave = start(store);
+      afterSave.save("B", a.id);
+      edit(a.id, "Learner's words");
+      afterSave.finish();
       expect(active(store)).toEqual(["Learner's words"]);
+
+      // Edited after the model read its context, but before it wrote the replacement.
+      const beforeSave = start(store);
+      edit(a.id, "Learner's second words");
+      beforeSave.save("C", a.id);
+      beforeSave.finish();
+      expect(active(store)).toEqual(["Learner's second words"]);
+
+      // Edited before the reply started, so the model saw it and may replace it.
+      const afterEdit = start(store);
+      vi.advanceTimersByTime(1000);
+      afterEdit.save("D", a.id);
+      afterEdit.finish();
+      expect(active(store)).toEqual(["D"]);
     } finally {
       vi.useRealTimers();
     }

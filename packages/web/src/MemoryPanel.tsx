@@ -21,14 +21,20 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
     if (!open) return;
     let stale = false;
     setMemories(undefined);
-    setError(undefined);
-    void listMemories().then((result) => {
-      if (stale) return;
-      if (result.ok) setMemories(result.value);
-      else setError(result.error);
-    });
+    const load = () => {
+      setError(undefined);
+      void listMemories().then((result) => {
+        if (stale) return;
+        if (result.ok) setMemories(result.value);
+        else setError(result.error);
+      });
+    };
+    load();
+    // A check answered in another tab releases held memories.
+    window.addEventListener("focus", load);
     return () => {
       stale = true;
+      window.removeEventListener("focus", load);
     };
   }, [open]);
 
