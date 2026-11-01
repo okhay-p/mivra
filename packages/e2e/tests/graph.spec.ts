@@ -45,12 +45,12 @@ const labelClashes = (page: Page) =>
   });
 const fontsLoaded = (page: Page) => page.evaluate(async () => void (await document.fonts.ready));
 
-/** Far under a pixel: the engines' layout rounding can differ by this when the page around the graph settles. */
+/** Allow under 0.05px: Firefox quantizes boxes to 1/60px when the surrounding chat scrolls. */
 function expectSamePlaces(after: { x: number; y: number }[], before: { x: number; y: number }[]) {
   expect(after).toHaveLength(before.length);
   after.forEach((place, i) => {
-    expect(place.x).toBeCloseTo(before[i]!.x, 2);
-    expect(place.y).toBeCloseTo(before[i]!.y, 2);
+    expect(place.x).toBeCloseTo(before[i]!.x, 1);
+    expect(place.y).toBeCloseTo(before[i]!.y, 1);
   });
 }
 
