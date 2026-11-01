@@ -5,6 +5,8 @@ import {
   stepCountIs,
   streamText,
   validateUIMessages,
+  wrapLanguageModel,
+  type LanguageModelMiddleware,
   type LanguageModel,
   type ModelMessage,
   type UIMessage,
@@ -87,6 +89,47 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
 }
 
 /**
+ * Providers can error their transport stream instead of emitting an SDK error part. Normalize at
+ * the model boundary, on every step: otherwise the error escapes the UI stream and reaches Hono's
+ * response writer. An error part uses the SDK's normal onError/onEnd path and closes SSE cleanly.
+ */
+const containStreamErrors: LanguageModelMiddleware = {
+  wrapStream: async ({ doStream }) => {
+    const result = await doStream();
+    const reader = result.stream.getReader();
+    let cancelled = false;
+    return {
+      ...result,
+      stream: new ReadableStream({
+        async pull(controller) {
+          try {
+            const { done, value } = await reader.read();
+            if (cancelled) return;
+            if (done) {
+              reader.releaseLock();
+              controller.close();
+            } else controller.enqueue(value);
+          } catch (error) {
+            if (cancelled) return;
+            reader.releaseLock();
+            controller.enqueue({ type: "error", error });
+            controller.close();
+          }
+        },
+        async cancel(reason) {
+          cancelled = true;
+          try {
+            await reader.cancel(reason);
+          } finally {
+            reader.releaseLock();
+          }
+        },
+      }),
+    };
+  },
+};
+
+/**
  * Runs one chat turn: validate the learner's message, claim the session's run, assemble context,
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
@@ -142,7 +185,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       const hasOutput = () => hasReplyText || turnTools.viewsByToolCall.size > 0;
       // If the client disconnects or stops, abort the model call; the run is recorded as cancelled.
       const result = streamText({
-        model: languageModel,
+        model: typeof languageModel === "string" ? languageModel : wrapLanguageModel({ model: languageModel, middleware: containStreamErrors }),
         instructions: assembled.instructions ? `${INSTRUCTIONS}\n\n${assembled.instructions}` : INSTRUCTIONS,
         messages: assembled.messages,
         tools: turnTools.tools,
