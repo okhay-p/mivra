@@ -1,0 +1,26 @@
+diff --git a/dist/index.js b/dist/index.js
+index 00ced03ce48e0a77fff23e5969cf3b92c4e107f7..e2584e0a8fde7119edc9d4586c907bdc613e3668 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -3424,7 +3424,7 @@ function withStreamErrorHandling(source, onError) {
+       }
+     },
+     cancel(reason) {
+-      reader.cancel(reason);
++      return reader.cancel(reason).catch(() => {});
+     }
+   });
+ }
+diff --git a/dist/internal/index.js b/dist/internal/index.js
+index 5598f8d295ea0d3759d1b3ce31c4e651fa01b08e..3dea4711e23c6fd702beadecc1066ad7893f933e 100644
+--- a/dist/internal/index.js
++++ b/dist/internal/index.js
+@@ -3348,7 +3348,7 @@ function withStreamErrorHandling(source, onError) {
+       }
+     },
+     cancel(reason) {
+-      reader.cancel(reason);
++      return reader.cancel(reason).catch(() => {});
+     }
+   });
+ }

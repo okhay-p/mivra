@@ -124,3 +124,93 @@ test.describe("narrow screens", () => {
     });
   }
 });
+
+test.describe("markdown and maths", () => {
+  test("a reply renders real markup, and a long formula scrolls in its own box at 320px", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto("/");
+    await page.getByRole("main").getByRole("button", { name: "Toggle Sidebar" }).click();
+    await page.locator('[data-mobile="true"]').getByRole("button", { name: "New session" }).first().click();
+    await page.getByRole("textbox", { name: "Message" }).fill("maths please");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    const reply = page.locator("main .math-text");
+    await expect(reply.locator("strong")).toHaveText("really bold");
+    await expect(reply.locator(".katex").first()).toBeVisible();
+    await expect(reply.locator(".katex-display")).toHaveCount(1);
+    await expect(reply).toContainText("it costs $5 and $10.");
+    const text = await reply.locator("p").first().evaluate((p) => p.cloneNode(true).textContent);
+    expect(text).not.toContain("**");
+    expect(text).not.toContain("$x^2$");
+    // KaTeX's stylesheet matches its markup: a superscript is smaller than the base text.
+    const sizes = await reply.locator(".katex .msupsub .sizing").first().evaluate((sup) => [parseFloat(getComputedStyle(sup).fontSize), parseFloat(getComputedStyle(sup.closest(".katex")!).fontSize)]);
+    expect(sizes[0]!).toBeLessThan(sizes[1]!);
+
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    for (const box of [reply.locator(".katex-display"), reply.locator("p .katex").last()]) {
+      const fit = await box.evaluate((e) => ({ scrolls: e.scrollWidth > e.clientWidth, right: e.getBoundingClientRect().right }));
+      expect(fit.scrolls).toBe(true);
+      expect(fit.right).toBeLessThanOrEqual(320);
+    }
+  });
+
+  async function send(page: Page, message: string) {
+    await page.goto("/");
+    await page.getByRole("button", { name: "New session" }).first().click();
+    await page.getByRole("textbox", { name: "Message" }).fill(message);
+    await page.getByRole("button", { name: "Send" }).click();
+  }
+
+  test("artifact text keeps answers literal, renders only formulas, and replies keep markdown", async ({ page }) => {
+    await send(page, "literals please");
+
+    const check = page.getByRole("region", { name: /^Check/ });
+    const options = check.getByRole("group", { name: "Options" }).getByRole("button");
+    await expect(options.nth(0)).toHaveText("2*3*4");
+    await expect(options.nth(1)).toHaveText("234");
+    await expect(options.nth(2).locator(".katex")).toHaveCount(1);
+    await expect(check.locator("em")).toHaveCount(0);
+    await expect(check).toContainText("Which is *the* product");
+
+    const trace = page.getByRole("region", { name: /Algorithm trace$/ });
+    await expect(trace.getByRole("heading")).toContainText("Swap *demo* in");
+    await expect(trace.getByRole("heading").locator(".katex")).toHaveCount(1);
+    await expect(trace).toContainText("Multiply 2*3*4 and compare");
+    await expect(trace).toContainText("for $5 or $10.");
+
+    const reply = page.locator("main div.math-text");
+    await expect(reply.locator("strong")).toHaveText("sum");
+    await expect(reply.locator("p code")).toHaveText("$x$");
+    await expect(reply).toContainText("costs $5 and $10, see $x$");
+    await expect(reply.locator("a")).toHaveAttribute("href", "https://example.com/");
+  });
+
+  test("a long streamed reply keeps its dollars as text", async ({ page }) => {
+    await send(page, "currencyparagraph");
+    const reply = page.locator("main div.math-text");
+    await expect(reply).toContainText("$44", { timeout: 60_000 });
+    await expect(reply.locator(".katex")).toHaveCount(0);
+    expect((await reply.textContent())!.match(/\$\d+/g)).toHaveLength(40);
+  });
+
+  test("a long streamed reply renders every formula", async ({ page }) => {
+    await send(page, "formulablocks");
+    const reply = page.locator("main div.math-text");
+    await expect(reply.locator(".katex")).toHaveCount(100, { timeout: 60_000 });
+  });
+
+  test("a paragraph of intervals after an inequality renders every formula", async ({ page }) => {
+    await send(page, "intervals");
+    const reply = page.locator("main div.math-text");
+    await expect(reply.locator(".katex")).toHaveCount(67);
+    await expect(reply.locator(".math-text-literal")).toHaveCount(0);
+  });
+
+  test("a reply nested too deeply shows as text without blocking the page", async ({ page }) => {
+    await send(page, "deepnesting");
+    const reply = page.locator("main div.math-text");
+    await expect(reply.locator("strong")).toHaveText("still fine", { timeout: 30_000 });
+    await expect(reply.locator("blockquote")).toHaveCount(0);
+    await expect(reply).toContainText(`${">".repeat(2000)} deep`);
+  });
+});

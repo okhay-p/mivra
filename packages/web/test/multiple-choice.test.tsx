@@ -31,6 +31,19 @@ const json = (body: unknown, status: number) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("MultipleChoice", () => {
+  it("keeps answers that markdown would make identical distinct and literal", () => {
+    render(<Harness data={{ ...question, spec: { ...question.spec, question: "Which is *it*, $x^2$?", options: [{ text: "2*3*4" }, { text: "234" }, { text: "$2*3*4$" }] } }} />);
+    const [starred, plain, formula] = options();
+    expect(starred!.textContent).toBe("2*3*4");
+    expect(plain!.textContent).toBe("234");
+    expect(starred!.querySelector("em, strong")).toBeNull();
+    expect(formula!.querySelector("annotation")?.textContent).toBe("2*3*4");
+    const title = screen.getByRole("region").querySelector('[data-slot="card-title"]')!;
+    expect(title.querySelector("em")).toBeNull();
+    expect(title.textContent).toContain("Which is *it*,");
+    expect(title.querySelector("annotation")?.textContent).toBe("x^2");
+  });
+
   it("posts the chosen option and shows the graded result", async () => {
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(json(answered, 201));
     render(<Harness data={question} />);

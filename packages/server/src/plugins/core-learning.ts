@@ -1,7 +1,11 @@
 import {
   AlgorithmTraceSpec,
+  GraphSpec,
   MultipleChoiceAnswer,
   MultipleChoiceSpec,
+  SetDiagramSpec,
+  TableSpec,
+  WorkedStepsSpec,
   artifactKinds,
   gradeMultipleChoice,
   toMultipleChoicePublic,
@@ -10,8 +14,8 @@ import {
 import type { Plugin } from "../runtime/capabilities.js";
 
 /**
- * First-party learning tools (ADR-006/007): the algorithm_trace visualization and the
- * multiple_choice check, registered through the same API third-party plugins will use.
+ * First-party learning tools (ADR-006/007): the visualization kinds and the multiple_choice check,
+ * registered through the same API third-party plugins will use.
  */
 export const coreLearning: Plugin = {
   name: "core-learning",
@@ -23,7 +27,7 @@ export const coreLearning: Plugin = {
       version: trace.version,
       toolName: trace.toolName,
       description: trace.description,
-      spec: trace.spec,
+      spec: trace.input,
       toView: ({ id, createdAt, spec }) => ({
         id,
         createdAt: createdAt.toISOString(),
@@ -33,13 +37,45 @@ export const coreLearning: Plugin = {
       }),
     });
 
+    const graph = artifactKinds.graph;
+    api.registerArtifactKind({
+      kind: "graph",
+      version: graph.version,
+      toolName: graph.toolName,
+      description: graph.description,
+      spec: graph.input,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "graph",
+        version: 1,
+        spec: GraphSpec.parse(spec),
+      }),
+    });
+
+    const sets = artifactKinds.set_diagram;
+    api.registerArtifactKind({
+      kind: "set_diagram",
+      version: sets.version,
+      toolName: sets.toolName,
+      description: sets.description,
+      spec: sets.input,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "set_diagram",
+        version: 1,
+        spec: SetDiagramSpec.parse(spec),
+      }),
+    });
+
     const mc = artifactKinds.multiple_choice;
     api.registerArtifactKind({
       kind: "multiple_choice",
       version: mc.version,
       toolName: mc.toolName,
       description: mc.description,
-      spec: mc.spec,
+      spec: mc.input,
       toView: ({ id, createdAt, spec, attempt }) => ({
         id,
         createdAt: createdAt.toISOString(),
@@ -73,6 +109,38 @@ export const coreLearning: Plugin = {
           };
         },
       },
+    });
+
+    const table = artifactKinds.table;
+    api.registerArtifactKind({
+      kind: "table",
+      version: table.version,
+      toolName: table.toolName,
+      description: table.description,
+      spec: table.input,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "table",
+        version: 1,
+        spec: TableSpec.parse(spec),
+      }),
+    });
+
+    const worked = artifactKinds.worked_steps;
+    api.registerArtifactKind({
+      kind: "worked_steps",
+      version: worked.version,
+      toolName: worked.toolName,
+      description: worked.description,
+      spec: worked.input,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "worked_steps",
+        version: 1,
+        spec: WorkedStepsSpec.parse(spec),
+      }),
     });
   },
 };

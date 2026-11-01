@@ -1,13 +1,24 @@
 import { z } from "zod";
+import { artifactMathInput, checkMathText } from "./artifact-math-input.js";
 import { AlgorithmTraceSpec } from "./algorithm-trace.js";
+import { GraphSpec } from "./graph.js";
 import { MultipleChoiceAnswer, MultipleChoiceGrade, MultipleChoicePublic, MultipleChoiceSpec } from "./multiple-choice.js";
+import { SetDiagramSpec } from "./set-diagram.js";
+import { TableSpec } from "./table.js";
+import { WorkedStepsSpec } from "./worked-steps.js";
 
+export * from "./artifact-math-input.js";
+export * from "./math-text.js";
 export * from "./algorithm-trace.js";
+export * from "./graph.js";
 export * from "./multiple-choice.js";
+export * from "./set-diagram.js";
+export * from "./table.js";
+export * from "./worked-steps.js";
 
 /**
- * Every artifact kind the agent can produce, one tool per kind (ADR-006). The tool's input schema is
- * the kind's spec schema, so the model is told exactly what to send and the server validates it.
+ * Every artifact kind the agent can produce, one tool per kind (ADR-006).
+ * `input` adds current authoring checks to the stored `spec` schema, so old artifacts stay readable.
  * Bump `version` and keep the old schema when a spec changes incompatibly; stored artifacts record
  * the version they were created with.
  */
@@ -18,6 +29,19 @@ export const artifactKinds = {
     description:
       "Show the learner an interactive step-by-step trace of an algorithm running over a sequence (e.g. sliding window, two pointers, binary search, a simple sort). The learner steps through it with play/pause/step controls. Use it when watching state change step by step will make the idea click. Keep traces short (roughly 5-20 steps) and make each step's explanation say what changed and why.",
     spec: AlgorithmTraceSpec,
+    input: artifactMathInput(AlgorithmTraceSpec, ["title", "steps.*.explanation"]),
+  },
+  graph: {
+    version: 1,
+    toolName: "show_graph",
+    description:
+      "Show the learner a graph or tree, drawn for you, optionally with steps they can walk through. Use it for graphs, trees, BFS, DFS, shortest paths, spanning trees and tree traversals, whenever seeing the structure or watching an algorithm move over it will help. Never give coordinates: the layout is automatic. For a binary search tree or binary tree traversal, set kind to tree and give every edge a side, so a lone left child and a lone right child are drawn differently. The automatic layout may draw crossing edges that mean nothing, even when the graph is planar, so don't use this to show whether a graph is planar. Keep it small enough to read (roughly 4-15 nodes, 5-20 steps) and make each step's explanation say what changed and why.",
+    spec: GraphSpec,
+    input: artifactMathInput(GraphSpec, ["title", "nodes.*.label", "edges.*.label", "steps.*.explanation"], (spec, ctx) => {
+      spec.nodes.forEach((node, i) => {
+        if (node.label === undefined) checkMathText(node.id, ["nodes", i, "id"], ctx);
+      });
+    }),
   },
   multiple_choice: {
     version: 1,
@@ -25,6 +49,31 @@ export const artifactKinds = {
     description:
       "Ask the learner one multiple-choice question to check understanding of a concept you just taught. Exactly one option is correct. Write plausible wrong options that reflect real misconceptions, and give per-option feedback where useful. The learner answers in the UI; the result is reported back to you on the next turn, so do not reveal the answer in your reply.",
     spec: MultipleChoiceSpec,
+    input: artifactMathInput(MultipleChoiceSpec, ["question", "options.*.text", "options.*.feedback", "explanation"]),
+  },
+  set_diagram: {
+    version: 1,
+    toolName: "show_set_diagram",
+    description:
+      "Show the learner a Venn diagram of 1 to 3 sets, with what each region contains. Use it for set operations (union, intersection, complement, difference) and inclusion-exclusion, not for more than 3 sets. Keep elements short, because they are drawn in their region. Add steps to walk through it: each step highlights exact regions (any of them, including outside every set, which needs `universe`) and says what changed and why.",
+    spec: SetDiagramSpec,
+    input: artifactMathInput(SetDiagramSpec, ["title", "universe", "sets.*.label", "regions.*.elements.*", "steps.*.explanation", "steps.*.variables.*.name", "steps.*.variables.*.value"]),
+  },
+  table: {
+    version: 1,
+    toolName: "show_table",
+    description:
+      "Show the learner a table: a truth table, a relation matrix or other tabular working. Use it whenever the content is really rows and columns. Add steps when filling it in or highlighting it one part at a time will help, such as working out a truth table column by column; leave them out for a table to read at a glance. Keep steps short and make each explanation say what changed and why.",
+    spec: TableSpec,
+    input: artifactMathInput(TableSpec, ["title", "columns.*", "rowHeaders.*", "rows.*.*", "steps.*.explanation", "steps.*.cells.*.value"]),
+  },
+  worked_steps: {
+    version: 1,
+    toolName: "show_worked_steps",
+    description:
+      "Show the learner a proof, an induction or combinatorics working as a sequence of steps they reveal one at a time, each a statement with its justification. Use it when the reasoning is the point and each line follows from the ones before. Use show_algorithm_trace instead for an algorithm's state changing over a sequence.",
+    spec: WorkedStepsSpec,
+    input: artifactMathInput(WorkedStepsSpec, ["title", "goal", "steps.*.label", "steps.*.statement", "steps.*.justification"]),
   },
 } as const;
 
@@ -51,6 +100,7 @@ export const ArtifactView = z.discriminatedUnion("kind", [
   z
     .object({ ...ArtifactBase, kind: z.literal("algorithm_trace"), version: z.literal(1), spec: AlgorithmTraceSpec })
     .strict(),
+  z.object({ ...ArtifactBase, kind: z.literal("graph"), version: z.literal(1), spec: GraphSpec }).strict(),
   z
     .object({
       ...ArtifactBase,
@@ -60,7 +110,11 @@ export const ArtifactView = z.discriminatedUnion("kind", [
       latestAttempt: MultipleChoiceAttempt.optional(),
     })
     .strict(),
+  z.object({ ...ArtifactBase, kind: z.literal("set_diagram"), version: z.literal(1), spec: SetDiagramSpec }).strict(),
+  z.object({ ...ArtifactBase, kind: z.literal("table"), version: z.literal(1), spec: TableSpec }).strict(),
+  z.object({ ...ArtifactBase, kind: z.literal("worked_steps"), version: z.literal(1), spec: WorkedStepsSpec }).strict(),
 ]);
 export type ArtifactView = z.infer<typeof ArtifactView>;
 
 export * from "./memory.js";
+export * from "./document.js";

@@ -1,7 +1,9 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { LanguageModel } from "ai";
-import { ArtifactView, MemoryEdit, MemoryView } from "@mivra/protocol";
+import { ArtifactView, DocumentView, MemoryEdit, MemoryView } from "@mivra/protocol";
 import type { Db } from "./db/client.js";
+import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
+import type { Extract } from "./documents/extract-in-worker.js";
 import { coreLearning } from "./plugins/core-learning.js";
 import { coreMemory } from "./plugins/core-memory.js";
 import { presentMessages } from "./runtime/artifacts.js";
@@ -9,7 +11,7 @@ import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
-import { createSessionStore, type MemoryRow, type SessionRow } from "./store/session-store.js";
+import { createSessionStore, type DocumentRow, type MemoryRow, type SessionRow } from "./store/session-store.js";
 
 export interface AppDeps {
   db: Db;
@@ -17,6 +19,8 @@ export interface AppDeps {
   security: SecurityConfig;
   /** Defaults to the first-party core-learning and core-memory plugins. */
   plugins?: Plugin[];
+  /** Defaults to extracting on a worker thread. */
+  extractDocument?: Extract;
 }
 
 const Session = z
@@ -153,6 +157,54 @@ const deleteMemory = createRoute({
   },
 });
 
+const listDocuments = createRoute({
+  method: "get",
+  path: "/sessions/{id}/documents",
+  request: { params: SessionParams },
+  responses: {
+    200: { description: "The session's documents in upload order", content: { "application/json": { schema: z.array(DocumentView) } } },
+    404: errorResponse("Unknown session"),
+  },
+});
+
+/** Documented only: the handler streams the body, which the request validator would buffer whole. */
+const uploadDocument = createRoute({
+  method: "post",
+  path: "/sessions/{id}/documents",
+  description:
+    "Attach a PDF or PPTX file, up to 25 MB. The server extracts its text locally and keeps only that, not the file. Images and diagrams aren't read. The type is decided by the file's content, not its name.",
+  request: {
+    params: SessionParams,
+    body: { content: { "multipart/form-data": { schema: z.object({ file: z.string().openapi({ format: "binary" }) }) } } },
+  },
+  responses: {
+    201: { description: "The stored document", content: { "application/json": { schema: DocumentView } } },
+    400: errorResponse("Not a multipart upload with a file field, or it didn't finish"),
+    404: errorResponse("Unknown session"),
+    409: errorResponse("The session has too many documents"),
+    413: errorResponse("File too large"),
+    415: errorResponse("Not a PDF or PPTX, whatever its name says"),
+    422: errorResponse("Scanned, password-protected, damaged, or too demanding to read safely"),
+    429: errorResponse("Too many uploads in progress"),
+  },
+});
+
+const deleteDocument = createRoute({
+  method: "delete",
+  path: "/documents/{id}",
+  description: "Removes a document and its text from storage and search. Replies already written from it stay in the conversation.",
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    204: { description: "Deleted" },
+    404: errorResponse("Unknown document"),
+  },
+});
+
+const attachErrorStatus = { not_found: 404, bad_request: 400, limit: 409, too_large: 413, wrong_type: 415, unreadable: 422, busy: 429 } as const satisfies Record<
+  AttachError["kind"],
+  number
+>;
+
 const turnErrorStatus = { not_found: 404, invalid: 400, conflict: 409, unavailable: 500 } as const satisfies Record<
   TurnError["kind"],
   number
@@ -183,13 +235,30 @@ function toMemoryJson(row: MemoryRow & { held: boolean }): MemoryView {
   };
 }
 
-export function createApp({ db, model, security, plugins = [coreLearning, coreMemory] }: AppDeps) {
+function toDocumentJson(row: DocumentRow): DocumentView {
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    filename: row.filename,
+    kind: row.kind,
+    byteSize: row.byteSize,
+    pageCount: row.pageCount,
+    pagesWithText: row.pagesWithText,
+    status: row.status,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+export function createApp({ db, model, security, plugins = [coreLearning, coreMemory], extractDocument }: AppDeps) {
   const store = createSessionStore(db);
   store.recoverInterruptedRuns();
   const registry = createCapabilityRegistry(plugins);
   const turns = createTurnRunner({ store, registry, model });
+  const attachDocument = createDocumentAttacher({ store, ...(extractDocument ? { extract: extractDocument } : {}) });
 
-  const api = new OpenAPIHono()
+  const base = new OpenAPIHono();
+  base.openAPIRegistry.registerPath(uploadDocument);
+  const api = base
     .openapi(health, (c) => c.json({ ok: true as const }, 200))
     .openapi(listSessions, (c) => c.json(store.listSessions().map(toSessionJson), 200))
     .openapi(createSession, async (c) => {
@@ -228,9 +297,27 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
     })
     .openapi(deleteMemory, (c) =>
       store.deleteMemory(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Memory not found" }, 404),
-    );
+    )
+    .openapi(listDocuments, (c) => {
+      const { id } = c.req.valid("param");
+      if (!store.findSession(id)) return c.json({ error: "Session not found" }, 404);
+      return c.json(store.listDocuments(id).map(toDocumentJson), 200);
+    })
+    .openapi(deleteDocument, (c) =>
+      store.deleteDocument(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Document not found" }, 404),
+    )
+    .post("/sessions/:id/documents", async (c) => {
+      const result = await attachDocument(
+        c.req.param("id"),
+        { body: c.req.raw.body, contentType: c.req.header("content-type"), contentLength: c.req.header("content-length") },
+        c.req.raw.signal,
+      );
+      if (!result.ok) return c.json({ error: result.error.message }, attachErrorStatus[result.error.kind]);
+      return c.json(toDocumentJson(result.document), 201);
+    });
 
-  api.doc("/doc", {
+
+  base.doc("/doc", {
     openapi: "3.1.0",
     info: { title: "Mivra API", version: "0.0.0" },
     servers: [{ url: "/api" }],

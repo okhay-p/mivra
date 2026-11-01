@@ -6,6 +6,8 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
+import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
@@ -228,6 +230,7 @@ function Chat({
   onReply: () => void;
 }) {
   const [input, setInput] = useState("");
+  const documents = useDocuments(sessionId);
   // Views the learner changed locally (e.g. a graded check), by artifact id. They win over the view in
   // the message part, so the change survives re-renders; a reload gets it from the server instead.
   const [updatedViews, setUpdatedViews] = useState<Record<string, ArtifactView>>({});
@@ -264,18 +267,19 @@ function Chat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* Positioned, so the sr-only text in artifacts is contained here; otherwise it stretches the outer, unscrollable box, which scrollIntoView then moves. */}
+      <div className="relative min-h-0 flex-1 overflow-y-auto" data-testid="transcript">
         <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
           {messages.map((m, mi) => (
             <div
               key={m.id}
               className={cn(
-                "flex min-w-0 flex-col gap-2 whitespace-pre-wrap wrap-anywhere",
-                m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2",
+                "flex min-w-0 flex-col gap-2",
+                m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2 whitespace-pre-wrap wrap-anywhere",
               )}
             >
               {m.parts.map((part, i) => {
-                if (part.type === "text") return <p key={i}>{part.text}</p>;
+                if (part.type === "text") return m.role === "user" ? <p key={i}>{part.text}</p> : <MathText key={i} text={part.text} />;
                 if (part.type === "data-artifact") {
                   return (
                     <ArtifactPart
@@ -297,7 +301,9 @@ function Chat({
         </div>
       </div>
       <form onSubmit={submit} className="border-t">
+        <DocumentChips documents={documents} />
         <div className="mx-auto flex max-w-3xl gap-2 p-3">
+          <AttachButton documents={documents} />
           <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}

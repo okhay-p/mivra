@@ -1,7 +1,11 @@
 import { ArtifactView, type ArtifactKind } from "@mivra/protocol";
 import type { ComponentType } from "react";
 import { AlgorithmTrace } from "./AlgorithmTrace.js";
+import { Graph } from "./Graph.js";
 import { MultipleChoice } from "./MultipleChoice.js";
+import { SetDiagram } from "./SetDiagram.js";
+import { TableArtifact } from "./TableArtifact.js";
+import { WorkedSteps } from "./WorkedSteps.js";
 
 export interface ArtifactProps<K extends ArtifactKind> {
   view: Extract<ArtifactView, { kind: K }>;
@@ -16,7 +20,11 @@ export interface ArtifactProps<K extends ArtifactKind> {
 /** One renderer per artifact kind. A new kind in `artifactKinds` fails type-checking here until it has one. */
 const renderers: { [K in ArtifactKind]: ComponentType<ArtifactProps<K>> } = {
   algorithm_trace: AlgorithmTrace,
+  graph: Graph,
   multiple_choice: MultipleChoice,
+  set_diagram: SetDiagram,
+  table: TableArtifact,
+  worked_steps: WorkedSteps,
 };
 
 /**

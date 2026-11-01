@@ -47,7 +47,7 @@ export function deriveConceptState(attempts: EvidenceRow[]): ConceptState[] {
 }
 
 /** One row per line, escaped so nothing in it can end its block. */
-const dataRows = (rows: object[]) => rows.map((row) => JSON.stringify(row).replaceAll("<", "\\u003c")).join("\n");
+export const dataRows = (rows: object[]) => rows.map((row) => JSON.stringify(row).replaceAll("<", "\\u003c")).join("\n");
 
 /**
  * What Mivra knows about the learner as instructions text, or undefined if nothing yet. Names and

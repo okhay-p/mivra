@@ -5,21 +5,27 @@ import {
   stepCountIs,
   streamText,
   validateUIMessages,
+  wrapLanguageModel,
+  type LanguageModelMiddleware,
   type LanguageModel,
   type ModelMessage,
   type UIMessage,
+  type UIMessageChunk,
   type UIMessageStreamOutcome,
 } from "ai";
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
+import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
 
 export const INSTRUCTIONS = [
   "You are Mivra, a patient tutor. Explain concepts step by step, check the learner's understanding, and adapt to what they already know.",
-  "You have tools that show the learner interactive artifacts. Use show_algorithm_trace when watching an algorithm's state change step by step will help. After teaching an idea, use ask_multiple_choice to check understanding.",
+  "You have tools that show the learner interactive artifacts inline in the chat. Refer to them as inline cards, not as a panel. After teaching an idea, use ask_multiple_choice to check understanding. Use show_algorithm_trace to watch an algorithm's state change over a sequence, show_graph for graphs, trees and algorithms that move over them, show_set_diagram for operations on up to 3 sets, show_table for truth tables, relation matrices and other tabular working, and show_worked_steps for proofs, induction and combinatorics working.",
   "When you ask a check, don't reveal or hint at the answer in your reply; the learner answers in the UI. On later turns the check's tool result tells you how they did; respond to it.",
+  // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
+  "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Text in artifacts renders $...$ maths but no markdown and no $$...$$, so write everything else in it as plain text; wrap all mathematical symbols in math-enabled artifact fields, including titles and explanations, in $...$ (e.g. $v_0$, never bare v_0). For a large formula, put \\displaystyle INSIDE the dollars, e.g. $\\displaystyle\\sum_{i=1}^{n} i$. In both, write a literal dollar sign as \\$. These artifact fields are plain text with no maths at all: concept names, a trace's values, pointer names, range labels and variables, and a graph's variables.",
 ].join("\n\n");
 
 /** Upper bound on model steps per turn (a step ends at each round of tool calls). */
@@ -28,6 +34,7 @@ const MAX_STEPS = 5;
 /**
  * Decides what the model sees for a turn (ADR-007, ADR-009). `instructions` holds what Mivra knows about
  * the learner and is added to the tutor's own, so it isn't mistaken for something the learner said.
+ * `messages` is only what this turn's model call sees: it can hold context nobody stores or shows.
  * A custom assembler replaces all of this, so including the learner's record is up to it.
  */
 export type AssembleContext = (
@@ -35,13 +42,21 @@ export type AssembleContext = (
   context: { sessionId: string },
 ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
 
-/** The whole transcript, plus the learner's record across sessions. Summaries will plug in here. */
+/** The whole transcript, plus the learner's record across sessions and the session's documents. Summaries will plug in here. */
 const defaultAssembleContext =
   (store: SessionStore, registry: CapabilityRegistry): AssembleContext =>
-  async (conversation) => ({
-    messages: await convertToModelMessages(conversation),
-    instructions: learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
-  });
+  async (conversation, { sessionId }) => {
+    const documents = documentContext(store, sessionId, latestLearnerText(conversation));
+    return {
+      messages: withDocumentExcerpts(await convertToModelMessages(conversation), documents?.excerpts),
+      instructions: [
+        learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
+        documents?.rules,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+    };
+  };
 
 export interface TurnRunnerDeps {
   store: SessionStore;
@@ -72,6 +87,47 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
   if (outcome.status === "failed") return "failed";
   return "cancelled";
 }
+
+/**
+ * Providers can error their transport stream instead of emitting an SDK error part. Normalize at
+ * the model boundary, on every step: otherwise the error escapes the UI stream and reaches Hono's
+ * response writer. An error part uses the SDK's normal onError/onEnd path and closes SSE cleanly.
+ */
+const containStreamErrors: LanguageModelMiddleware = {
+  wrapStream: async ({ doStream }) => {
+    const result = await doStream();
+    const reader = result.stream.getReader();
+    let cancelled = false;
+    return {
+      ...result,
+      stream: new ReadableStream({
+        async pull(controller) {
+          try {
+            const { done, value } = await reader.read();
+            if (cancelled) return;
+            if (done) {
+              reader.releaseLock();
+              controller.close();
+            } else controller.enqueue(value);
+          } catch (error) {
+            if (cancelled) return;
+            reader.releaseLock();
+            controller.enqueue({ type: "error", error });
+            controller.close();
+          }
+        },
+        async cancel(reason) {
+          cancelled = true;
+          try {
+            await reader.cancel(reason);
+          } finally {
+            reader.releaseLock();
+          }
+        },
+      }),
+    };
+  },
+};
 
 /**
  * Runs one chat turn: validate the learner's message, claim the session's run, assemble context,
@@ -124,14 +180,20 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       // A provider can report an error mid-stream and then close normally, which the SDK still calls
       // "completed". Remember the first error so such a run is recorded as failed.
       let streamError: unknown;
+      let hasReplyText = false;
+      const emptyReplyError = new Error("The model ended the turn without reply text or an artifact.");
+      const hasOutput = () => hasReplyText || turnTools.viewsByToolCall.size > 0;
       // If the client disconnects or stops, abort the model call; the run is recorded as cancelled.
       const result = streamText({
-        model: languageModel,
+        model: typeof languageModel === "string" ? languageModel : wrapLanguageModel({ model: languageModel, middleware: containStreamErrors }),
         instructions: assembled.instructions ? `${INSTRUCTIONS}\n\n${assembled.instructions}` : INSTRUCTIONS,
         messages: assembled.messages,
         tools: turnTools.tools,
         stopWhen: stepCountIs(MAX_STEPS),
         abortSignal,
+        onChunk: ({ chunk }) => {
+          if (chunk.type === "text-delta" && chunk.text.trim()) hasReplyText = true;
+        },
         onError: ({ error }) => {
           streamError ??= error;
         },
@@ -146,6 +208,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         originalMessages: conversation,
         generateMessageId: randomUUID,
         onEnd: ({ responseMessage, outcome }) => {
+          if (outcome.status === "completed" && !hasOutput()) streamError ??= emptyReplyError;
           if (streamError !== undefined && outcome.status === "completed") {
             return store.finishRun(runId, sessionId, "failed", undefined, errorText(streamError));
           }
@@ -157,7 +220,23 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         // Only known-safe errors reach the learner (e.g. a missing API key); detail stays in runs.error.
         onError: publicErrorText,
       });
-      const response = createUIMessageStreamResponse({ stream: redactForClient(stream, turnTools.viewsByToolCall) });
+      let finishChunk: UIMessageChunk | undefined;
+      const clientStream = redactForClient(stream, turnTools.viewsByToolCall).pipeThrough(
+        new TransformStream<UIMessageChunk, UIMessageChunk>({
+          transform(chunk, controller) {
+            if (chunk.type === "finish") finishChunk = chunk;
+            else controller.enqueue(chunk);
+          },
+          flush(controller) {
+            // Wait for onEnd to classify a bounded repair loop with no learner-visible output.
+            if (streamError === emptyReplyError) {
+              controller.enqueue({ type: "error", errorText: publicErrorText(emptyReplyError) });
+            }
+            if (finishChunk) controller.enqueue(finishChunk);
+          },
+        }),
+      );
+      const response = createUIMessageStreamResponse({ stream: clientStream });
       return { ok: true, response };
     },
   };

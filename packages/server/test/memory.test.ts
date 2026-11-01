@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
-import { artifacts, memories, runs } from "../src/db/schema.js";
+import { artifacts, attempts, memories, runs } from "../src/db/schema.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
 const auth = { authorization: "Bearer t" };
@@ -366,15 +366,16 @@ describe("memory changing while another reply is running", () => {
   });
 
   it("finds a wrong answer however many attempts came after it", () => {
-    const store = createSessionStore(openDb(":memory:"));
+    const db = openDb(":memory:");
+    const store = createSessionStore(db);
     const session = store.createSession();
     const runId = store.startRun(session, { id: "m", role: "user", parts: [] });
-    const record = (toolCallId: string, correct: boolean, concept: string) => {
-      const artifact = store.createArtifact({ sessionId: session.id, runId, toolCallId, kind: "multiple_choice", version: 1, spec: check });
-      return store.createAttempt({ artifactId: artifact.id, sessionId: session.id, answer: {}, grade: {}, correct, concept });
-    };
-    const wrong = record("old", false, "heaps");
-    for (let i = 0; i < 1001; i++) record(`later${i}`, true, "other");
+    const artifact = (toolCallId: string) => ({ id: toolCallId, sessionId: session.id, runId, toolCallId, kind: "multiple_choice", version: 1, spec: check, createdAt: new Date() });
+    const wrong = store.createAttempt({ artifactId: store.createArtifact(artifact("old")).id, sessionId: session.id, answer: {}, grade: {}, correct: false, concept: "heaps" });
+    // More than the evidence limit, in one insert each: through the store, that's over 2,000 statements each built and prepared alone.
+    const later = Array.from({ length: 1001 }, (_, i) => artifact(`later${i}`));
+    db.insert(artifacts).values(later).run();
+    db.insert(attempts).values(later.map(({ id, createdAt }) => ({ id, artifactId: id, sessionId: session.id, answer: {}, grade: {}, correct: true, concept: "other", createdAt }))).run();
     expect(store.findLatestWrongAnswer((c) => c === "heaps")?.id).toBe(wrong.id);
     expect(store.findLatestWrongAnswer((c) => c === "missing")).toBeUndefined();
   });
