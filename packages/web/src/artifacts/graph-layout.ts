@@ -169,13 +169,15 @@ function forcePositions(spec: LayoutInput, sizes: Map<string, Box>) {
     for (const [a, b] of edgePairs) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
+      const squared = dx * dx + dy * dy || 1;
       for (const node of nodes) {
         if (node === a || node === b) continue;
-        const t = Math.max(0, Math.min(1, ((node.x - a.x) * dx + (node.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        const t = Math.max(0, Math.min(1, ((node.x - a.x) * dx + (node.y - a.y) * dy) / squared));
         const px = node.x - a.x - t * dx;
         const py = node.y - a.y - t * dy;
         const distance = Math.hypot(px, py);
         const push = Math.max(0, node.radius + 12 - distance) * 0.5;
+        if (push === 0) continue;
         const ux = distance > 0.001 ? px / distance : -dy / (Math.hypot(dx, dy) || 1);
         const uy = distance > 0.001 ? py / distance : dx / (Math.hypot(dx, dy) || 1);
         node.vx += ux * push;
