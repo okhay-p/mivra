@@ -14,5 +14,10 @@
     "test:e2e": "pnpm --filter @mivra/e2e test:e2e",
     "test:e2e:all": "pnpm --filter @mivra/e2e test:e2e:all",
     "typecheck": "pnpm -r typecheck"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@openrouter/ai-sdk-provider@3.1.0": "patches/@openrouter__ai-sdk-provider@3.1.0.patch"
+    }
   }
 }

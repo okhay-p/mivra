@@ -57,6 +57,8 @@ This worked on Debian 12 with g++ 12, taking over ten minutes, and failed on Ubu
 
 Workspace packages resolve to their TypeScript source in dev, tests and type-checking through the `@mivra/source` export condition, so `pnpm dev` needs no prebuild. `pnpm build` compiles `packages/protocol` first; the production server loads its `dist`.
 
+The pnpm patch for `@openrouter/ai-sdk-provider@3.1.0` handles a discarded stream-cancellation rejection that can exit Node after a client disconnect. Remove it when an upstream version handles that rejection and passes `packages/server/test/openrouter-exit.test.ts`.
+
 Data is stored in `~/.mivra/mivra.db` (override with `MIVRA_DATA_DIR`). The API's OpenAPI document is at `/api/doc`.
 
 ## Learner memory
