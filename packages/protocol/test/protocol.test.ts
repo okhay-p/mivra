@@ -64,7 +64,8 @@ describe("every artifact kind", () => {
   });
 
   it.each(kinds)("%s converts to a JSON Schema object with required fields, for the tool definition", (kind) => {
-    const schema = z.toJSONSchema(artifactKinds[kind].spec) as { type: string; required?: string[]; additionalProperties?: boolean };
+    expect(artifactKinds[kind].input.safeParse({}).success).toBe(false);
+    const schema = z.toJSONSchema(artifactKinds[kind].input) as { type: string; required?: string[]; additionalProperties?: boolean };
     expect(schema.type).toBe("object");
     expect(schema.required?.length).toBeGreaterThan(0);
     expect(schema.additionalProperties).toBe(false);

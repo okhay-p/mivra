@@ -1,11 +1,11 @@
 import { z } from "zod";
 import { splitMath } from "./math-text.js";
 
-const REPAIR = String.raw`Wrap LaTeX commands in single-dollar math delimiters, with no spaces inside: $\displaystyle\sum_{i=1}^{n} i$. Put \displaystyle inside the dollars. For literal backslashes followed by letters (paths, code or set difference), use forward slashes, Unicode symbols such as ∖, or describe them in words; backticks do not escape artifact math. Correct the affected field and retry this tool call.`;
+const REPAIR = String.raw`Wrap LaTeX commands in single-dollar math delimiters, with no spaces inside: $\displaystyle\sum_{i=1}^{n} i$. Put \displaystyle inside the dollars. For literal backslashes followed by two or more letters (such as C:\Users), use forward slashes, Unicode symbols such as ∖, or describe them in words; backticks do not escape artifact math. Correct the affected field and retry this tool call.`;
 
-/** Math-mode fields have no code escapes: every literal backslash-letter sequence is ambiguous. */
+// Single-letter code escapes stay literal; longer literals such as C:\Users are still rejected.
 export function checkMathText(value: unknown, path: (string | number)[], ctx: z.RefinementCtx) {
-  if (typeof value === "string" && splitMath(value).some((piece) => "text" in piece && /\\[a-zA-Z]+/.test(piece.text))) {
+  if (typeof value === "string" && splitMath(value).some((piece) => "text" in piece && /\\[a-zA-Z]{2,}/.test(piece.text))) {
     ctx.addIssue({ code: "custom", path, message: REPAIR });
   }
 }

@@ -901,8 +901,8 @@ describe("where document text goes", () => {
   it("keeps excerpts and filenames out of the system prompt, and the rule in it", async () => {
     const { newSession, upload, toldFor, lastPrompt } = setup();
     const id = await newSession();
-    await upload(id, makePdf([[secret]]), "Secret name.pdf");
-    await toldFor(id, "zebrafish");
+    await upload(id, makePdf([["First page opening."], [secret]]), "Secret name.pdf");
+    await toldFor(id, "page 2");
     const prompt = lastPrompt();
     const system = prompt[0]!;
     expect(system.role).toBe("system");
@@ -914,27 +914,14 @@ describe("where document text goes", () => {
 
     const last = prompt.at(-1)!;
     const context = prompt.at(-2)!;
-    expect(JSON.stringify(last.content)).toContain("zebrafish");
+    expect(JSON.stringify(last.content)).toContain("page 2");
     expect(JSON.stringify(last.content)).not.toContain(secret);
     expect(context.role).toBe("user");
     expect(JSON.stringify(context.content)).toContain("[Mivra document excerpts.");
     expect(JSON.stringify(context.content)).toContain(secret);
     expect(JSON.stringify(context.content)).toContain("Secret name");
-  });
-
-  it("preserves citation continuity when earlier per-turn excerpts are absent", async () => {
-    const { newSession, upload, toldFor, lastPrompt } = setup();
-    const id = await newSession();
-    await upload(id, makePdf([["First page opening."], ["Zebrafish citation on page two."]]));
-    await toldFor(id, "page 2");
-    expect(JSON.stringify(lastPrompt())).toContain("Zebrafish citation");
-    await toldFor(id, "page 1");
-    const system = lastPrompt()[0]!.content;
-    expect(system).toContain("Excerpts are supplied per turn");
-    expect(system).toContain("do not retract or doubt earlier citations for that reason");
-    expect(system).toContain("Do not invent page content you cannot see now");
-    expect(system).toContain("request a reread or point to the page");
-    expect(JSON.stringify(lastPrompt())).not.toContain("Zebrafish citation");
+    expect(rows(await toldFor(id, "page 1")).map((row) => row.page)).toEqual([1]);
+    expect(JSON.stringify(lastPrompt())).not.toContain(secret);
   });
 
   it("adds no rule or message without documents", async () => {

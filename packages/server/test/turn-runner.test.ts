@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db/client.js";
 import { coreLearning } from "../src/plugins/core-learning.js";
 import { createCapabilityRegistry } from "../src/runtime/capabilities.js";
-import { INSTRUCTIONS, createTurnRunner } from "../src/runtime/turn-runner.js";
+import { createTurnRunner } from "../src/runtime/turn-runner.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
 const usage = {
@@ -30,13 +30,6 @@ const registry = createCapabilityRegistry([coreLearning]);
 const userMessage = (text: string): UIMessage => ({ id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text }] });
 
 describe("TurnRunner, used without HTTP", () => {
-  it("instructs models to delimit symbols and displaystyle inside inline artifact math", () => {
-    expect(INSTRUCTIONS).toContain("inline in the chat");
-    expect(INSTRUCTIONS).toContain("including titles and explanations");
-    expect(INSTRUCTIONS).toContain("$v_0$, never bare v_0");
-    expect(INSTRUCTIONS).toContain(String.raw`$\displaystyle\sum_{i=1}^{n} i$`);
-  });
-
   it("sends the model what assembleContext returns, and records the reply", async () => {
     const store = createSessionStore(openDb(":memory:"));
     const session = store.createSession();

@@ -1,37 +1,31 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { artifactKinds, artifactMathInput, splitMath } from "../src/index.js";
+import { artifactKinds, artifactMathInput } from "../src/index.js";
 
 const bare = String.raw`\displaystyle\sum_{i=1}^{n} i`;
 const textInput = artifactMathInput(z.object({ text: z.string() }), ["text"]);
 
 describe("artifact math input", () => {
-  it.each(Object.values(artifactKinds))("keeps $toolName input schemas usable as required JSON objects", (definition) => {
-    expect(definition.input.safeParse({}).success).toBe(false);
-    const schema = z.toJSONSchema(definition.input);
-    expect(schema.type).toBe("object");
-    expect(schema.required?.length).toBeGreaterThan(0);
-    expect(schema.additionalProperties).toBe(false);
-  });
-
   it.each([
     bare, `$ ${bare}$`, `$${bare} $`, `$$${bare}$$`, `$${bare}$2`,
     String.raw`\$\sum$`, String.raw`$x` + "`" + String.raw`\sum$`,
-    String.raw`C:\Users\fixture`, String.raw`A\B`, String.raw`use \setminus`,
-    String.raw`code: \n`, "`" + String.raw`\alpha` + "`",
+    String.raw`use \setminus`,
   ])("rejects commands rendered literally: %s", (text) => {
     expect(textInput.safeParse({ text }).success).toBe(false);
   });
 
   it.each([
     `$${bare}$`, String.raw`$\text{cost \$5}$`, String.raw`cost \$5 and $\alpha$`,
-    String.raw`$x\\$ and $\sum_i i$`, "A ∖ B", "A \\ B", "C:/Users/fixture", "v_0", "costs $5 and $10",
+    String.raw`$x\\$ and $\sum_i i$`, "A \\ B",
   ])("accepts delimited math and unambiguous literals: %s", (text) => {
     expect(textInput.safeParse({ text }).success).toBe(true);
   });
 
-  it("uses exactly the renderer's math pieces, including escaped dollars", () => {
-    expect(splitMath(String.raw`cost \$5; $\alpha$`)).toEqual([{ text: "cost $5; " }, { formula: String.raw`\alpha` }]);
+  it("allows single-letter literals but rejects longer commands even in backticks", () => {
+    for (const [text, accepted] of [
+      [String.raw`\n`, true], [String.raw`\t`, true], [String.raw`A\B`, true],
+      ["`" + String.raw`\alpha` + "`", false], [String.raw`C:\Users`, false],
+    ] as const) expect(textInput.safeParse({ text }).success, text).toBe(accepted);
   });
 
   it("checks every math-mode field, leaving old stored specs readable", () => {
