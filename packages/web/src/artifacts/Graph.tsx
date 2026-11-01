@@ -1,15 +1,20 @@
 import { graphEdgeLookup, type GraphSpec, type GraphTone } from "@mivra/protocol";
 import { Check } from "lucide-react";
-import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { edgeText, LABEL_FONT_PX, layoutGraph } from "./graph-layout.js";
-import { ScrollableText, StepperControls, useStepper } from "./stepper.js";
+import { ScrollableText, SeenOnly, StepperControls, useStepper } from "./stepper.js";
 
 /** The smallest the graph is drawn, so labels stay at 11px or more. Past this it scrolls in its own box. */
 const MIN_SCALE = 11 / LABEL_FONT_PX;
+/** How much of a node's box its label leaves free, in px at natural size. A step's thicker border doesn't change it. */
+const NODE_LABEL_INSET = { x: 2, y: 4 };
+/** Rounding in the browser's measurements isn't a label being cut short. */
+const CLIP_TOLERANCE_PX = 0.5;
+const em = (px: number) => `${px / LABEL_FONT_PX}em`;
 
 // No amber here: that's for the brand. Each tone also differs by more than colour: active is thick, done has
 // a tick on nodes and a medium line on edges, and muted is dashed.
@@ -44,6 +49,33 @@ export function graphStateAt(spec: GraphSpec, index: number) {
   return { explanation: step?.explanation ?? "", nodes, edges, variables: step?.variables ?? [] };
 }
 
+/**
+ * Holds a label to the room the layout gave it, so that however wide it renders it can't reach its neighbours.
+ * Whether it was cut short only decides how it's shown, and never moves anything.
+ */
+function ClippedLabel({ labelKey, width, height, truncated, children }: { labelKey: string; width: number; height: number; truncated: boolean; children: ReactNode }) {
+  return (
+    <span
+      className="relative block overflow-hidden"
+      style={{ width: em(width), height: em(height) }}
+      data-label-clip={labelKey}
+      data-truncated={truncated ? "true" : undefined}
+    >
+      {/* Fades rather than covers the end, as what's behind depends on the step and the node's border is close by. */}
+      <span className={cn("grid size-full items-center", truncated ? "justify-items-start mask-r-from-[calc(100%-1.4em)] mask-r-to-[calc(100%-0.8em)]" : "justify-items-center")}>
+        <span className="w-max whitespace-nowrap" data-label-content>
+          {children}
+        </span>
+      </span>
+      {truncated && (
+        <span className="absolute inset-y-0 right-0 grid place-items-center" data-testid="graph-label-cut">
+          …
+        </span>
+      )}
+    </span>
+  );
+}
+
 export function Graph({ view }: ArtifactProps<"graph">) {
   const { spec } = view;
   const steps = spec.steps ?? [];
@@ -75,6 +107,37 @@ export function Graph({ view }: ArtifactProps<"graph">) {
     observer.observe(box);
     return () => observer.disconnect();
   }, [layout]);
+
+  // Everything scales together, so a label's fit only changes with the fonts; the rest is for rounding at a new size.
+  const canvas = useRef<HTMLDivElement>(null);
+  const [truncated, setTruncated] = useState<ReadonlySet<string>>(new Set());
+  useLayoutEffect(() => {
+    const measure = () => {
+      const cut = [...(canvas.current?.querySelectorAll<HTMLElement>("[data-label-clip]") ?? [])].filter((clip) => {
+        const room = clip.getBoundingClientRect();
+        const content = clip.querySelector("[data-label-content]")!;
+        // KaTeX's line box is taller than what it draws, which each strut is the height of.
+        const drawn = [...content.querySelectorAll(".katex-html .strut")].map((strut) => strut.getBoundingClientRect().height);
+        const height = drawn.length > 0 ? Math.max(...drawn) : content.getBoundingClientRect().height;
+        return content.getBoundingClientRect().width > room.width + CLIP_TOLERANCE_PX || height > room.height + CLIP_TOLERANCE_PX;
+      });
+      const keys = cut.map((clip) => clip.dataset.labelClip!);
+      setTruncated((before) => (before.size === keys.length && keys.every((key) => before.has(key)) ? before : new Set(keys)));
+    };
+    measure();
+    let current = true;
+    void document.fonts.ready.then(() => {
+      if (current) measure();
+    });
+    document.fonts.addEventListener?.("loadingdone", measure);
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(measure);
+    if (canvas.current) observer?.observe(canvas.current);
+    return () => {
+      current = false;
+      document.fonts.removeEventListener?.("loadingdone", measure);
+      observer?.disconnect();
+    };
+  }, [shape]);
 
   const onKeyDown = (e: KeyboardEvent) => {
     // In the drawing's scrolling box the arrow keys scroll it.
@@ -118,6 +181,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         >
           {/* Everything scales with this box: the SVG by its viewBox, the labels by container units. */}
           <div
+            ref={canvas}
             className="@container relative mx-auto w-full"
             style={{ maxWidth: layout.width, minWidth: layout.width * MIN_SCALE, aspectRatio: `${layout.width} / ${layout.height}` }}
             aria-hidden="true"
@@ -145,11 +209,13 @@ export function Graph({ view }: ArtifactProps<"graph">) {
                 return text === undefined ? null : (
                   <span
                     key={i}
-                    className={cn("bg-card absolute w-max -translate-x-1/2 -translate-y-1/2 rounded-sm px-[0.25em] py-[0.1em]", tone && EDGE_LABEL_TONES[tone])}
+                    className={cn("bg-card absolute -translate-x-1/2 -translate-y-1/2 rounded-sm [&_.katex]:text-[1.1em]!", tone && EDGE_LABEL_TONES[tone])}
                     style={{ left: percent(at.x, layout.width), top: percent(at.y, layout.height) }}
                     data-testid="graph-edge-label"
                   >
-                    {edge.weight !== undefined ? text : <MathText text={text} mode="math" />}
+                    <ClippedLabel labelKey={`e-${i}`} width={at.width} height={at.height} truncated={truncated.has(`e-${i}`)}>
+                      {edge.weight !== undefined ? text : <MathText text={text} mode="math" />}
+                    </ClippedLabel>
                   </span>
                 );
               })}
@@ -159,21 +225,22 @@ export function Graph({ view }: ArtifactProps<"graph">) {
                   <div
                     key={node.id}
                     className={cn(
-                      "absolute grid w-max -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border",
+                      "absolute grid -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border",
                       tone ? NODE_TONES[tone] : "border-muted-foreground bg-card",
                     )}
                     style={{
                       left: percent(node.x, layout.width),
                       top: percent(node.y, layout.height),
-                      minWidth: percent(node.width, layout.width),
-                      minHeight: percent(node.height, layout.height),
-                      padding: "0 0.4em",
+                      width: percent(node.width, layout.width),
+                      height: percent(node.height, layout.height),
                     }}
                     data-testid="graph-node"
                     data-node={node.id}
                     data-tone={tone}
                   >
-                    <MathText text={spec.nodes[i]!.label ?? node.id} mode="math" />
+                    <ClippedLabel labelKey={`n-${node.id}`} width={node.width - NODE_LABEL_INSET.x} height={node.height - NODE_LABEL_INSET.y} truncated={truncated.has(`n-${node.id}`)}>
+                      <MathText text={spec.nodes[i]!.label ?? node.id} mode="math" />
+                    </ClippedLabel>
                     {tone === "done" && (
                       <span className="bg-success text-card absolute -top-[0.35em] -right-[0.35em] grid size-[1.05em] place-items-center rounded-full">
                         <Check className="size-[0.8em]" strokeWidth={3.5} />
@@ -185,6 +252,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
             </div>
           </div>
         </div>
+        <CutShortLabels spec={spec} truncated={truncated} />
         {state.variables.length > 0 && (
           <dl className="flex flex-wrap gap-2" aria-hidden={hasSteps ? true : undefined}>
             {state.variables.map((v, i) => (
@@ -203,6 +271,36 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/** The whole of each label the drawing cut short. Screen readers already have them in the graph's description. */
+function CutShortLabels({ spec, truncated }: { spec: GraphSpec; truncated: ReadonlySet<string> }) {
+  if (truncated.size === 0) return null;
+  const arrow = spec.directed ? "→" : "–";
+  return (
+    <div className="flex flex-col gap-1 text-xs" data-testid="graph-overflow">
+      <p aria-hidden="true" className="text-muted-foreground">
+        … Cut short in the drawing:
+      </p>
+      {spec.nodes.map((node) =>
+        truncated.has(`n-${node.id}`) ? (
+          <SeenOnly key={node.id}>
+            <span className="font-medium">Node:</span> <NodeName spec={spec} id={node.id} />
+          </SeenOnly>
+        ) : null,
+      )}
+      {spec.edges.map((edge, i) =>
+        truncated.has(`e-${i}`) ? (
+          <SeenOnly key={i}>
+            <span className="font-medium">
+              Edge <NodeName spec={spec} id={edge.from} /> {arrow} <NodeName spec={spec} id={edge.to} />:
+            </span>{" "}
+            {edge.weight !== undefined ? edge.weight : <MathText text={edge.label!} mode="math" />}
+          </SeenOnly>
+        ) : null,
+      )}
+    </div>
   );
 }
 

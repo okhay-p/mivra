@@ -17,6 +17,25 @@ const edges = (...pairs: [string, string][]) => pairs.map(([from, to]) => ({ fro
 const base = { directed: false, nodes: nodes("a", "b", "c", "d"), edges: [] };
 
 describe("Graph", () => {
+  it("moves a long edge label off its edge only if nowhere along it is free, and never a weight", () => {
+    const wide = "x".repeat(24);
+    const between = (edge: object) => layoutGraph({ directed: false, nodes: [{ id: "a", label: wide }, { id: "b", label: wide }], edges: [{ from: "a", to: "b", ...edge }] });
+    const clear = (node: { x: number; y: number; width: number; height: number }, label: { x: number; y: number; width: number; height: number }) =>
+      Math.abs(node.x - label.x) >= (node.width + label.width) / 2 || Math.abs(node.y - label.y) >= (node.height + label.height) / 2;
+    const labelled = between({ label: wide });
+    expect(labelled.nodes.every((node) => clear(node, labelled.edges[0]!.label))).toBe(true);
+    expect(between({ label: wide }).edges[0]!.label).toEqual(labelled.edges[0]!.label);
+    const free = layoutGraph({ directed: false, nodes: nodes("a", "b"), edges: [{ from: "a", to: "b", label: "go" }] });
+    expect(free.edges[0]!.label.x).toBeCloseTo((free.nodes[0]!.x + free.nodes[1]!.x) / 2, 1);
+  });
+
+  it("gives wide characters the room they render at, and leaves other labels' sizes alone", () => {
+    const width = (label: string) => layoutGraph({ directed: false, nodes: [{ id: "a", label }], edges: [] }).nodes[0]!.width;
+    expect(width("图论中的")).toBe(4 * 13 + 18);
+    expect(width("abcd")).toBeCloseTo(4 * 7.8 + 18);
+    expect(width("$v_0$")).toBe(Math.max(30, 2 * 7.8 + 18));
+  });
+
   it("draws every node and edge, with arrowheads only when directed", () => {
     renderGraph();
     expect(screen.getAllByTestId("graph-node")).toHaveLength(3);

@@ -94,6 +94,15 @@ export function ScrollableText({ children, label = "Formula, scrolls sideways", 
   );
 }
 
+/** Text screen readers get elsewhere. If it's too wide it must still be reachable, so the box stays out of what's hidden. */
+export function SeenOnly({ children }: { children: ReactNode }) {
+  return (
+    <ScrollableText>
+      <span aria-hidden="true">{children}</span>
+    </ScrollableText>
+  );
+}
+
 /**
  * Prev, next and a step counter, or nothing for a single step or none. At either end a button is `aria-disabled`, not
  * `disabled`, because a disabled button drops the keyboard focus of someone who has just stepped to the end.

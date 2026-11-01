@@ -279,6 +279,35 @@ const graphBst = {
   edges: [["10", "5", "left", 5], ["10", "20", "right", 10], ["5", "6", "right", 1], ["6", "7", "right", 1], ["7", "8", "right", 1]].map(([from, to, side, weight]) => ({ from, to, side, weight })),
 };
 
+/** A sided tree with the longest labels the schema allows: same-level nodes and sibling edge labels are tightest here. */
+const wideTree = (title: string, label: (i: number) => string) => ({
+  title,
+  directed: true,
+  kind: "tree",
+  nodes: ["r", "a", "b", "c", "d", "e", "f"].map((id, i) => ({ id, label: label(i) })),
+  edges: [["r", "a", "left"], ["r", "b", "right"], ["a", "c", "left"], ["a", "d", "right"], ["b", "e", "left"], ["b", "f", "right"]].map(([from, to, side], i) => ({ from, to, side, label: label(i + 7) })),
+  steps: [{ explanation: "Start at the root.", nodeStates: [{ id: "r" }], edgeStates: [{ from: "r", to: "a" }] }, { explanation: "Then a child.", nodeStates: [{ id: "r", tone: "done" }, { id: "a" }] }],
+});
+const wideGeneral = (title: string, label: (i: number) => string) => ({
+  title,
+  directed: false,
+  nodes: ["a", "b", "c", "d"].map((id, i) => ({ id, label: label(i) })),
+  edges: [["a", "b"], ["b", "c"], ["c", "d"], ["d", "a"]].map(([from, to], i) => ({ from, to, label: label(i + 4) })),
+});
+// 24 characters each, but far wider than that estimates.
+const katexLabel = (i: number) => `$\\text{WWWWWWWWWWWWW${String.fromCharCode(65 + i)}W}$`;
+const cjkLabel = (i: number) => `${"图论中的最短路径问题".repeat(2)}算法标${i}`.slice(0, 24);
+// Taller than a node has room for, and one too wide even for a row of the list below the drawing.
+const graphTall = { title: "Tall labels", directed: false, nodes: [{ id: "a", label: "$\\dfrac{a^{b^c}}{d_e}$" }, { id: "b" }, { id: "c", label: "$\\Huge\\text{WWWWWWWWWW}$" }], edges: [{ from: "a", to: "b", label: "$\\dfrac{a^2}{b^2}$" }, { from: "b", to: "c" }] };
+// What a graph's labels normally look like. None of these may be cut short.
+const shortFormulas = ["$v_0$", "$v_{10}$", "$A$", "$MN$", "$x^2$", "$\\alpha$", "$\\emptyset$", "$\\{a,b\\}$", "$f(x)$", "$A \\cup B$", "$p \\land q$", "$\\sqrt{2}$", "$\\mathbb{N}$", "$2^n$", "$\\frac{a}{b}$", "start", "12", "图论"];
+const graphShort = {
+  title: "Everyday labels",
+  directed: true,
+  nodes: shortFormulas.map((label, i) => ({ id: `n${i}`, label })),
+  edges: ["$e_1$", "$w$", "$A$", "$x^2$", "$\\alpha$", "$a+b$", "go", "a", "yes", "$\\leq$", "$1/2$", "图", "x=1"].map((label, i) => ({ from: `n${i}`, to: `n${i + 1}`, label })),
+};
+
 // Long formulas in the title and an explanation, which arrow keys scroll while the card's arrow keys step.
 const wideTitle = `$${Array.from({ length: 18 }, (_, i) => `a_{${i}}`).join("")}$`;
 const graphWide = {
@@ -395,6 +424,12 @@ const SCRIPTS: Record<string, Step[]> = {
   widegraph: [{ tool: "show_graph", input: graphWide }, { text: "Scroll the long graph." }],
   wideset: [{ tool: "show_set_diagram", input: vennWide }, { text: "Scroll the long diagram." }],
   widetrace: [{ tool: "show_algorithm_trace", input: wideFormulaTrace }, { text: "Scroll the long trace." }],
+  graphcutkatex: [{ tool: "show_graph", input: wideTree("Wide formulas", katexLabel) }, { text: "Here are the wide formulas." }],
+  graphcutcjk: [{ tool: "show_graph", input: wideTree("Wide characters", cjkLabel) }, { text: "Here are the wide characters." }],
+  graphcutgeneral: [{ tool: "show_graph", input: wideGeneral("Wide formulas, no tree", katexLabel) }, { text: "Here's the wide graph." }],
+  graphcutcjkgeneral: [{ tool: "show_graph", input: wideGeneral("Wide characters, no tree", cjkLabel) }, { text: "Here's the other wide graph." }],
+  graphcuttall: [{ tool: "show_graph", input: graphTall }, { text: "Here are the tall labels." }],
+  graphshort: [{ tool: "show_graph", input: graphShort }, { text: "Here are the everyday labels." }],
   graphbst: [{ tool: "show_graph", input: graphBst }, { text: "Here's the BST." }],
   graphskew: [{ tool: "show_graph", input: graphSkew }, { text: "Here's the skewed tree." }],
   graphtree: [{ tool: "show_graph", input: graphTree }, { text: "Here's the tree." }],

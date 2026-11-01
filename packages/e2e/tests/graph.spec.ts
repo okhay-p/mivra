@@ -27,6 +27,24 @@ const centres = (page: Page) =>
     });
   });
 
+/** Every pair of labels whose boxes touch, naming them. Anything wider than its box is checked to be clipped to it. */
+const labelClashes = (page: Page) =>
+  page.getByTestId("graph-canvas").evaluate((canvas) => {
+    const boxes = [...canvas.querySelectorAll<HTMLElement>('[data-testid="graph-node"], [data-testid="graph-edge-label"]')].map((label, i) => {
+      const clip = label.querySelector<HTMLElement>("[data-label-clip]")!;
+      return { name: clip.dataset.labelClip ?? String(i), box: label.getBoundingClientRect(), clipped: getComputedStyle(clip).overflow === "hidden" };
+    });
+    const clashes: string[] = [];
+    for (const [i, a] of boxes.entries()) {
+      if (!a.clipped) clashes.push(`${a.name} isn't clipped`);
+      for (const b of boxes.slice(i + 1)) {
+        if (a.box.left < b.box.right && b.box.left < a.box.right && a.box.top < b.box.bottom && b.box.top < a.box.bottom) clashes.push(`${a.name} and ${b.name}`);
+      }
+    }
+    return clashes;
+  });
+const fontsLoaded = (page: Page) => page.evaluate(async () => void (await document.fonts.ready));
+
 test.describe("graph", () => {
   test("renders every node and edge, and stepping changes state without moving anything", async ({ page }) => {
     const graph = await showGraph(page, "graphweighted");
@@ -151,4 +169,70 @@ test.describe("graph", () => {
     await expect(box).not.toHaveAttribute("aria-hidden");
     await expect(graph.getByTestId("graph-canvas")).toHaveAttribute("aria-hidden", "true");
   });
+
+  for (const width of [1100, 320]) {
+    for (const script of ["graphcutkatex", "graphcutcjk", "graphcutgeneral", "graphcutcjkgeneral", "graphcuttall"]) {
+      test(`${script}: no labels overlap at ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        await showGraph(page, script);
+        await fontsLoaded(page);
+        expect(await labelClashes(page)).toEqual([]);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      });
+    }
+
+    test(`labels cut short are marked, and listed in full, at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      const graph = await showGraph(page, "graphcutkatex");
+      await fontsLoaded(page);
+      const list = graph.getByTestId("graph-overflow");
+      await expect(list).toBeVisible();
+      await expect(graph.getByTestId("graph-canvas").getByTestId("graph-label-cut")).toHaveCount(13);
+      // One row per label, and each says which: an edge by what it joins, as KaTeX's text is doubled in its MathML.
+      await expect(list.getByTestId("step-scroll")).toHaveCount(13);
+      await expect(list.getByText("Edge", { exact: false })).toHaveCount(6);
+      await expect(list.getByTestId("step-scroll").first().locator(".katex-html")).toContainText("WWWWWWWWWWWWWAW");
+      // It isn't read twice: only what can't be hidden, a scrolling box's name, is left for screen readers.
+      expect(await list.locator('[data-testid="step-scroll"] > span[aria-hidden="true"]').count()).toBe(13);
+
+      const before = await centres(page);
+      await graph.getByRole("button", { name: "Next" }).click();
+      await expect(graph.locator('[data-node="a"]')).toHaveAttribute("data-tone", "active");
+      expect(await centres(page)).toEqual(before);
+      await expect(list.getByTestId("step-scroll")).toHaveCount(13);
+      expect(await labelClashes(page)).toEqual([]);
+    });
+  }
+
+  test("a label's whole text can be reached by keyboard when it's too wide for its row", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    const graph = await showGraph(page, "graphcuttall");
+    await fontsLoaded(page);
+    const row = graph.getByTestId("graph-overflow").getByRole("group").first();
+    await expect(row).toHaveAttribute("tabindex", "0");
+    await expect(row).toContainText("WWWWWWWWWW");
+    await row.focus();
+    const left = () => row.evaluate((e) => e.scrollLeft);
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(left).toBeGreaterThan(0);
+  });
+
+  test("a label taller than its node is cut short too", async ({ page }) => {
+    const graph = await showGraph(page, "graphcuttall");
+    await fontsLoaded(page);
+    await expect(graph.locator('[data-node="a"] [data-truncated]')).toBeVisible();
+    await expect(graph.locator('[data-node="b"] [data-truncated]')).toHaveCount(0);
+  });
+
+  for (const width of [1100, 320]) {
+    test(`everyday labels and formulas aren't cut short at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      const graph = await showGraph(page, "graphshort");
+      await fontsLoaded(page);
+      await expect(graph.getByTestId("graph-node")).toHaveCount(18);
+      await page.waitForTimeout(200);
+      expect(await graph.locator("[data-truncated]").evaluateAll((all) => all.map((e) => `${e.getAttribute("data-label-clip")}: ${e.textContent}`))).toEqual([]);
+      await expect(graph.getByTestId("graph-overflow")).toHaveCount(0);
+    });
+  }
 });

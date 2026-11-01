@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { FRAME_INSET, ROW_HEIGHT, VENN_LAYOUTS, chooseRegionFit, regionMasks, regionPath, slotBox, type RegionFit, type RegionSlot, type Size, type VennLayout } from "./set-diagram-geometry.js";
-import { ScrollableText, StepperControls, useStepper } from "./stepper.js";
+import { ScrollableText, SeenOnly, StepperControls, useStepper } from "./stepper.js";
 
 type Tone = NonNullable<SetDiagramHighlight["tone"]>;
 type Region = SetDiagramSpec["regions"][number];
@@ -41,15 +41,6 @@ const elementText = (element: Region["elements"][number]) => String(element);
 
 function Inline({ text }: { text: string }) {
   return <MathText text={text} mode="math" />;
-}
-
-/** Text screen readers get elsewhere. If it's too wide it must still be reachable, so the box stays out of what's hidden. */
-function SeenOnly({ children }: { children: ReactNode }) {
-  return (
-    <ScrollableText>
-      <span aria-hidden="true">{children}</span>
-    </ScrollableText>
-  );
 }
 
 function Elements({ elements }: { elements: Region["elements"] }) {

@@ -5,6 +5,8 @@ import { hierarchy, tree } from "d3-hierarchy";
 /** The size labels are drawn at when the graph is at its natural size. Boxes below are measured against it. */
 export const LABEL_FONT_PX = 13;
 const CHAR_WIDTH = LABEL_FONT_PX * 0.6; // Node and edge labels are monospaced.
+/** These take a full em even in a monospaced font, as they fall back to a font with square glyphs. */
+const WIDE_CHARS = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\u3000-\u303F\uFF01-\uFF60]/gu;
 const NODE_HEIGHT = 30;
 const NODE_PADDING = 18;
 const LEVEL_GAP = 72;
@@ -25,6 +27,8 @@ const EDGE_LABEL_HEIGHT = 18;
 const EDGE_LABEL_GAP = 4;
 /** Where along its edge a label may sit, in order of preference. */
 const LABEL_SPOTS = [0.5, 0.4, 0.6, 0.3, 0.7, 0.22, 0.78];
+/** How many label-sized steps away from its edge a label may go, if nowhere along it is free. */
+const LABEL_STEPS_ASIDE = 6;
 const TICKS = 150;
 
 interface Point {
@@ -44,7 +48,8 @@ export interface LaidOutEdge {
   path: string;
   /** SVG polygon points for the arrowhead, on directed graphs. */
   arrow?: string;
-  label: Point;
+  /** Where its label goes and the room it has. The label is clipped to this, so the layout can rely on it. */
+  label: Box;
 }
 export interface GraphLayout {
   mode: "tree" | "general";
@@ -58,10 +63,10 @@ export interface GraphLayout {
 type LayoutInput = Pick<GraphSpec, "directed" | "kind" | "nodes" | "edges">;
 type GraphShape = NonNullable<ReturnType<typeof graphTreeShape>>;
 
-/** A label's source, roughly as wide as it renders: maths is shorter than the LaTeX that writes it. */
+/** A label's source, roughly as wide as it renders: maths is shorter than the LaTeX that writes it. A label that turns out wider is clipped. */
 function labelWidth(text: string) {
   const visible = text.includes("$") ? text.replace(/\\[a-zA-Z]+/g, "x").replace(/[$_^{}\\]/g, "") : text;
-  return visible.length * CHAR_WIDTH;
+  return visible.length * CHAR_WIDTH + (visible.match(WIDE_CHARS)?.length ?? 0) * (LABEL_FONT_PX - CHAR_WIDTH);
 }
 
 export const edgeText = (edge: GraphSpec["edges"][number]) => (edge.weight !== undefined ? String(edge.weight) : edge.label);
@@ -275,7 +280,14 @@ export function layoutGraph(spec: LayoutInput): GraphLayout {
     const spots = LABEL_SPOTS.map((t) => ({ ...edge.curve(t), ...size }));
     if (!text) return spots[0]!;
     const clashes = spots.map((spot) => taken.filter((box) => overlaps(box, spot)).length);
-    const best = spots[clashes.indexOf(Math.min(...clashes))]!;
+    const along = spots[clashes.indexOf(Math.min(...clashes))]!;
+    // Between two wide nodes nowhere on the edge may be free, so it sits beside it, nearest first. Not a weight:
+    // those are short, and in a graph dense enough to leave them no room this would only spread it further.
+    const aside = Array.from({ length: LABEL_STEPS_ASIDE }, (_, step) => step + 1).flatMap((step) => {
+      const [dy, dx] = [step * (size.height + EDGE_LABEL_GAP), step * (size.width + EDGE_LABEL_GAP)];
+      return [{ ...spots[0]!, y: spots[0]!.y - dy }, { ...spots[0]!, y: spots[0]!.y + dy }, { ...spots[0]!, x: spots[0]!.x - dx }, { ...spots[0]!, x: spots[0]!.x + dx }];
+    });
+    const best = Math.min(...clashes) === 0 || spec.edges[i]!.weight !== undefined ? along : (aside.find((spot) => !taken.some((box) => overlaps(box, spot))) ?? along);
     taken.push(best);
     return best;
   });
@@ -300,7 +312,7 @@ export function layoutGraph(spec: LayoutInput): GraphLayout {
     edges: drawn.map((edge, i) => ({
       path: `M${pointsText(edge.points, shift).join("L")}`,
       ...(edge.arrow ? { arrow: pointsText(edge.arrow, shift).join(" ") } : {}),
-      label: { x: fixed(labels[i]!.x + shift.x), y: fixed(labels[i]!.y + shift.y) },
+      label: { x: fixed(labels[i]!.x + shift.x), y: fixed(labels[i]!.y + shift.y), width: labels[i]!.width, height: labels[i]!.height },
     })),
   };
 }
