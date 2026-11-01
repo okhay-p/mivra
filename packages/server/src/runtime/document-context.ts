@@ -67,33 +67,101 @@ function pageNumbers(list: string): number[] {
   return [...new Set(numbers)];
 }
 
-/** Lowercase words, spaced so that `includes` only matches whole ones. */
-const spacedWords = (text: string) => ` ${(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ")} `;
-const nameWords = (document: DocumentRow) => spacedWords(document.filename.replace(/\.[^.]+$/, ""));
+/** Stands where a name was, so the words either side can't join up into another document's name. */
+const NAME_MASK = "￼";
+const WORD = "\\p{L}\\p{N}";
+/** A whole name: "Notes.pdf" isn't in "My-Notes.pdf" or "Notes.pdf.txt", and "Notes" isn't in "Notes.docx". */
+const nameRegExp = (pattern: string) => new RegExp(`(?<![${WORD}_-])(?:${pattern})(?![${WORD}_-]|\\.[${WORD}])`, "giu");
+const longestFirst = (patterns: Iterable<string>) => [...patterns].sort((a, b) => b.length - a.length);
+
+const withoutExtension = (filename: string) => filename.replace(/\.[^.]+$/, "");
+const wordsOf = (text: string) => text.match(/[\p{L}\p{N}]+/gu) ?? [];
+const wordsPattern = (words: string[]) => words.join(`[^${WORD}${NAME_MASK}]+`);
+/** A lone letter such as "a" is too likely a word to name anything, unless it's written with its extension. */
+const couldBeWord = (document: DocumentRow) => wordsOf(withoutExtension(document.filename)).join("").length < 2;
+
+/** The filename exactly as it's written, whatever its case or the amount of space in it. */
+function literalPattern(filename: string): string | undefined {
+  const name = filename.normalize("NFC").trim();
+  if (withoutExtension(name) === name || !withoutExtension(name).trim()) return undefined;
+  return name.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&").replace(/\s+/g, "\\s+");
+}
+
+/** Every document for each pattern from `patternOf`: two uploads can share a name. */
+function formsOf(documents: DocumentRow[], patternOf: (document: DocumentRow) => string | undefined) {
+  const forms = new Map<string, DocumentRow[]>();
+  for (const document of documents) {
+    const pattern = patternOf(document);
+    if (pattern) forms.set(pattern, [...(forms.get(pattern) ?? []), document]);
+  }
+  return forms;
+}
+
+/** Masks each form where it appears, longest first so "Notes 2.pdf" isn't read as "2.pdf", and collects whose it was. */
+function maskForms(text: string, forms: Map<string, DocumentRow[]>, named: Set<DocumentRow>) {
+  let rest = text;
+  for (const pattern of longestFirst(forms.keys())) {
+    rest = rest.replace(nameRegExp(pattern), () => {
+      for (const document of forms.get(pattern)!) named.add(document);
+      return NAME_MASK;
+    });
+  }
+  return rest;
+}
+
+/** Between a page reference and the name it's about: "page 3 of my Notes", and "Notes, page 3" or "Notes's page 3". */
+const REFERENCE_THEN_NAME = /^\s+(?:of|in|from)\s+(?:(?:the|my|our)\s+)?$/i;
+const NAME_THEN_REFERENCE = /^(?:['’]s)?[\s,:;–—-]*$/;
+const NAMES_JOINED = /^\s*(?:,\s*and|,|&|and)\s*$/i;
 
 /**
- * The documents a message names, and the message's words without those names. Longest name first, so "Notes 2"
- * names only that, not also "Notes", yet "Notes and Notes 2" names both.
- *
- * Outside a page request a name needs its extension: "Notes.pdf" or "notes pdf" is a name, but "notes" could be
- * an ordinary word, and scoping on it would hide every other document. "page 2 of Notes" has a page to look for
- * in something, so `bareNames` lets a name go without. A lone letter such as "a" is never a name, too likely a word.
+ * Masks the names written without an extension that a page reference is plainly about, so "page 3 of Notes" and
+ * "Notes page 3" name Notes.pdf but "take notes on page 3" doesn't. A name joined on to one of those counts too,
+ * as in "page 3 of Notes and Logic" or "Logic and Notes.pdf, page 3".
  */
-function namedDocuments(documents: DocumentRow[], text: string, bareNames: boolean): { named: DocumentRow[]; rest: string } {
-  const forms = new Map<string, DocumentRow[]>();
-  for (const document of documents.filter((d) => nameWords(d).length > 3)) {
-    const bare = nameWords(document);
-    const full = spacedWords(document.filename);
-    for (const form of new Set([...(full !== bare ? [full] : []), ...(bareNames ? [bare] : [])])) forms.set(form, [...(forms.get(form) ?? []), document]);
+function maskBoundNames(documents: DocumentRow[], text: string, named: Set<DocumentRow>) {
+  const references = [...text.matchAll(PAGE_REFERENCE)].map((m) => ({ start: m.index, end: m.index + m[0].length }));
+  const bareForms = new Map<string, DocumentRow[]>();
+  for (const document of documents.filter((d) => !couldBeWord(d))) {
+    const form = wordsOf(withoutExtension(document.filename.normalize("NFC"))).join(" ").toLowerCase();
+    bareForms.set(form, [...(bareForms.get(form) ?? []), document]);
   }
+  if (references.length === 0 || bareForms.size === 0) return text;
+
+  const bare = longestFirst(bareForms.keys()).map((form) => wordsPattern(form.split(" "))).join("|");
+  // What's already masked isn't new, but "Notes.pdf, page 3" can still pass the reference on to a name beside it.
+  const items = [...text.matchAll(new RegExp(`${NAME_MASK}|${nameRegExp(bare).source}`, "giu"))].map((m) => {
+    const [start, end] = [m.index, m.index + m[0].length];
+    const bound = references.some((r) => (r.end <= start && REFERENCE_THEN_NAME.test(text.slice(r.end, start))) || (end <= r.start && NAME_THEN_REFERENCE.test(text.slice(end, r.start))));
+    return { start, end, bound, documents: bareForms.get(wordsOf(m[0]).join(" ").toLowerCase()) ?? [] };
+  });
+  const joined = (a: (typeof items)[number], b: (typeof items)[number]) => NAMES_JOINED.test(text.slice(a.end, b.start));
+  for (let i = 1; i < items.length; i++) items[i]!.bound ||= items[i - 1]!.bound && joined(items[i - 1]!, items[i]!);
+  for (let i = items.length - 2; i >= 0; i--) items[i]!.bound ||= items[i + 1]!.bound && joined(items[i]!, items[i + 1]!);
+
+  let rest = text;
+  for (const item of items.toReversed()) {
+    if (!item.bound) continue;
+    for (const document of item.documents) named.add(document);
+    rest = `${rest.slice(0, item.start)}${NAME_MASK}${rest.slice(item.end)}`;
+  }
+  return rest;
+}
+
+/**
+ * The documents a message names, and the message with those names masked, so that nothing in a name is read as a
+ * page reference or searched for: "Slides 3.pdf" is a file and not slide 3. From surest to least:
+ *
+ * 1. The full filename as written, even "B.pdf".
+ * 2. Its words without the dot, "notes pdf", unless the name is a lone letter: "a pdf" is ordinary English.
+ * 3. Its name without the extension, only where a page reference is plainly about it, as "notes" could be a word
+ *    and scoping on it would hide every other document.
+ */
+function namedDocuments(documents: DocumentRow[], text: string): { named: DocumentRow[]; rest: string } {
   const named = new Set<DocumentRow>();
-  let rest = spacedWords(text);
-  for (const form of [...forms.keys()].sort((a, b) => b.length - a.length)) {
-    if (!rest.includes(form)) continue;
-    // Not a plain space, which could join the words either side into another document's name.
-    rest = rest.replaceAll(form, " / ");
-    for (const document of forms.get(form)!) named.add(document);
-  }
+  const literal = maskForms(text.normalize("NFC"), formsOf(documents, (d) => literalPattern(d.filename)), named);
+  const spelled = maskForms(literal, formsOf(documents, (d) => (couldBeWord(d) || !literalPattern(d.filename) ? undefined : wordsPattern(wordsOf(d.filename.normalize("NFC"))))), named);
+  const rest = maskBoundNames(documents, spelled, named);
   return { named: documents.filter((d) => named.has(d)), rest };
 }
 
@@ -107,10 +175,10 @@ type DocumentRequest = {
 };
 
 function documentRequest(documents: DocumentRow[], text: string): DocumentRequest {
-  const references = [...text.matchAll(PAGE_REFERENCE)];
+  const { named, rest } = namedDocuments(documents, text);
+  const references = [...rest.matchAll(PAGE_REFERENCE)];
   const asksForPages = references.length > 0;
-  const { named } = namedDocuments(documents, text, asksForPages);
-  const { rest: searchText } = namedDocuments(documents, text.replace(PAGE_REFERENCE, " "), asksForPages);
+  const searchText = rest.replace(PAGE_REFERENCE, " ").replaceAll(NAME_MASK, " ");
   if (!asksForPages) return { named, searchText };
   const scope = named.length > 0 ? named : documents;
   const wanted = new Map<DocumentRow, number[]>();

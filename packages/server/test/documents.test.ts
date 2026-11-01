@@ -815,6 +815,58 @@ describe("naming a document", () => {
     expect(await toldFor(id, "take notes")).toContain("Below is the start of each document, because");
   });
 
+  it("takes a full filename over anything else's text, even with a one-letter name", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf([["The real contents of the file itself."]]), "B.pdf");
+    await upload(id, makePdf([["This one keeps saying B pdf, B pdf and B.pdf to be picked."]]), "Other.pdf");
+    expect(documentsIn(await toldFor(id, "Summarize B.pdf"))).toEqual(["B.pdf"]);
+    expect(documentsIn(await toldFor(id, "summarize b.PDF please"))).toEqual(["B.pdf"]);
+    // Without the dot it could be English, so it's searched for like anything else.
+    expect(documentsIn(await toldFor(id, "Summarize b pdf"))).toEqual(["Other.pdf"]);
+    expect(documentsIn(await toldFor(id, "Summarize My-B.pdf"))).toEqual(["Other.pdf"]);
+  });
+
+  it("doesn't read a page reference out of a filename", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf([["Alpha on the first page."], ["Bravo on the second page."], ["Charlie on the third page."]]), "Slides 3.pdf");
+    await upload(id, makePdf([["Delta elsewhere."], ["Echo elsewhere."], ["Foxtrot elsewhere."]]), "Other.pdf");
+    const whole = await toldFor(id, "Summarize Slides 3.pdf");
+    expect(block(whole, "requested_pages")).toBeUndefined();
+    expect(places(whole)).toEqual(["Slides 3.pdf:1", "Slides 3.pdf:2", "Slides 3.pdf:3"]);
+    const spelled = await toldFor(id, "summarize slides 3 pdf");
+    expect(block(spelled, "requested_pages")).toBeUndefined();
+    expect(documentsIn(spelled)).toEqual(["Slides 3.pdf"]);
+
+    const second = await toldFor(id, "page 2 of Slides 3.pdf");
+    expect(places(second)).toEqual(["Slides 3.pdf:2"]);
+    expect(requestedPages(second)).toEqual([expect.objectContaining({ document: "Slides 3.pdf", included: [2] })]);
+    const bare = await toldFor(id, "page 2 of Slides 3");
+    expect(places(bare)).toEqual(["Slides 3.pdf:2"]);
+    expect(requestedPages(bare)).toEqual([expect.objectContaining({ document: "Slides 3.pdf", included: [2] })]);
+  });
+
+  it("needs a page reference to be about a name written without its extension", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf([["Notes one."], ["Notes two."], ["Notes three."]]), "Notes.pdf");
+    await upload(id, makePdf([["Other one."], ["Other two."], ["Other three."]]), "Other.pdf");
+    await upload(id, makePdf([["Logic one."], ["Logic two."], ["Logic three."]]), "Logic.pdf");
+    const documentsAsked = async (message: string) => requestedPages(await toldFor(id, message)).map((row) => row.document);
+    const all = ["Notes.pdf", "Other.pdf", "Logic.pdf"];
+    expect(await documentsAsked("Take notes on page 3")).toEqual(all);
+    expect(await documentsAsked("some notes, then the logic on page 3")).toEqual(all);
+    for (const message of ["page 3 of Notes", "Read page 3 in my Notes", "Notes page 3", "Notes, p. 3", "pages 2 and 3 from the notes"]) {
+      expect(await documentsAsked(message)).toEqual(["Notes.pdf"]);
+    }
+    expect(await documentsAsked("page 3 of Notes and Logic")).toEqual(["Notes.pdf", "Logic.pdf"]);
+    expect(await documentsAsked("Logic and Notes.pdf, page 3")).toEqual(["Notes.pdf", "Logic.pdf"]);
+    // The words either side of a name that's gone don't make another.
+    await upload(id, makePdf([["Joined one."]]), "Old Other.pdf");
+    expect(await documentsAsked("Old Notes.pdf Other pdf, page 1")).not.toContain("Old Other.pdf");
+  });
+
   it("only knows this session's documents, and stays within the budget", async () => {
     const { newSession, upload, toldFor } = setup();
     const other = await newSession();
