@@ -1,6 +1,6 @@
 # Mivra
 
-An open-source, local-first AI agent harness for learning. Design docs and decisions live in the [Mivra Project HQ](https://app.notion.com/p/408fb102b9b68185823dc5c90dc17f7f) Notion space.
+An open-source, local-first AI agent harness for learning. Decisions live in [`docs/adr/`](docs/adr/README.md); longer design docs and the backlog live in the [Mivra Project HQ](https://app.notion.com/p/408fb102b9b68185823dc5c90dc17f7f) Notion space.
 
 ## Layout
 
