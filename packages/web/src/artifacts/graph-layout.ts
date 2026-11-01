@@ -163,6 +163,30 @@ function forcePositions(spec: LayoutInput, sizes: Map<string, Box>) {
   for (const { from, to } of spec.edges) {
     if (from !== to) pairs.set(JSON.stringify([from, to].sort()), { source: from, target: to });
   }
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const edgePairs = [...pairs.values()].map(({ source, target }) => [byId.get(source)!, byId.get(target)!] as const);
+  const repelEdges = () => {
+    for (const [a, b] of edgePairs) {
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      for (const node of nodes) {
+        if (node === a || node === b) continue;
+        const t = Math.max(0, Math.min(1, ((node.x - a.x) * dx + (node.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+        const px = node.x - a.x - t * dx;
+        const py = node.y - a.y - t * dy;
+        const distance = Math.hypot(px, py);
+        const push = Math.max(0, node.radius + 12 - distance) * 0.5;
+        const ux = distance > 0.001 ? px / distance : -dy / (Math.hypot(dx, dy) || 1);
+        const uy = distance > 0.001 ? py / distance : dx / (Math.hypot(dx, dy) || 1);
+        node.vx += ux * push;
+        node.vy += uy * push;
+        a.vx -= ux * push * (1 - t);
+        a.vy -= uy * push * (1 - t);
+        b.vx -= ux * push * t;
+        b.vy -= uy * push * t;
+      }
+    }
+  };
   const link = forceLink<SimNode, { source: string; target: string }>([...pairs.values()])
     .id((node) => node.id)
     .distance((edge) => LINK_DISTANCE + (edge.source as unknown as SimNode).radius + (edge.target as unknown as SimNode).radius);
@@ -171,10 +195,74 @@ function forcePositions(spec: LayoutInput, sizes: Map<string, Box>) {
     .alphaDecay(1 - 0.001 ** (1 / TICKS))
     .force("link", link)
     .force("repel", repelPairs(nodes))
+    .force("edgeClearance", repelEdges)
     .force("x", forceX().strength(0.05))
     .force("y", forceY().strength(0.05))
     .tick(TICKS);
   for (const node of nodes) Object.assign(sizes.get(node.id)!, { x: node.x, y: node.y });
+}
+
+/** Closest distance to a centre-to-centre segment, including its endpoints. */
+function segmentDistance(p: Point, a: Point, b: Point) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy || 1)));
+  return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+}
+
+/**
+ * Keep the force/tidy shape when it has room. Near-collinear force layouts fall back to a convex polygon:
+ * no chord can contain a third vertex. Scaling then gives every node a circumscribed radius plus 6px,
+ * reserving the entire bend/loop envelope too. Dense graphs may cross edges and need a scrolling canvas;
+ * clearance takes priority over compactness, with no random retries or unbounded relaxation loop.
+ */
+function clearEdgePositions(spec: LayoutInput, boxes: Map<string, Box>, isTree: boolean) {
+  const pairs = new Map<string, number>();
+  const key = (from: string, to: string) => JSON.stringify([from, to].sort());
+  for (const edge of spec.edges) pairs.set(key(edge.from, edge.to), (pairs.get(key(edge.from, edge.to)) ?? 0) + 1);
+  const requiredScale = () => {
+    let scale = 1;
+    for (const edge of spec.edges) {
+      const source = boxes.get(edge.from)!;
+      const target = boxes.get(edge.to)!;
+      const count = pairs.get(key(edge.from, edge.to))!;
+      for (const [id, node] of boxes) {
+        if (id === edge.from || id === edge.to) continue;
+        const distance = edge.from === edge.to ? Math.hypot(node.x - source.x, node.y - source.y) : segmentDistance(node, source, target);
+        const envelope = (edge.from === edge.to ? source.width / 2 + LOOP_SIZE + (count - 1) * LOOP_STACK : (count - 1) * PARALLEL_GAP / 2) + (spec.directed ? ARROW_HALF_WIDTH : 0);
+        scale = Math.max(scale, (node.width / 2 + 6.1 + envelope) / Math.max(distance, 0.0001));
+      }
+    }
+    return scale;
+  };
+  let scale = requiredScale();
+  if (!isTree && scale > 3) {
+    const radius = Math.max(80, ...[...boxes.values()].map((box) => box.width)) * boxes.size / Math.PI;
+    spec.nodes.forEach(({ id }, i) => {
+      const angle = 2 * Math.PI * i / boxes.size - Math.PI / 2;
+      Object.assign(boxes.get(id)!, { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius });
+    });
+    scale = requiredScale();
+  }
+  if (scale > 1) for (const box of boxes.values()) { box.x *= scale; box.y *= scale; }
+  // Clearance can stretch a small graph horizontally. Rotate general layouts towards their narrowest
+  // axis so they can still fit a phone; rotation preserves all the circular clearance bounds above.
+  if (!isTree && scale > 1) {
+    const all = [...boxes.values()];
+    let best = Infinity;
+    let angle = 0;
+    for (let step = 0; step < 36; step++) {
+      const candidate = step * Math.PI / 36;
+      const xs = all.map((box) => box.x * Math.cos(candidate) - box.y * Math.sin(candidate));
+      const width = Math.max(...xs.map((x, i) => x + all[i]!.width / 2)) - Math.min(...xs.map((x, i) => x - all[i]!.width / 2));
+      if (width < best - 0.01) { best = width; angle = candidate; }
+    }
+    for (const box of all) {
+      const { x, y } = box;
+      box.x = x * Math.cos(angle) - y * Math.sin(angle);
+      box.y = x * Math.sin(angle) + y * Math.cos(angle);
+    }
+  }
 }
 
 /** Whether a point is inside a node's pill: a rectangle whose short sides are semicircles. */
@@ -246,6 +334,7 @@ export function layoutGraph(spec: LayoutInput): GraphLayout {
   if (!shape) forcePositions(spec, boxes);
   else if (spec.edges.some((edge) => edge.side)) inorderPositions(spec, boxes, shape);
   else tidyPositions(boxes, shape);
+  clearEdgePositions(spec, boxes, !!shape);
 
   const all = [...boxes.values()];
   const centre = { x: all.reduce((sum, b) => sum + b.x, 0) / all.length, y: all.reduce((sum, b) => sum + b.y, 0) / all.length };

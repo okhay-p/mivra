@@ -193,6 +193,37 @@ describe("Graph", () => {
 });
 
 describe("layoutGraph", () => {
+  it("keeps Dijkstra edges clear of unrelated vertices", () => {
+    const spec = { directed: true, nodes: Array.from({ length: 5 }, (_, i) => ({ id: `v${i}`, label: `$v_${i}$` })), edges: edges(["v0", "v1"], ["v0", "v2"], ["v0", "v3"], ["v1", "v2"], ["v1", "v3"], ["v2", "v3"], ["v3", "v4"]) };
+    expectClearEdges(spec);
+  });
+
+  it("keeps edges clear across small graphs, including dense graphs and trees", () => {
+    for (let count = 3; count <= 9; count++) {
+      for (let seed = 0; seed < 12; seed++) {
+        const ids = Array.from({ length: count }, (_, i) => String(i));
+        const pairs = ids.flatMap((from, i) => ids.slice(i + 1).filter((_, j) => (i * 13 + j * 7 + seed * 11) % 5 <= seed % 5).map((to) => ({ from, to })));
+        expectClearEdges({ directed: seed % 2 === 0, nodes: nodes(...ids), edges: pairs });
+      }
+      const ids = Array.from({ length: count }, (_, i) => String(i));
+      expectClearEdges({ directed: true, kind: "tree", nodes: nodes(...ids), edges: ids.slice(1).map((to, i) => ({ from: ids[Math.floor(i / 2)]!, to })) });
+    }
+  });
+
+  it("keeps a small weighted graph narrow enough for the phone canvas", () => {
+    const spec = {
+      directed: true,
+      nodes: ["a", "b", "c", "d", "e"].map((id, i) => ({ id, label: i === 4 ? "goal" : `$v_${i}$` })),
+      edges: edges(["a", "b"], ["a", "c"], ["c", "b"], ["b", "c"], ["b", "d"], ["c", "d"], ["d", "e"]),
+    };
+    expect(layoutGraph(spec).width).toBeLessThanOrEqual(270);
+    expectClearEdges(spec);
+  });
+
+  it("reserves clearance for loops and parallel edges too", () => {
+    expectClearEdges({ directed: true, nodes: nodes("a", "b", "c", "d", "e"), edges: edges(["a", "a"], ["a", "a"], ["a", "b"], ["b", "a"], ["a", "b"], ["a", "c"], ["b", "d"], ["c", "e"], ["d", "e"]) });
+  });
+
   const dense: GraphSpec = {
     title: "Limit",
     directed: true,
@@ -419,3 +450,20 @@ describe("layoutGraph", () => {
     expect(layout.edges[0]!.path).not.toContain("NaN");
   });
 });
+
+function expectClearEdges(spec: Parameters<typeof layoutGraph>[0]) {
+  const layout = layoutGraph(spec);
+  expect(layoutGraph(structuredClone(spec))).toEqual(layout);
+  layout.edges.forEach((edge, i) => {
+    const points = edge.path.slice(1).split("L").map((p) => p.split(",").map(Number));
+    for (const node of layout.nodes) {
+      if ([spec.edges[i]!.from, spec.edges[i]!.to].includes(node.id)) continue;
+      for (let j = 1; j < points.length; j++) {
+        const [a, b] = [points[j - 1]!, points[j]!];
+        const [dx, dy] = [b[0]! - a[0]!, b[1]! - a[1]!];
+        const t = Math.max(0, Math.min(1, ((node.x - a[0]!) * dx + (node.y - a[1]!) * dy) / (dx * dx + dy * dy || 1)));
+        expect(Math.hypot(node.x - a[0]! - t * dx, node.y - a[1]! - t * dy), `edge ${i} near ${node.id}`).toBeGreaterThanOrEqual(node.width / 2 + 5.9);
+      }
+    }
+  });
+}

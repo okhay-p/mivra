@@ -287,3 +287,29 @@ test.describe("graph", () => {
     });
   }
 });
+
+test("Dijkstra edges stay clear of unrelated nodes", async ({ page }) => {
+  const graph = await showGraph(page, "dijkstra");
+  await fontsLoaded(page);
+  const clearances = await graph.getByTestId("graph-canvas").evaluate((canvas) => {
+    const svg = canvas.querySelector("svg")!;
+    const scale = svg.getBoundingClientRect().width / svg.viewBox.baseVal.width;
+    const origin = svg.getBoundingClientRect();
+    const nodes = [...canvas.querySelectorAll('[data-testid="graph-node"]')].map((node) => {
+      const box = node.getBoundingClientRect();
+      return { x: (box.x + box.width / 2 - origin.x) / scale, y: (box.y + box.height / 2 - origin.y) / scale, radius: box.width / scale / 2 };
+    });
+    const pairs = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3], [3, 4]];
+    return [...svg.querySelectorAll<SVGPathElement>("path")].flatMap((path, i) => nodes.flatMap((node, j) => {
+      if (pairs[i]!.includes(j)) return [];
+      let distance = Infinity;
+      const length = path.getTotalLength();
+      for (let k = 0; k <= 300; k++) {
+        const p = path.getPointAtLength(length * k / 300);
+        distance = Math.min(distance, Math.hypot(p.x - node.x, p.y - node.y));
+      }
+      return [distance - node.radius];
+    }));
+  });
+  expect(Math.min(...clearances)).toBeGreaterThan(5.8);
+});

@@ -418,6 +418,11 @@ const tabTable = {
   steps: [{ explanation: "Look at this one." }, { explanation: "Then stop." }],
 };
 
+const dijkstraGraph = {
+  title: "Dijkstra $v_0$", directed: true,
+  nodes: Array.from({ length: 5 }, (_, i) => ({ id: `v${i}`, label: `$v_${i}$` })),
+  edges: [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3], [3, 4]].map(([a, b], i) => ({ from: `v${a}`, to: `v${b}`, weight: i + 1 })),
+};
 const repairProof = { title: "Sum", steps: [{ statement: String.raw`\displaystyle\sum_{i=1}^{n} i`, justification: "Add the terms." }] };
 
 const SCRIPTS: Record<string, Step[]> = {
@@ -426,6 +431,7 @@ const SCRIPTS: Record<string, Step[]> = {
     { tool: "show_worked_steps", input: { ...repairProof, steps: [{ ...repairProof.steps[0], statement: `$${repairProof.steps[0]!.statement}$` }] } },
     { text: "The repaired proof is inline." },
   ],
+  dijkstra: [{ tool: "show_graph", input: dijkstraGraph }, { text: "Follow the edges." }],
 
   tabset: [{ tool: "show_set_diagram", input: tabSet }, { text: "Tab through the diagram." }],
   tabgraph: [{ tool: "show_graph", input: tabGraph }, { text: "Tab through the graph." }],
