@@ -45,6 +45,15 @@ const labelClashes = (page: Page) =>
   });
 const fontsLoaded = (page: Page) => page.evaluate(async () => void (await document.fonts.ready));
 
+/** Far under a pixel: the engines' layout rounding can differ by this when the page around the graph settles. */
+function expectSamePlaces(after: { x: number; y: number }[], before: { x: number; y: number }[]) {
+  expect(after).toHaveLength(before.length);
+  after.forEach((place, i) => {
+    expect(place.x).toBeCloseTo(before[i]!.x, 2);
+    expect(place.y).toBeCloseTo(before[i]!.y, 2);
+  });
+}
+
 test.describe("graph", () => {
   test("renders every node and edge, and stepping changes state without moving anything", async ({ page }) => {
     const graph = await showGraph(page, "graphweighted");
@@ -63,12 +72,12 @@ test.describe("graph", () => {
     await graph.getByRole("button", { name: "Next" }).click();
     await expect(a).toHaveAttribute("data-tone", "done");
     await expect(graph.locator('[data-testid="graph-edge"][data-tone]')).toHaveCount(2);
-    expect(await centres(page)).toEqual(before);
+    expectSamePlaces(await centres(page), before);
 
     await graph.getByRole("button", { name: "Next" }).click();
     // Not carried over: this step doesn't mention a.
     await expect(a).not.toHaveAttribute("data-tone");
-    expect(await centres(page)).toEqual(before);
+    expectSamePlaces(await centres(page), before);
     await expect(graph.getByTestId("graph-status")).toContainText("is done");
   });
 
@@ -198,7 +207,7 @@ test.describe("graph", () => {
       const before = await centres(page);
       await graph.getByRole("button", { name: "Next" }).click();
       await expect(graph.locator('[data-node="a"]')).toHaveAttribute("data-tone", "active");
-      expect(await centres(page)).toEqual(before);
+      expectSamePlaces(await centres(page), before);
       await expect(list.getByTestId("step-scroll")).toHaveCount(13);
       expect(await labelClashes(page)).toEqual([]);
     });
