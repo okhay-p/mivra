@@ -71,25 +71,47 @@ function pageNumbers(list: string): number[] {
 const spacedWords = (text: string) => ` ${(text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ")} `;
 const nameWords = (document: DocumentRow) => spacedWords(document.filename.replace(/\.[^.]+$/, ""));
 
-/** The documents a message names, with or without the extension. "Notes 2" names only that, not also "Notes". */
-function namedDocuments(documents: DocumentRow[], text: string): DocumentRow[] {
-  const message = spacedWords(text);
-  // Longer than a lone letter such as "a", which is too likely to be an ordinary word.
-  const named = documents.filter((d) => nameWords(d).length > 3 && message.includes(nameWords(d)));
-  return named.filter((d) => !named.some((other) => nameWords(other) !== nameWords(d) && nameWords(other).includes(nameWords(d))));
+/**
+ * The documents a message names, and the message's words without those names. Longest name first, so "Notes 2"
+ * names only that, not also "Notes", yet "Notes and Notes 2" names both.
+ *
+ * Outside a page request a name needs its extension: "Notes.pdf" or "notes pdf" is a name, but "notes" could be
+ * an ordinary word, and scoping on it would hide every other document. "page 2 of Notes" has a page to look for
+ * in something, so `bareNames` lets a name go without. A lone letter such as "a" is never a name, too likely a word.
+ */
+function namedDocuments(documents: DocumentRow[], text: string, bareNames: boolean): { named: DocumentRow[]; rest: string } {
+  const forms = new Map<string, DocumentRow[]>();
+  for (const document of documents.filter((d) => nameWords(d).length > 3)) {
+    const bare = nameWords(document);
+    const full = spacedWords(document.filename);
+    for (const form of new Set([...(full !== bare ? [full] : []), ...(bareNames ? [bare] : [])])) forms.set(form, [...(forms.get(form) ?? []), document]);
+  }
+  const named = new Set<DocumentRow>();
+  let rest = spacedWords(text);
+  for (const form of [...forms.keys()].sort((a, b) => b.length - a.length)) {
+    if (!rest.includes(form)) continue;
+    // Not a plain space, which could join the words either side into another document's name.
+    rest = rest.replaceAll(form, " / ");
+    for (const document of forms.get(form)!) named.add(document);
+  }
+  return { named: documents.filter((d) => named.has(d)), rest };
 }
 
-type PageRequest = {
-  /** Which pages to read from which documents; those named if any were, otherwise all, preferring the unit asked for. */
-  wanted: Map<DocumentRow, number[]>;
+type DocumentRequest = {
+  /** The documents the message names, which nothing else may be read from. */
+  named: DocumentRow[];
+  /** Which pages to read from which documents, if it asked for any; those named if any were, otherwise all, preferring the unit asked for. */
+  wanted?: Map<DocumentRow, number[]>;
   /** The message without its page numbers and document names, whose words would otherwise be searched for. */
   searchText: string;
 };
 
-function pageRequest(documents: DocumentRow[], text: string): PageRequest | undefined {
+function documentRequest(documents: DocumentRow[], text: string): DocumentRequest {
   const references = [...text.matchAll(PAGE_REFERENCE)];
-  if (references.length === 0) return undefined;
-  const named = namedDocuments(documents, text);
+  const asksForPages = references.length > 0;
+  const { named } = namedDocuments(documents, text, asksForPages);
+  const { rest: searchText } = namedDocuments(documents, text.replace(PAGE_REFERENCE, " "), asksForPages);
+  if (!asksForPages) return { named, searchText };
   const scope = named.length > 0 ? named : documents;
   const wanted = new Map<DocumentRow, number[]>();
   for (const [, unit = "", list = ""] of references) {
@@ -99,8 +121,7 @@ function pageRequest(documents: DocumentRow[], text: string): PageRequest | unde
       wanted.set(document, [...new Set([...(wanted.get(document) ?? []), ...pageNumbers(list)])].slice(0, MAX_REQUESTED_PAGES));
     }
   }
-  const searchText = named.reduce((rest, d) => rest.replaceAll(nameWords(d), " "), spacedWords(text.replace(PAGE_REFERENCE, " ")));
-  return { wanted, searchText };
+  return { named, wanted, searchText };
 }
 
 /** One from each list in turn, so a long page or document can't use up the budget alone. */
@@ -136,6 +157,7 @@ const RULES = `A user-role message that starts with "${EXCERPTS_LABEL}" is not f
 /**
  * What the session's documents contribute to a turn, or undefined if it has none (ADR-010). A page the
  * learner asks for by number is chosen by its stored page, ahead of search; search fills what's left.
+ * A document named in the message limits both search and the fallback to itself.
  *
  * A document can contain anything, including text written to hijack the tutor. Its text travels as escaped
  * rows that can't close their block, in a labelled message apart from the trusted rules. That lowers its
@@ -146,17 +168,18 @@ export function documentContext(store: SessionStore, sessionId: string, learnerT
   const documents = store.listDocuments(sessionId);
   if (documents.length === 0) return undefined;
 
-  const request = pageRequest(documents, learnerText);
-  const pages = [...(request?.wanted ?? [])].flatMap(([document, numbers]) => numbers.map((number) => store.documentPageChunks(document.id, number, MAX_CANDIDATES)));
+  const { named, wanted, searchText } = documentRequest(documents, learnerText);
+  const pages = [...(wanted ?? [])].flatMap(([document, numbers]) => numbers.map((number) => store.documentPageChunks(document.id, number, MAX_CANDIDATES)));
   const requested = takingTurns(pages);
 
-  const query = ftsQuery(request?.searchText ?? learnerText);
-  const searched = query ? store.searchDocumentChunks(sessionId, query, MAX_CANDIDATES) : [];
-  const inScope = request ? searched.filter((m) => [...request.wanted.keys()].some((d) => d.id === m.documentId)) : searched;
-  const matches = [...requested, ...inScope.filter((m) => !requested.some((r) => r.documentId === m.documentId && r.seq === m.seq))];
+  // Each document in scope gets its own candidates, or another's better matches could take every place.
+  const fromEach = (scope: DocumentRow[], read: (documentId?: string) => DocumentExcerpt[]) => (scope.length > 0 ? takingTurns(scope.map((d) => read(d.id))) : read());
+  const query = ftsQuery(searchText);
+  const searched = query ? fromEach(wanted ? [...wanted.keys()] : named, (id) => store.searchDocumentChunks(sessionId, query, MAX_CANDIDATES, id)) : [];
+  const matches = [...requested, ...searched.filter((m) => !requested.some((r) => r.documentId === m.documentId && r.seq === m.seq))];
 
   const fromStart = matches.length === 0;
-  const excerpts = withinBudget(fromStart ? store.firstDocumentChunks(sessionId, MAX_CANDIDATES) : matches);
+  const excerpts = withinBudget(fromStart ? fromEach(named, (id) => store.firstDocumentChunks(sessionId, MAX_CANDIDATES, id)) : matches);
 
   const rows = documents.map((d) => ({ name: d.filename, kind: d.kind, [d.kind === "pptx" ? "slides" : "pages"]: d.pageCount, withText: d.pagesWithText }));
   return {
@@ -165,10 +188,12 @@ export function documentContext(store: SessionStore, sessionId: string, learnerT
       EXCERPTS_LABEL,
       "The learner attached these documents to this session.",
       `<attached_documents>\n${dataRows(rows)}\n</attached_documents>`,
-      ...(request ? [`The learner asked for these pages or slides, at most ${MAX_REQUESTED_PAGES} per document. Tell them about any that are partly included, left out for length, missing or without text; if several documents could be meant, ask which.`, `<requested_pages>\n${dataRows(requestedPageRows(request.wanted, pages, excerpts))}\n</requested_pages>`] : []),
+      ...(wanted ? [`The learner asked for these pages or slides, at most ${MAX_REQUESTED_PAGES} per document. Tell them about any that are partly included, left out for length, missing or without text; if several documents could be meant, ask which.`, `<requested_pages>\n${dataRows(requestedPageRows(wanted, pages, excerpts))}\n</requested_pages>`] : []),
       fromStart
-        ? "Below is the start of each document, because the learner's latest message didn't match their text."
-        : request && requested.length > 0
+        ? named.length > 0
+          ? "Below is the start of each document the learner named, as their latest message gave nothing more specific to look for in it."
+          : "Below is the start of each document, because the learner's latest message didn't match their text."
+        : requested.length > 0
           ? "Below are the requested pages or slides, then any other excerpts that match the learner's latest message."
           : "Below are the excerpts that best match the learner's latest message.",
       `<document_excerpts>\n${dataRows(excerpts.map(excerptRow))}\n</document_excerpts>`,

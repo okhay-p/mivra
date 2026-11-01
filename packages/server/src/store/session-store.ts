@@ -330,25 +330,25 @@ export function createSessionStore(db: Db) {
       return db.delete(documents).where(eq(documents.id, id)).run().changes > 0;
     },
 
-    /** The session's chunks matching an FTS5 query, best first. The query must already be safe: see ftsQuery. */
-    searchDocumentChunks(sessionId: string, query: string, limit: number): DocumentExcerpt[] {
+    /** The session's chunks matching an FTS5 query, best first, from one document if given. The query must already be safe: see ftsQuery. */
+    searchDocumentChunks(sessionId: string, query: string, limit: number, documentId?: string): DocumentExcerpt[] {
       return db.all<DocumentExcerpt>(sql`
         select d.id as documentId, d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
         from document_chunks_fts f
         join document_chunks c on c.id = f.rowid
         join documents d on d.id = c.document_id
-        where document_chunks_fts match ${query} and d.session_id = ${sessionId}
+        where document_chunks_fts match ${query} and d.session_id = ${sessionId}${documentId ? sql` and d.id = ${documentId}` : sql``}
         order by f.rank
         limit ${limit}`);
     },
 
-    /** Each of the session's documents from its start, taking turns so one long document can't crowd out the others. */
-    firstDocumentChunks(sessionId: string, limit: number): DocumentExcerpt[] {
+    /** Each of the session's documents from its start, taking turns so one long document can't crowd out the others; or just one document, if given. */
+    firstDocumentChunks(sessionId: string, limit: number, documentId?: string): DocumentExcerpt[] {
       return db.all<DocumentExcerpt>(sql`
         select d.id as documentId, d.filename, d.kind, c.page, c.seq, c.text, d.rowid as documentOrder
         from document_chunks c
         join documents d on d.id = c.document_id
-        where d.session_id = ${sessionId}
+        where d.session_id = ${sessionId}${documentId ? sql` and d.id = ${documentId}` : sql``}
         order by c.seq, d.rowid
         limit ${limit}`);
     },

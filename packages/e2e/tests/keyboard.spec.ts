@@ -13,6 +13,24 @@ async function showAt320(page: Page, script: string, reply: string, region: RegE
 }
 
 /**
+ * Resizing reaches a card's boxes through resize observers, a frame or more later. Waits for what's cut off to be
+ * listed, then for every box to be a tab stop exactly when it has overflowed, so Tab finds what it should.
+ */
+async function boxesMeasured(card: Locator, listed: string[] = [], formulas: string[] = []) {
+  for (const text of listed) await expect(card.getByTestId("set-overflow")).toContainText(text);
+  for (const text of formulas) await expect(card.locator('[data-testid="step-scroll"]', { hasText: text }).first()).toBeVisible();
+  await expect
+    .poll(() =>
+      card.evaluate((root) => {
+        const boxes = [...root.querySelectorAll<HTMLElement>('[data-testid="step-scroll"], [data-testid="graph-scroll"], [data-testid="table-scroll"]')];
+        const overflowing = boxes.filter((box) => box.scrollWidth > box.clientWidth);
+        return overflowing.length > 0 && boxes.every((box) => (box.getAttribute("tabindex") === "0") === overflowing.includes(box));
+      }),
+    )
+    .toBe(true);
+}
+
+/**
  * Every stop real Tab presses reach inside a card, marking each with `data-stop` so it can be used again.
  * Chromium makes overflowing scrollers stops by itself, so looking for `tabindex` would miss them.
  */
@@ -49,6 +67,8 @@ test.describe("keyboard stops at 320px", () => {
     test(`${script}: Tab never lands in something hidden, and every box is named and scrolls instead of stepping`, async ({ page }) => {
       const card = await showAt320(page, script, reply, region);
       const counter = card.getByTestId("step-counter");
+      if (script === "tabset") await boxesMeasured(card, ["Top left label:", "Universe:"], ["W", "U", "M", "V"].map((letter) => letter.repeat(22)));
+      else await boxesMeasured(card);
       const stops = await tabStops(page, card);
       expect(stops.filter((stop) => stop.hidden)).toEqual([]);
       expect(stops.filter((stop) => stop.button).length).toBe(3);
