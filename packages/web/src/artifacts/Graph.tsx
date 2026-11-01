@@ -1,15 +1,13 @@
 import { graphEdgeLookup, type GraphSpec, type GraphTone } from "@mivra/protocol";
-import { Check, ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Check } from "lucide-react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { edgeText, LABEL_FONT_PX, layoutGraph } from "./graph-layout.js";
+import { ScrollableText, StepperControls, useStepper } from "./stepper.js";
 
-const PLAY_INTERVAL_MS = 1500;
 /** The smallest the graph is drawn, so labels stay at 11px or more. Past this it scrolls in its own box. */
 const MIN_SCALE = 11 / LABEL_FONT_PX;
 
@@ -49,9 +47,7 @@ export function graphStateAt(spec: GraphSpec, index: number) {
 export function Graph({ view }: ArtifactProps<"graph">) {
   const { spec } = view;
   const steps = spec.steps ?? [];
-  const last = steps.length - 1;
-  const [index, setIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
+  const stepper = useStepper(steps.length);
 
   // The view is parsed afresh on every parent render, so the key is what the layout reads, not the object.
   const shape = JSON.stringify([spec.directed, spec.kind, spec.nodes, spec.edges]);
@@ -80,35 +76,12 @@ export function Graph({ view }: ArtifactProps<"graph">) {
     return () => observer.disconnect();
   }, [layout]);
 
-  useEffect(() => {
-    if (!playing) return;
-    if (index >= last) {
-      setPlaying(false);
-      return;
-    }
-    const timer = setTimeout(() => setIndex((i) => Math.min(i + 1, last)), PLAY_INTERVAL_MS);
-    return () => clearTimeout(timer);
-  }, [playing, index, last]);
-
-  const go = (next: number) => {
-    setPlaying(false);
-    setIndex(Math.max(0, Math.min(next, last)));
-  };
-  const togglePlay = () => {
-    if (playing) return setPlaying(false);
-    if (index >= last) setIndex(0); // Replay from the start.
-    setPlaying(true);
-  };
   const onKeyDown = (e: KeyboardEvent) => {
     // In the drawing's scrolling box the arrow keys scroll it.
-    if (scroller.current?.contains(e.target as Node)) return;
-    if (e.key === "ArrowLeft") go(index - 1);
-    else if (e.key === "ArrowRight") go(index + 1);
-    else return;
-    e.preventDefault();
+    if (!scroller.current?.contains(e.target as Node)) stepper.onKeyDown(e);
   };
 
-  const state = graphStateAt(spec, index);
+  const state = graphStateAt(spec, stepper.index);
   const hasSteps = steps.length > 0;
   const percent = (value: number, of: number) => `${(value / of) * 100}%`;
   const titleId = useId();
@@ -123,9 +96,14 @@ export function Graph({ view }: ArtifactProps<"graph">) {
       className="whitespace-normal"
     >
       <CardHeader>
-        <CardTitle className="font-heading text-base">
-          <h3 id={titleId}>
-            <MathText text={spec.title} mode="math" />
+        <CardTitle className="min-w-0 font-heading text-base">
+          <h3>
+            <ScrollableText>
+              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
+              <span id={titleId}>
+                <MathText text={spec.title} mode="math" />
+              </span>
+            </ScrollableText>
           </h3>
         </CardTitle>
         <CardDescription id={kindId}>{spec.directed ? "Directed graph" : "Graph"}</CardDescription>
@@ -210,36 +188,17 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         {state.variables.length > 0 && (
           <dl className="flex flex-wrap gap-2" aria-hidden={hasSteps ? true : undefined}>
             {state.variables.map((v, i) => (
-              <div key={i} className="bg-muted flex gap-1 rounded-sm px-2 py-0.5 font-mono text-xs">
-                <dt>{v.name}</dt>
-                <dd>= {String(v.value)}</dd>
+              <div key={i} className="bg-muted flex max-w-full min-w-0 gap-1 rounded-sm px-2 py-0.5 font-mono text-xs wrap-anywhere">
+                <dt className="min-w-0">{v.name}</dt>
+                <dd className="min-w-0">= {String(v.value)}</dd>
               </div>
             ))}
           </dl>
         )}
         {hasSteps && (
           <>
-            <GraphStatus spec={spec} state={state} step={index + 1} of={steps.length} />
-            <div aria-hidden="true" data-testid="graph-explanation">
-              <MathText text={state.explanation} mode="math" />
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => go(index - 1)} disabled={index === 0}>
-                <ChevronLeft />
-                Prev
-              </Button>
-              <Button type="button" size="sm" onClick={togglePlay} aria-pressed={playing}>
-                {playing ? <Pause /> : <Play />}
-                {playing ? "Pause" : "Play"}
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => go(index + 1)} disabled={index === last}>
-                Next
-                <ChevronRight />
-              </Button>
-              <Badge variant="outline" className="ml-auto" aria-hidden="true">
-                Step {index + 1} of {steps.length}
-              </Badge>
-            </div>
+            <GraphStatus spec={spec} state={state} step={stepper.index + 1} of={steps.length} />
+            <StepperControls stepper={stepper} play />
           </>
         )}
       </CardContent>
@@ -281,14 +240,16 @@ function EdgeWords({ spec, index }: { spec: GraphSpec; index: number }) {
  */
 function GraphStatus({ spec, state, step, of }: { spec: GraphSpec; state: ReturnType<typeof graphStateAt>; step: number; of: number }) {
   return (
-    <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="graph-status">
-      <p>
+    <div role="status" aria-live="polite" aria-atomic="true" data-testid="graph-status">
+      <p className="sr-only">
         Step {step} of {of}.
       </p>
-      <p>
-        <MathText text={state.explanation} mode="math" />
-      </p>
-      <ul>
+      <div data-testid="graph-explanation">
+        <ScrollableText>
+          <MathText text={state.explanation} mode="math" />
+        </ScrollableText>
+      </div>
+      <ul className="sr-only">
         {[...state.nodes].map(([id, tone]) => (
           <li key={`n-${id}`}>
             Node <NodeName spec={spec} id={id} /> is {TONE_WORDS[tone]}.

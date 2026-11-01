@@ -746,6 +746,89 @@ describe("asking for a page by number", () => {
   });
 });
 
+describe("naming a document", () => {
+  const places = (told: string) => rows(told).map((e) => `${e.document}:${e.page}`);
+  const documentsIn = (told: string) => [...new Set(rows(told).map((e) => e.document))];
+  // More than the 40 candidates a search keeps, each a better match than anything in a long page.
+  const strongMatches = (word: string) => Array.from({ length: 50 }, (_, i) => [`${word} ${word} ${word} ${i}`]);
+  const weakMatch = (word: string) => [...Array.from({ length: 12 }, () => "plain filler words that mean nothing much at all"), word];
+
+  it("reads that document from its start, even if another's text mentions it", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf([["Propositions and truth tables."], ["Quantifiers."]]), "Logic.pdf");
+    await upload(id, makePdf([["Groups need Logic Logic Logic to follow."]]), "Algebra.pdf");
+    const told = await toldFor(id, "Summarize Logic.pdf");
+    expect(places(told)).toEqual(["Logic.pdf:1", "Logic.pdf:2"]);
+    expect(told).toContain("Below is the start of each document the learner named");
+    expect(places(await toldFor(id, "summarize the logic pdf"))).toEqual(["Logic.pdf:1", "Logic.pdf:2"]);
+  });
+
+  it("searches only that document, however many better matches another has", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf(strongMatches("zebra")), "Algebra.pdf");
+    await upload(id, makePdf([["The opening page of this one."], weakMatch("zebra")]), "Logic.pdf");
+    expect(places(await toldFor(id, "What does Logic.pdf say about zebra?"))).toEqual(["Logic.pdf:2"]);
+    // A page request's search is scoped before its limit as well.
+    expect(places(await toldFor(id, "page 1 of Logic, and zebra"))).toEqual(["Logic.pdf:1", "Logic.pdf:2"]);
+  });
+
+  it("falls back to the document named rather than another, if the search finds nothing in it", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf([["The opening page of this one."]]), "Logic.pdf");
+    await upload(id, makePdf([["Zebra is only in this one."]]), "Algebra.pdf");
+    expect(places(await toldFor(id, "zebra in Logic.pdf"))).toEqual(["Logic.pdf:1"]);
+    expect(places(await toldFor(id, "page 99 of Logic.pdf"))).toEqual(["Logic.pdf:1"]);
+  });
+
+  it("gives each of two documents a place, and nothing to a third", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf(strongMatches("zebra")), "Algebra.pdf");
+    await upload(id, makePdf([weakMatch("zebra")]), "Logic.pdf");
+    await upload(id, makePdf([["Zebra zebra zebra here as well."]]), "Third.pdf");
+    expect(documentsIn(await toldFor(id, "Compare zebra in Logic.pdf and Algebra.pdf"))).toEqual(["Algebra.pdf", "Logic.pdf"]);
+    const fromStart = rows(await toldFor(id, "Compare Logic.pdf and Third.pdf"));
+    expect(fromStart.map((e) => `${e.document}:${e.page}`)).toEqual(["Logic.pdf:1", "Third.pdf:1"]);
+  });
+
+  it("takes the longest name, but still both when both are named", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf([["The document with a short name."]]), "Notes.pdf");
+    await upload(id, makePdf([["The document with a longer name."]]), "Old Notes.pdf");
+    expect(documentsIn(await toldFor(id, "Summarize Old Notes.pdf"))).toEqual(["Old Notes.pdf"]);
+    expect(documentsIn(await toldFor(id, "Summarize Notes.pdf"))).toEqual(["Notes.pdf"]);
+    expect(documentsIn(await toldFor(id, "Compare Notes.pdf with Old Notes.pdf"))).toEqual(["Notes.pdf", "Old Notes.pdf"]);
+  });
+
+  it("doesn't take an ordinary word for a document's name", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const id = await newSession();
+    await upload(id, makePdf([["Our notes say recursion needs a base case."]]), "Notes.pdf");
+    await upload(id, makePdf([["Recursion calls itself."]]), "Other.pdf");
+    await upload(id, makePdf([["A short letter on recursion."]]), "A.pdf");
+    expect(documentsIn(await toldFor(id, "take notes on recursion"))).toEqual(["Notes.pdf", "Other.pdf", "A.pdf"]);
+    expect(documentsIn(await toldFor(id, "find a pdf on recursion"))).toEqual(["Notes.pdf", "Other.pdf", "A.pdf"]);
+    expect(await toldFor(id, "take notes")).toContain("Below is the start of each document, because");
+  });
+
+  it("only knows this session's documents, and stays within the budget", async () => {
+    const { newSession, upload, toldFor } = setup();
+    const other = await newSession();
+    await upload(other, makePdf([["Another session's logic secret."]]), "Logic.pdf");
+    const id = await newSession();
+    await upload(id, makePdf([["My own one mentions logic as well."]]), "Mine.pdf");
+    const told = await toldFor(id, "Summarize Logic.pdf");
+    expect(told).not.toContain("secret");
+    expect(places(told)).toEqual(["Mine.pdf:1"]);
+    await upload(id, makePdf(Array.from({ length: 30 }, () => Array.from({ length: 40 }, () => `budget <<<"""\\\\ words of many`))), "Long.pdf");
+    expect(block(await toldFor(id, "Summarize Long.pdf"), "document_excerpts")!.length).toBeLessThanOrEqual(MAX_EXCERPT_CHARS);
+  });
+});
+
 describe("where document text goes", () => {
   const secret = "Zebrafish appear in this uploaded text";
 

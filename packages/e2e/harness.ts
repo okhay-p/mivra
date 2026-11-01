@@ -279,6 +279,22 @@ const graphBst = {
   edges: [["10", "5", "left", 5], ["10", "20", "right", 10], ["5", "6", "right", 1], ["6", "7", "right", 1], ["7", "8", "right", 1]].map(([from, to, side, weight]) => ({ from, to, side, weight })),
 };
 
+// Long formulas in the title and an explanation, which arrow keys scroll while the card's arrow keys step.
+const wideTitle = `$${Array.from({ length: 18 }, (_, i) => `a_{${i}}`).join("")}$`;
+const graphWide = {
+  title: wideTitle,
+  directed: false,
+  nodes: [{ id: "a" }, { id: "b" }],
+  edges: [{ from: "a", to: "b" }],
+  steps: [{ explanation: `Add $${longFormula}$ here.`, nodeStates: [{ id: "a" }] }, { explanation: "Then stop.", nodeStates: [{ id: "b" }] }],
+};
+const vennWide = {
+  title: wideTitle,
+  sets: [{ id: "a", label: "$A$" }],
+  regions: [{ in: ["a"], elements: [1] }],
+  steps: [{ explanation: `Add $${longFormula}$ here.`, highlights: [{ in: ["a"] }] }, { explanation: "Then stop." }],
+};
+
 const truthTable = {
   title: "Truth table for $p \\land q$",
   columns: ["$p$", "$q$", "$p \\land q$"],
@@ -333,7 +349,52 @@ const wideExplanationTable = {
 };
 const wideTitleTable = { title: wideProof.title, columns: ["$a$"], rows: [[1]] };
 
+const wideFormula = "$\\displaystyle {\\sum_{i=1}^{n} i + \\sum_{j=1}^{m} j + \\sum_{k=1}^{p} k + \\sum_{l=1}^{q} l + \\sum_{r=1}^{s} r}$";
+const wideFormulaTrace = {
+  title: wideFormula,
+  values: [1, 2],
+  steps: [{ explanation: wideFormula }, { explanation: "Then this." }],
+};
+
+// Formulas with nowhere to break, in every place a stepped artifact can draw one. Chromium makes anything that overflows a tab stop.
+const unbroken = (letter: string) => `$${letter.repeat(22)}$`;
+const tabSet = {
+  title: "Long labels",
+  sets: [{ id: "a", label: unbroken("W") }, { id: "b", label: "$B$" }],
+  universe: unbroken("U"),
+  regions: [{ in: ["a"], elements: [unbroken("M")] }, { in: ["b"], elements: [2] }],
+  steps: [
+    { explanation: "Look at this one.", highlights: [{ in: ["a"] }], variables: [{ name: "x", value: unbroken("V") }] },
+    { explanation: "Then stop." },
+  ],
+};
+const tabGraph = {
+  title: "Long labels",
+  directed: false,
+  nodes: [{ id: "a", label: unbroken("W") }, { id: "b" }],
+  edges: [{ from: "a", to: "b", label: unbroken("M") }],
+  steps: [{ explanation: "Look at this one.", nodeStates: [{ id: "a" }], variables: [{ name: "x", value: longValue.repeat(3) }] }, { explanation: "Then stop." }],
+};
+const tabTrace = {
+  title: "Long values",
+  values: [longValue, longValue, longValue],
+  steps: [{ explanation: "Look at this one.", variables: [{ name: "x", value: longValue.repeat(3) }] }, { explanation: "Then stop." }],
+};
+const tabTable = {
+  title: "Long cells",
+  columns: [unbroken("W")],
+  rows: [[unbroken("M")]],
+  steps: [{ explanation: "Look at this one." }, { explanation: "Then stop." }],
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  tabset: [{ tool: "show_set_diagram", input: tabSet }, { text: "Tab through the diagram." }],
+  tabgraph: [{ tool: "show_graph", input: tabGraph }, { text: "Tab through the graph." }],
+  tabtrace: [{ tool: "show_algorithm_trace", input: tabTrace }, { text: "Tab through the trace." }],
+  tabtable: [{ tool: "show_table", input: tabTable }, { text: "Tab through the table." }],
+  widegraph: [{ tool: "show_graph", input: graphWide }, { text: "Scroll the long graph." }],
+  wideset: [{ tool: "show_set_diagram", input: vennWide }, { text: "Scroll the long diagram." }],
+  widetrace: [{ tool: "show_algorithm_trace", input: wideFormulaTrace }, { text: "Scroll the long trace." }],
   graphbst: [{ tool: "show_graph", input: graphBst }, { text: "Here's the BST." }],
   graphskew: [{ tool: "show_graph", input: graphSkew }, { text: "Here's the skewed tree." }],
   graphtree: [{ tool: "show_graph", input: graphTree }, { text: "Here's the tree." }],

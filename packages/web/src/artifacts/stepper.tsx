@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const PLAY_INTERVAL_MS = 1500;
 
@@ -57,8 +58,9 @@ export function useStepper(count: number) {
  * Text in a stepped artifact whose formula may be too wide for the card. The whole text scrolls as one box, and
  * only when it has to is that box a tab stop, whose arrow keys scroll rather than step. A box that stops
  * overflowing while focused stays focusable, out of the tab order, until focus leaves, so the keyboard keeps its place.
+ * A tab stop can't be hidden from screen readers, so for something they get elsewhere, hide what's inside the box.
  */
-export function ScrollableText({ children }: { children: ReactNode }) {
+export function ScrollableText({ children, label = "Formula, scrolls sideways", className }: { children: ReactNode; label?: string; className?: string }) {
   const box = useRef<HTMLSpanElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -76,9 +78,9 @@ export function ScrollableText({ children }: { children: ReactNode }) {
   return (
     <span
       ref={box}
-      className="step-scroll block min-w-0 overflow-x-auto overflow-y-hidden"
+      className={cn("step-scroll block min-w-0 overflow-x-auto overflow-y-hidden", className)}
       data-testid="step-scroll"
-      {...(overflows ? { role: "group", "aria-label": "Formula, scrolls sideways" } : {})}
+      {...(overflows ? { role: "group", "aria-label": label } : {})}
       tabIndex={overflows ? 0 : focused ? -1 : undefined}
       onFocus={() => setFocused(true)}
       // Leaving the window blurs the box but keeps it the active element, for when the window comes back.
@@ -93,23 +95,22 @@ export function ScrollableText({ children }: { children: ReactNode }) {
 }
 
 /**
- * Prev, next and a step counter, or nothing for a single step. At either end a button is `aria-disabled`, not
+ * Prev, next and a step counter, or nothing for a single step or none. At either end a button is `aria-disabled`, not
  * `disabled`, because a disabled button drops the keyboard focus of someone who has just stepped to the end.
- * An artifact that announces the step number in its own live region passes `announce={false}`, so it's said once.
+ * Each artifact announces the step number in its own live region, so the counter is hidden from screen readers
+ * and it's said once. There's no `aria-pressed` on Play: its label already changes.
  */
 export function StepperControls({
   stepper,
   play = false,
-  announce = true,
   children,
 }: {
   stepper: ReturnType<typeof useStepper>;
   play?: boolean;
-  announce?: boolean;
   children?: ReactNode;
 }) {
   const { index, last, playing, go, togglePlay } = stepper;
-  if (last === 0) return null;
+  if (last <= 0) return null;
   const inactive = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -128,7 +129,7 @@ export function StepperControls({
         <ChevronRight />
       </Button>
       {children}
-      <Badge variant="outline" className="ml-auto" role={announce ? "status" : undefined} data-testid="step-counter">
+      <Badge variant="outline" className="ml-auto" aria-hidden="true" data-testid="step-counter">
         Step {index + 1} of {last + 1}
       </Badge>
     </div>

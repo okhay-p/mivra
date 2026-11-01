@@ -1,5 +1,5 @@
 import type { TableSpec, TableStep } from "@mivra/protocol";
-import type { KeyboardEvent } from "react";
+import { useId, type KeyboardEvent } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
@@ -44,11 +44,13 @@ export function TableArtifact({ view }: ArtifactProps<"table">) {
     return highlight && (highlight.tone ?? "active");
   };
   const stepped = spec.steps !== undefined;
+  const titleId = useId();
+  const kindId = useId();
 
   return (
     <Card
       role="region"
-      aria-label={`Table: ${spec.title}`}
+      aria-labelledby={`${titleId} ${kindId}`}
       className="whitespace-normal"
       {...(stepped ? { tabIndex: 0, onKeyDown: stepper.onKeyDown } : {})}
     >
@@ -56,11 +58,14 @@ export function TableArtifact({ view }: ArtifactProps<"table">) {
         <CardTitle className="min-w-0 font-heading text-base">
           <h3>
             <ScrollableText>
-              <MathText text={spec.title} mode="math" />
+              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
+              <span id={titleId}>
+                <MathText text={spec.title} mode="math" />
+              </span>
             </ScrollableText>
           </h3>
         </CardTitle>
-        <CardDescription>Table</CardDescription>
+        <CardDescription id={kindId}>Table</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {/* Focusable so a keyboard can scroll a wide table; its arrow keys scroll rather than step. */}
@@ -134,7 +139,7 @@ export function TableArtifact({ view }: ArtifactProps<"table">) {
             </span>
           </div>
         )}
-        <StepperControls stepper={stepper} play announce={false} />
+        <StepperControls stepper={stepper} play />
       </CardContent>
     </Card>
   );

@@ -172,7 +172,7 @@ test.describe("markdown and maths", () => {
     await expect(check.locator("em")).toHaveCount(0);
     await expect(check).toContainText("Which is *the* product");
 
-    const trace = page.getByRole("region", { name: /^Algorithm trace/ });
+    const trace = page.getByRole("region", { name: /Algorithm trace$/ });
     await expect(trace.getByRole("heading")).toContainText("Swap *demo* in");
     await expect(trace.getByRole("heading").locator(".katex")).toHaveCount(1);
     await expect(trace).toContainText("Multiply 2*3*4 and compare");

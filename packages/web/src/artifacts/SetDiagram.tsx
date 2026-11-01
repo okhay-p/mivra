@@ -1,15 +1,11 @@
 import type { SetDiagramHighlight, SetDiagramSpec } from "@mivra/protocol";
-import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
-import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { FRAME_INSET, ROW_HEIGHT, VENN_LAYOUTS, chooseRegionFit, regionMasks, regionPath, slotBox, type RegionFit, type RegionSlot, type Size, type VennLayout } from "./set-diagram-geometry.js";
-
-const PLAY_INTERVAL_MS = 1500;
+import { ScrollableText, StepperControls, useStepper } from "./stepper.js";
 
 type Tone = NonNullable<SetDiagramHighlight["tone"]>;
 type Region = SetDiagramSpec["regions"][number];
@@ -45,6 +41,15 @@ const elementText = (element: Region["elements"][number]) => String(element);
 
 function Inline({ text }: { text: string }) {
   return <MathText text={text} mode="math" />;
+}
+
+/** Text screen readers get elsewhere. If it's too wide it must still be reachable, so the box stays out of what's hidden. */
+function SeenOnly({ children }: { children: ReactNode }) {
+  return (
+    <ScrollableText>
+      <span aria-hidden="true">{children}</span>
+    </ScrollableText>
+  );
 }
 
 function Elements({ elements }: { elements: Region["elements"] }) {
@@ -123,14 +128,20 @@ function renderedSize(probe: Element): Size {
   return { width: width + scrolled, height };
 }
 
+/** Whether a drawn label is wider than its corner, which is decided here rather than by a probe as labels are always shown. */
+function isCutOff(label: Element): boolean {
+  return [label, ...label.querySelectorAll(".katex")].some((box) => box.scrollWidth > box.clientWidth);
+}
+
 /**
  * Decides what each region shows from the hidden probes `Diagram` renders, which lay out like the real contents.
  * This runs before paint, and again before paint on each change of width or when fonts arrive.
  * Without layout, as in jsdom, nothing is measured and every region shows its contents.
  */
-function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTMLDivElement | null>, ReadonlyMap<number, RegionFit>] {
+function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTMLDivElement | null>, ReadonlyMap<number, RegionFit>, readonly string[]] {
   const ref = useRef<HTMLDivElement>(null);
   const [fits, setFits] = useState<ReadonlyMap<number, RegionFit>>(new Map());
+  const [cutOff, setCutOff] = useState<readonly string[]>([]);
 
   useLayoutEffect(() => {
     const root = ref.current!;
@@ -145,6 +156,8 @@ function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTM
         if (contents && marker) next.set(mask, chooseRegionFit(slotBox(layout, layout.slots[mask]!, measuredWidth), renderedSize(contents), renderedSize(marker)));
       }
       setFits((current) => (next.size === current.size && [...next].every(([mask, fit]) => current.get(mask) === fit) ? current : next));
+      const labels = [...root.querySelectorAll<HTMLElement>("[data-label]")].filter(isCutOff).map((label) => label.dataset.label!);
+      setCutOff((current) => (current.join() === labels.join() ? current : labels));
     };
     measure();
     // The drawing's width doesn't depend on what's decided here, so this can't feed back into itself.
@@ -159,8 +172,10 @@ function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTM
     };
   }, [spec, layout]);
 
-  return [ref, fits];
+  return [ref, fits, cutOff];
 }
+
+const LABEL_PLACES = ["Top left", "Top right", "Bottom left"];
 
 /** A set's label goes in a corner next to its circle. */
 function labelPosition(index: number, count: number): CSSProperties {
@@ -197,7 +212,7 @@ function Diagram({ spec, layout, tones, fits, drawing }: { spec: SetDiagramSpec;
   const regions = new Map(spec.regions.map((r) => [regionMask(spec, r.in), r]));
 
   return (
-    <div ref={drawing} className="relative mx-auto w-full max-w-md" style={{ aspectRatio: `${width} / ${height}` }} aria-hidden="true" data-testid="set-diagram">
+    <div ref={drawing} className="relative mx-auto w-full max-w-md" style={{ aspectRatio: `${width} / ${height}` }} aria-hidden="true" inert data-testid="set-diagram">
       <svg viewBox={`0 0 ${width} ${height}`} className="absolute inset-0 size-full">
         <defs>
           <pattern id={ids.hatch} patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)">
@@ -226,14 +241,14 @@ function Diagram({ spec, layout, tones, fits, drawing }: { spec: SetDiagramSpec;
         ))}
       </svg>
       {spec.sets.map((set, i) => (
-        <div key={set.id} className="absolute text-xs leading-4 font-medium" style={labelPosition(i, spec.sets.length)} data-testid="set-label">
+        <div key={set.id} className="absolute text-xs leading-4 font-medium" style={labelPosition(i, spec.sets.length)} data-testid="set-label" data-label={i}>
           <span className="bg-card/85 rounded-sm px-0.5">
             <Inline text={set.label} />
           </span>
         </div>
       ))}
       {spec.universe !== undefined && (
-        <div className="text-muted-foreground absolute bottom-[1.5%] left-1/2 w-[36%] -translate-x-1/2 text-center text-xs leading-4" data-testid="set-universe-label">
+        <div className="text-muted-foreground absolute bottom-[1.5%] left-1/2 w-[36%] -translate-x-1/2 text-center text-xs leading-4" data-testid="set-universe-label" data-label="universe">
           <span className="bg-card/85 rounded-sm px-0.5">
             <Inline text={spec.universe} />
           </span>
@@ -273,53 +288,33 @@ function Diagram({ spec, layout, tones, fits, drawing }: { spec: SetDiagramSpec;
 export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
   const { spec } = view;
   const stepCount = spec.steps?.length ?? 0;
-  const last = stepCount - 1;
-  const [index, setIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
-
-  useEffect(() => {
-    if (!playing) return;
-    if (index >= last) {
-      setPlaying(false);
-      return;
-    }
-    const timer = setTimeout(() => setIndex((i) => Math.min(i + 1, last)), PLAY_INTERVAL_MS);
-    return () => clearTimeout(timer);
-  }, [playing, index, last]);
-
-  const go = (next: number) => {
-    setPlaying(false);
-    setIndex(Math.max(0, Math.min(next, last)));
-  };
-  const togglePlay = () => {
-    if (playing) return setPlaying(false);
-    if (index >= last) setIndex(0); // Replay from the start.
-    setPlaying(true);
-  };
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "ArrowLeft") go(index - 1);
-    else if (e.key === "ArrowRight") go(index + 1);
-    else return;
-    e.preventDefault();
-  };
+  const stepper = useStepper(stepCount);
+  const { index } = stepper;
+  const titleId = useId();
+  const kindId = useId();
 
   const layout = VENN_LAYOUTS[spec.sets.length]!;
   const state = setDiagramStateAt(spec, index);
   const masks = drawnMasks(spec);
   const regions = new Map(spec.regions.map((r) => [regionMask(spec, r.in), r]));
   const highlighted = masks.filter((mask) => state.tones.has(mask));
-  const [drawing, fits] = useRegionFits(spec, layout);
+  const [drawing, fits, cutOff] = useRegionFits(spec, layout);
   const overflowing = masks.filter((mask) => (fits.get(mask) ?? "contents") !== "contents");
 
   return (
-    <Card role="region" aria-label={`Set diagram: ${spec.title}`} {...(stepCount > 0 ? { tabIndex: 0, onKeyDown } : {})} className="whitespace-normal">
+    <Card role="region" aria-labelledby={`${titleId} ${kindId}`} {...(stepCount > 0 ? { tabIndex: 0, onKeyDown: stepper.onKeyDown } : {})} className="whitespace-normal">
       <CardHeader>
-        <CardTitle className="font-heading text-base">
+        <CardTitle className="min-w-0 font-heading text-base">
           <h3>
-            <MathText text={spec.title} mode="math" />
+            <ScrollableText>
+              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
+              <span id={titleId}>
+                <MathText text={spec.title} mode="math" />
+              </span>
+            </ScrollableText>
           </h3>
         </CardTitle>
-        <CardDescription>Set diagram</CardDescription>
+        <CardDescription id={kindId}>Set diagram</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {/* The drawing relates elements to sets only by position, so screen readers get this instead. */}
@@ -347,92 +342,83 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
             );
           })}
         </ul>
-        {/* Always there, and always different from one step to the next, so every step is announced. The visible versions of what's in it are hidden from screen readers. */}
-        {stepCount > 0 && (
-          <div className="sr-only" aria-live="polite" aria-atomic="true" data-testid="set-announcement">
-            Step {index + 1} of {stepCount}: <MathText text={state.explanation} mode="math" />{" "}
-            {highlighted.length === 0 && "Nothing highlighted. "}
-            {highlighted.map((mask) => (
-              <Fragment key={mask}>
-                {TONES[state.tones.get(mask)!].word}: <RegionName spec={spec} mask={mask} />.{" "}
-              </Fragment>
-            ))}
-            {state.variables.map((v, i) => (
-              <Fragment key={i}>
-                <Inline text={v.name} /> = <Inline text={String(v.value)} />.{" "}
-              </Fragment>
-            ))}
-          </div>
-        )}
         <Diagram spec={spec} layout={layout} tones={state.tones} fits={fits} drawing={drawing} />
-        {overflowing.length > 0 && (
-          <div aria-hidden="true" className="flex flex-col gap-1 text-xs" data-testid="set-overflow">
-            <p className="text-muted-foreground">↓ Doesn't fit in the diagram:</p>
-            <ul className="flex flex-col gap-1">
-              {overflowing.map((mask) => (
-                <li key={mask}>
-                  <span className="font-medium">
-                    <RegionName spec={spec} mask={mask} />:
-                  </span>{" "}
-                  <span className="font-mono">
-                    <RegionContents region={regions.get(mask)!} />
-                  </span>
-                </li>
-              ))}
-            </ul>
+        {/* These three are for the eye: the description and the announcement say the same, so they're not lists to a screen reader. */}
+        {(overflowing.length > 0 || cutOff.length > 0) && (
+          <div className="flex flex-col gap-1 text-xs" data-testid="set-overflow">
+            <p aria-hidden="true" className="text-muted-foreground">
+              ↓ Doesn't fit in the diagram:
+            </p>
+            {cutOff.map((label) => (
+              <SeenOnly key={label}>
+                <span className="font-medium">{label === "universe" ? "Universe" : `${LABEL_PLACES[Number(label)]} label`}:</span>{" "}
+                <Inline text={label === "universe" ? spec.universe! : spec.sets[Number(label)]!.label} />
+              </SeenOnly>
+            ))}
+            {overflowing.map((mask) => (
+              <SeenOnly key={mask}>
+                <span className="font-medium">
+                  <RegionName spec={spec} mask={mask} />:
+                </span>{" "}
+                <span className="font-mono">
+                  <RegionContents region={regions.get(mask)!} />
+                </span>
+              </SeenOnly>
+            ))}
           </div>
         )}
         {highlighted.length > 0 && (
-          <ul aria-hidden="true" className="flex flex-wrap gap-x-3 gap-y-1 text-xs" data-testid="set-key">
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs" data-testid="set-key">
             {highlighted.map((mask) => {
               const tone = state.tones.get(mask)!;
               return (
-                <li key={mask} className="flex items-baseline gap-1" data-tone={tone}>
-                  <span className="font-medium">{TONES[tone].word}:</span>
-                  <span>
-                    <RegionName spec={spec} mask={mask} />
-                  </span>
-                </li>
+                <div key={mask} className="max-w-full min-w-0" data-tone={tone}>
+                  <SeenOnly>
+                    <span className="font-medium">{TONES[tone].word}:</span> <RegionName spec={spec} mask={mask} />
+                  </SeenOnly>
+                </div>
               );
             })}
-          </ul>
+          </div>
         )}
         {state.variables.length > 0 && (
-          <dl aria-hidden="true" className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2" data-testid="set-variables">
             {state.variables.map((v, i) => (
-              <div key={i} className="bg-muted flex gap-1 rounded-sm px-2 py-0.5 font-mono text-xs">
-                <dt>
-                  <Inline text={v.name} />
-                </dt>
-                <dd>
-                  = <Inline text={String(v.value)} />
-                </dd>
+              <div key={i} className="bg-muted max-w-full min-w-0 rounded-sm px-2 py-0.5 font-mono text-xs">
+                <SeenOnly>
+                  <Inline text={v.name} /> = <Inline text={String(v.value)} />
+                </SeenOnly>
               </div>
             ))}
-          </dl>
+          </div>
         )}
         {stepCount > 0 && (
           <>
-            <div aria-hidden="true" data-testid="set-explanation">
-              <MathText text={state.explanation} mode="math" />
+            {/* Always there, and always different from one step to the next, so every step is announced. The other visible versions of what's in it are hidden from screen readers. */}
+            <div aria-live="polite" aria-atomic="true" data-testid="set-announcement">
+              <span className="sr-only">
+                Step {index + 1} of {stepCount}:{" "}
+              </span>
+              <div data-testid="set-explanation">
+                <ScrollableText>
+                  <MathText text={state.explanation} mode="math" />
+                </ScrollableText>
+              </div>
+              <span className="sr-only">
+                {highlighted.length === 0 && "Nothing highlighted. "}
+                {highlighted.map((mask) => (
+                  <Fragment key={mask}>
+                    {TONES[state.tones.get(mask)!].word}: <RegionName spec={spec} mask={mask} />.{" "}
+                  </Fragment>
+                ))}
+                {state.variables.map((v, i) => (
+                  <Fragment key={i}>
+                    <Inline text={v.name} /> = <Inline text={String(v.value)} />.{" "}
+                  </Fragment>
+                ))}
+              </span>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" size="sm" onClick={() => go(index - 1)} disabled={index === 0}>
-                <ChevronLeft />
-                Prev
-              </Button>
-              <Button type="button" size="sm" onClick={togglePlay} aria-pressed={playing}>
-                {playing ? <Pause /> : <Play />}
-                {playing ? "Pause" : "Play"}
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => go(index + 1)} disabled={index === last}>
-                Next
-                <ChevronRight />
-              </Button>
-              <Badge variant="outline" className="ml-auto">
-                Step {index + 1} of {stepCount}
-              </Badge>
-            </div>
+            <StepperControls stepper={stepper} play />
           </>
         )}
       </CardContent>

@@ -12,7 +12,7 @@ An open-source, local-first AI agent harness for learning. Design docs and decis
 
 ## Setup
 
-Requires Node.js 22.12+ and pnpm 10 (`npm i -g pnpm`, or prefix commands with `npx pnpm@10`).
+Requires Node.js 22.14+ and pnpm 10 (`npm i -g pnpm`, or prefix commands with `npx pnpm@10`).
 
 ```sh
 pnpm install
@@ -21,6 +21,28 @@ cp .env.example .env   # add a provider key and set MIVRA_MODEL
 
 `MIVRA_MODEL` is `<provider>:<model-id>`. Providers: `anthropic`, `openai`, and `openrouter` (set `OPENROUTER_API_KEY`, then use an id from [openrouter.ai/models](https://openrouter.ai/models), e.g. `openrouter:<vendor>/<model>`). Mivra's learning tools need tool calling, so pick a model that lists tool support; many free models don't.
 
+## Native dependency
+
+`better-sqlite3` ships prebuilt Node-API binaries inside its npm package, so `pnpm install` needs no compiler or Python and the binary doesn't depend on the exact Node version. `pnpm-workspace.yaml` ignores the package's install step, which would only run `node-gyp` and fail where it isn't installed.
+
+| Platform | Binary | Tested here |
+|---|---|---|
+| Linux x64, glibc 2.34+ | yes | yes: install, query, on glibc 2.36 and 2.41; server tests on 2.41 |
+| Linux x64, musl | yes | yes: install and query on Alpine |
+| Linux arm64 (glibc 2.34+ or musl) | yes | no |
+| macOS x64 and arm64 | yes | no |
+| Windows x64 and arm64 | yes | no |
+
+Other platforms have no binary, and glibc older than 2.34 can't load the one provided (it fails with ``version `GLIBC_2.33' not found``). `pnpm install` still succeeds there, and the server fails when it opens the database. To build from source, install Python, `make` and a C++20 compiler, then:
+
+```sh
+cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
+rm -rf prebuilds   # the loader prefers these over a local build
+npx node-gyp rebuild --release
+```
+
+This worked on Debian 12 with g++ 12, taking over ten minutes, and failed on Ubuntu 20.04 with g++ 9.4, so on a system that old, upgrade instead. Reinstalling restores the prebuilds, so it has to be repeated afterwards. Building on macOS or Windows hasn't been tried.
+
 ## Commands
 
 | Command | What it does |
@@ -28,7 +50,7 @@ cp .env.example .env   # add a provider key and set MIVRA_MODEL
 | `pnpm dev` | Server on :4096 with reload, plus Vite on :5173 proxying `/api` to it |
 | `pnpm build && pnpm start` | Production: the server serves the built web UI on :4096 |
 | `pnpm test` | Protocol, server API (mock model, no API key needed) and web component tests (Vitest + jsdom) |
-| `pnpm test:e2e` | Browser tests (Playwright): the built UI and real server with a scripted model, so no API key is needed. Run `pnpm --filter @mivra/e2e exec playwright install chromium` once first |
+| `pnpm test:e2e` | Browser tests (Playwright): the built UI and real server with a scripted model, so no API key is needed. Run `pnpm --filter @mivra/e2e exec playwright install chromium` once first. It uses port 4198; set `MIVRA_E2E_PORT` to change it |
 | `pnpm typecheck` | Type-check all packages |
 | `pnpm --filter @mivra/server db:generate` | Generate a migration after editing `src/db/schema.ts` |
 
@@ -78,15 +100,15 @@ The agent shows interactive artifacts through tool calls (ADR-006): `show_algori
 - Each tool call's input is validated against its `packages/protocol` schema and stored in `artifacts` with the full spec. Client output fails closed: the live stream and `GET /api/sessions/{id}/messages` pass only text and lifecycle parts plus `data-artifact` parts with the artifact's public view. Raw tool calls, model reasoning, sources and files never reach a client, so a check's answer key, explanation and feedback stay on the server.
 - `POST /api/artifacts/{id}/attempts` with `{ "answer": { "optionIndex": n } }` grades a check deterministically and returns the view with the grade. One attempt per check, accepted once the reply that asked it has finished.
 - On later turns, each check's tool result tells the model whether the learner answered and how they did.
-- The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. A trace is a stepper (prev/next, play/pause, arrow keys). A set diagram is a Venn diagram of 1 to 3 sets with the same stepper when it has steps; each region is computed as its exact shape, so a step can highlight any region, and what a region holds is measured against its exact space at the drawn size, re-measured on resize; what doesn't fit moves to a list below the diagram, leaving a marker such as `n = 30 ↓` or just `↓`. A count shows as `n = 7`, so it can't be mistaken for an element. A graph is drawn by the browser, never placed by the model: d3-hierarchy for a real tree when `kind` is `tree`, where an edge's optional `side` keeps a lone child to its left or right, and otherwise a d3-force layout run to the end once per graph, so it's deterministic and nothing moves while stepping. It has the same stepper when it has steps, and one polite live region announces each step whole: its number, explanation and state. Self-loops and parallel edges are drawn. Labels are HTML over the SVG and scale with it down to 11px, after which the graph scrolls in its own box, which then takes the arrow keys for scrolling and is a named tab stop. A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered. A table is a real `<table>` for truth tables and relation matrices: static, or a stepper if it has steps, where changed cells persist and highlights last one step. Worked steps reveal a proof cumulatively, with a "Show all" control. Neither has a check, so they carry nothing to keep private.
+- The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. Every stepped kind shares one stepper (prev/next, play/pause, arrow keys, and no controls for a single step), and at either end prev or next stays focusable, so the keyboard keeps its place. One polite live region in each announces the current step whole, whichever way the learner moved: its number, explanation, and what's otherwise only drawn, so steps with the same explanation aren't silent, and the visible counter is hidden from screen readers so it isn't said twice. A trace is that stepper over a sequence, and also announces which values the step changed. A set diagram is a Venn diagram of 1 to 3 sets, stepped if it has steps; each region is computed as its exact shape, so a step can highlight any region, and what a region holds is measured against its exact space at the drawn size, re-measured on resize; what doesn't fit moves to a list below the diagram, leaving a marker such as `n = 30 ↓` or just `↓`. A count shows as `n = 7`, so it can't be mistaken for an element. A graph is drawn by the browser, never placed by the model: d3-hierarchy for a real tree when `kind` is `tree`, where an edge's optional `side` keeps a lone child to its left or right, and otherwise a d3-force layout run to the end once per graph, so it's deterministic and nothing moves while stepping. It's stepped if it has steps. Self-loops and parallel edges are drawn. Labels are HTML over the SVG and scale with it down to 11px, after which the graph scrolls in its own box, which then takes the arrow keys for scrolling and is a named tab stop. A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered. A table is a real `<table>` for truth tables and relation matrices: static, or stepped if it has steps, where changed cells persist and highlights last one step. Worked steps reveal a proof cumulatively, with a "Show all" control; only the current step is announced, and the earlier ones stay in the list to read. Only a check has anything to keep private.
 
 ## Markdown and maths
 
 `MathText` (`packages/web/src/MathText.tsx`) renders model-written text in one of two modes:
 
 - `block`, for replies: GitHub-flavoured markdown with KaTeX maths, `$...$` inline and `$$...$$` display.
-- `math`, for artifact text: the trace title and step explanations, every label, element and value in a set diagram, the graph's title, step explanations, node labels and edge labels, the check's question, option text, feedback and explanation, a table's title, headers, cells and explanations, and all worked-steps text. Only `$...$` is a formula and `\$` a dollar. Everything else is literal, including `$$`, so the options `2*3*4` and `234` stay different. For a large formula, start it with `\\displaystyle`. A new artifact field that may hold an answer or a structured value should use this mode; explanatory prose may use `block`.
+- `math`, for artifact text: a trace's title and step explanations, every label, element and variable in a set diagram, a graph's title, step explanations, node labels and edge labels, a check's question, option text, feedback and explanation, a table's title, headers, cells and explanations, and all worked-steps text. Only `$...$` is a formula and `\$` a dollar. Everything else is literal, including `$$`, so the options `2*3*4` and `234` stay different. For a large formula, start it with `\displaystyle`. A new artifact field that may hold an answer or a structured value should use this mode; explanatory prose may use `block`.
 
-Concept labels, pointer and range labels, an algorithm trace's variable names and values, and trace cell values aren't passed through `MathText`, and learner messages stay plain.
+Concept labels, a trace's cell values, pointer names, range labels and variables, and a graph's variables and edge weights aren't passed through `MathText`, and learner messages stay plain.
 
 A `$...$` is maths only if there's no whitespace just inside its dollars, no digit just after the closing one, and no backtick between them, and the first dollar after the opening one decides. So "costs $5 and $10" isn't a formula. In `block` mode, code and `\$` take precedence over a dollar. Raw HTML shows as text, images show their alt text and never load, and only `http`, `https` and `mailto` links work. A reply is rendered block by block, so a streamed delta only re-renders its last block; a block over 50,000 characters, or with absurdly deep nesting at its line starts or a run of more than 32 `[` outside code, shows as plain text with its code still in a box, and so does a block that fails to render. Other hostile nesting, such as `[a [a [a ` repeated thousands of times, isn't detected and renders slowly.
