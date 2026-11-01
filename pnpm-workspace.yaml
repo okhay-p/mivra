@@ -2,5 +2,9 @@ packages:
   - packages/*
 
 onlyBuiltDependencies:
-  - better-sqlite3
   - esbuild
+
+# It ships prebuilt binaries, and its only install step is an implicit `node-gyp rebuild`, which does nothing where
+# there's a prebuild and fails without node-gyp, Python and a compiler. See "Native dependency" in the README.
+ignoredBuiltDependencies:
+  - better-sqlite3

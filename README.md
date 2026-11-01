@@ -12,7 +12,7 @@ An open-source, local-first AI agent harness for learning. Design docs and decis
 
 ## Setup
 
-Requires Node.js 22.12+ and pnpm 10 (`npm i -g pnpm`, or prefix commands with `npx pnpm@10`).
+Requires Node.js 22.14+ and pnpm 10 (`npm i -g pnpm`, or prefix commands with `npx pnpm@10`).
 
 ```sh
 pnpm install
@@ -20,6 +20,28 @@ cp .env.example .env   # add a provider key and set MIVRA_MODEL
 ```
 
 `MIVRA_MODEL` is `<provider>:<model-id>`. Providers: `anthropic`, `openai`, and `openrouter` (set `OPENROUTER_API_KEY`, then use an id from [openrouter.ai/models](https://openrouter.ai/models), e.g. `openrouter:<vendor>/<model>`). Mivra's learning tools need tool calling, so pick a model that lists tool support; many free models don't.
+
+## Native dependency
+
+`better-sqlite3` ships prebuilt Node-API binaries inside its npm package, so `pnpm install` needs no compiler or Python and the binary doesn't depend on the exact Node version. `pnpm-workspace.yaml` ignores the package's install step, which would only run `node-gyp` and fail where it isn't installed.
+
+| Platform | Binary | Tested here |
+|---|---|---|
+| Linux x64, glibc 2.34+ | yes | yes: install, query, on glibc 2.36 and 2.41; server tests on 2.41 |
+| Linux x64, musl | yes | yes: install and query on Alpine |
+| Linux arm64 (glibc 2.34+ or musl) | yes | no |
+| macOS x64 and arm64 | yes | no |
+| Windows x64 and arm64 | yes | no |
+
+Other platforms have no binary, and glibc older than 2.34 can't load the one provided (it fails with ``version `GLIBC_2.33' not found``). `pnpm install` still succeeds there, and the server fails when it opens the database. To build from source, install Python, `make` and a C++20 compiler, then:
+
+```sh
+cd node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3
+rm -rf prebuilds   # the loader prefers these over a local build
+npx node-gyp rebuild --release
+```
+
+This worked on Debian 12 with g++ 12, taking over ten minutes, and failed on Ubuntu 20.04 with g++ 9.4, so on a system that old, upgrade instead. Reinstalling restores the prebuilds, so it has to be repeated afterwards. Building on macOS or Windows hasn't been tried.
 
 ## Commands
 
@@ -78,7 +100,7 @@ The agent shows interactive artifacts through tool calls (ADR-006): `show_algori
 - Each tool call's input is validated against its `packages/protocol` schema and stored in `artifacts` with the full spec. Client output fails closed: the live stream and `GET /api/sessions/{id}/messages` pass only text and lifecycle parts plus `data-artifact` parts with the artifact's public view. Raw tool calls, model reasoning, sources and files never reach a client, so a check's answer key, explanation and feedback stay on the server.
 - `POST /api/artifacts/{id}/attempts` with `{ "answer": { "optionIndex": n } }` grades a check deterministically and returns the view with the grade. One attempt per check, accepted once the reply that asked it has finished.
 - On later turns, each check's tool result tells the model whether the learner answered and how they did.
-- The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. Every stepped kind shares one stepper (prev/next, play/pause, arrow keys, and no controls for a single step), and at either end prev or next stays focusable, so the keyboard keeps its place. One polite live region in each announces a step whole: its number, explanation, and what's otherwise only drawn, so steps with the same explanation aren't silent. A trace is that stepper over a sequence. A set diagram is a Venn diagram of 1 to 3 sets, stepped if it has steps; each region is computed as its exact shape, so a step can highlight any region, and what a region holds is measured against its exact space at the drawn size, re-measured on resize; what doesn't fit moves to a list below the diagram, leaving a marker such as `n = 30 ↓` or just `↓`. A count shows as `n = 7`, so it can't be mistaken for an element. A graph is drawn by the browser, never placed by the model: d3-hierarchy for a real tree when `kind` is `tree`, where an edge's optional `side` keeps a lone child to its left or right, and otherwise a d3-force layout run to the end once per graph, so it's deterministic and nothing moves while stepping. It's stepped if it has steps. Self-loops and parallel edges are drawn. Labels are HTML over the SVG and scale with it down to 11px, after which the graph scrolls in its own box, which then takes the arrow keys for scrolling and is a named tab stop. A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered. A table is a real `<table>` for truth tables and relation matrices: static, or stepped if it has steps, where changed cells persist and highlights last one step. Worked steps reveal a proof cumulatively, with a "Show all" control. Only a check has anything to keep private.
+- The web UI renders `data-artifact` parts by kind (`packages/web/src/artifacts/`). Each part is validated against the protocol's `ArtifactView` first; anything that fails shows a "can't display this item" placeholder. Every stepped kind shares one stepper (prev/next, play/pause, arrow keys, and no controls for a single step), and at either end prev or next stays focusable, so the keyboard keeps its place. One polite live region in each announces the current step whole, whichever way the learner moved: its number, explanation, and what's otherwise only drawn, so steps with the same explanation aren't silent, and the visible counter is hidden from screen readers so it isn't said twice. A trace is that stepper over a sequence, and also announces which values the step changed. A set diagram is a Venn diagram of 1 to 3 sets, stepped if it has steps; each region is computed as its exact shape, so a step can highlight any region, and what a region holds is measured against its exact space at the drawn size, re-measured on resize; what doesn't fit moves to a list below the diagram, leaving a marker such as `n = 30 ↓` or just `↓`. A count shows as `n = 7`, so it can't be mistaken for an element. A graph is drawn by the browser, never placed by the model: d3-hierarchy for a real tree when `kind` is `tree`, where an edge's optional `side` keeps a lone child to its left or right, and otherwise a d3-force layout run to the end once per graph, so it's deterministic and nothing moves while stepping. It's stepped if it has steps. Self-loops and parallel edges are drawn. Labels are HTML over the SVG and scale with it down to 11px, after which the graph scrolls in its own box, which then takes the arrow keys for scrolling and is a named tab stop. A check posts the learner's choice and then shows the grade. Its options stay disabled while the reply that contains it is still streaming, and once it has been answered. A table is a real `<table>` for truth tables and relation matrices: static, or stepped if it has steps, where changed cells persist and highlights last one step. Worked steps reveal a proof cumulatively, with a "Show all" control; only the current step is announced, and the earlier ones stay in the list to read. Only a check has anything to keep private.
 
 ## Markdown and maths
 
