@@ -356,7 +356,42 @@ const wideFormulaTrace = {
   steps: [{ explanation: wideFormula }, { explanation: "Then this." }],
 };
 
+// Formulas with nowhere to break, in every place a stepped artifact can draw one. Chromium makes anything that overflows a tab stop.
+const unbroken = (letter: string) => `$${letter.repeat(22)}$`;
+const tabSet = {
+  title: "Long labels",
+  sets: [{ id: "a", label: unbroken("W") }, { id: "b", label: "$B$" }],
+  universe: unbroken("U"),
+  regions: [{ in: ["a"], elements: [unbroken("M")] }, { in: ["b"], elements: [2] }],
+  steps: [
+    { explanation: "Look at this one.", highlights: [{ in: ["a"] }], variables: [{ name: "x", value: unbroken("V") }] },
+    { explanation: "Then stop." },
+  ],
+};
+const tabGraph = {
+  title: "Long labels",
+  directed: false,
+  nodes: [{ id: "a", label: unbroken("W") }, { id: "b" }],
+  edges: [{ from: "a", to: "b", label: unbroken("M") }],
+  steps: [{ explanation: "Look at this one.", nodeStates: [{ id: "a" }], variables: [{ name: "x", value: longValue.repeat(3) }] }, { explanation: "Then stop." }],
+};
+const tabTrace = {
+  title: "Long values",
+  values: [longValue, longValue, longValue],
+  steps: [{ explanation: "Look at this one.", variables: [{ name: "x", value: longValue.repeat(3) }] }, { explanation: "Then stop." }],
+};
+const tabTable = {
+  title: "Long cells",
+  columns: [unbroken("W")],
+  rows: [[unbroken("M")]],
+  steps: [{ explanation: "Look at this one." }, { explanation: "Then stop." }],
+};
+
 const SCRIPTS: Record<string, Step[]> = {
+  tabset: [{ tool: "show_set_diagram", input: tabSet }, { text: "Tab through the diagram." }],
+  tabgraph: [{ tool: "show_graph", input: tabGraph }, { text: "Tab through the graph." }],
+  tabtrace: [{ tool: "show_algorithm_trace", input: tabTrace }, { text: "Tab through the trace." }],
+  tabtable: [{ tool: "show_table", input: tabTable }, { text: "Tab through the table." }],
   widegraph: [{ tool: "show_graph", input: graphWide }, { text: "Scroll the long graph." }],
   wideset: [{ tool: "show_set_diagram", input: vennWide }, { text: "Scroll the long diagram." }],
   widetrace: [{ tool: "show_algorithm_trace", input: wideFormulaTrace }, { text: "Scroll the long trace." }],

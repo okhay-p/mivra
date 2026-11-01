@@ -105,8 +105,9 @@ describe("AlgorithmTrace", () => {
 
   it("scrolls a long title or explanation in its own box, which keeps its arrow keys", () => {
     renderTrace();
-    const [title, explanation] = screen.getAllByTestId("step-scroll");
-    expect(title!.closest("h3")).toBeTruthy();
+    const boxes = screen.getAllByTestId("step-scroll");
+    const explanation = boxes.at(-1);
+    expect(boxes[0]!.closest("h3")).toBeTruthy();
     expect(explanation!.textContent).toBe("Compare the first two.");
     fireEvent.keyDown(explanation!, { key: "ArrowRight" });
     expect(screen.getByText("Step 1 of 3")).toBeTruthy();

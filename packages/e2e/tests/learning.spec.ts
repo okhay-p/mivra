@@ -74,7 +74,7 @@ test.describe("set diagram", () => {
       await diagram(page).getByRole("button", { name: "Next" }).click();
     }
     await expect.poll(() => highlighted(page)).toEqual(["3:active", "7:done", "0:muted"]);
-    await expect(diagram(page).getByTestId("set-key")).toContainText("Ruled out:outside");
+    await expect(diagram(page).getByTestId("set-key")).toContainText("Ruled out: outside");
 
     // The browser's own hit test: every point away from an edge is in the one region its circles say it is.
     const wrong = await diagram(page).evaluate((root) => {

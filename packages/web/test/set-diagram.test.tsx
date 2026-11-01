@@ -81,11 +81,11 @@ describe("SetDiagram", () => {
     expect(setDiagramStateAt(venn.spec, 1).tones.size).toBe(0);
     renderDiagram();
     expect(tones()).toEqual(["3:active", "0:muted"]);
-    expect(document.querySelector("dl")?.textContent).toContain("size");
+    expect(screen.getByTestId("set-variables").textContent).toContain("size");
     expect(screen.getByTestId("set-explanation").textContent).toBe("Look at the overlap.");
     next();
     expect(tones()).toEqual([]);
-    expect(document.querySelector("dl")).toBeNull();
+    expect(screen.queryByTestId("set-variables")).toBeNull();
     next();
     expect(tones()).toEqual(["7:done"]);
   });
@@ -152,7 +152,7 @@ describe("SetDiagram", () => {
       renderDiagram();
       expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
       expect(screen.getByTestId("set-announcement").contains(screen.getByTestId("set-explanation"))).toBe(true);
-      expect(document.querySelector("dl")?.getAttribute("aria-hidden")).toBe("true");
+      expect(screen.getByTestId("set-variables").querySelector('[data-testid="step-scroll"] > [aria-hidden="true"]')).toBeTruthy();
     });
 
     it("isn't there without steps", () => {
@@ -164,7 +164,7 @@ describe("SetDiagram", () => {
   it("hides the drawing from screen readers, and puts the tones in visible words too", () => {
     renderDiagram();
     expect(screen.getByTestId("set-diagram").getAttribute("aria-hidden")).toBe("true");
-    expect(screen.getByTestId("set-key").textContent).toContain("Focus:in A and B, not C");
+    expect(screen.getByTestId("set-key").textContent).toContain("Focus: in A and B, not C");
   });
 
   it("shows elements, counts and the empty set in their regions", () => {

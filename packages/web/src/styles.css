@@ -241,6 +241,10 @@ div.math-text > * + *,
   max-width: none;
   overflow: visible;
 }
+/* Nothing inert can be scrolled, so it shouldn't offer to. What's cut off is listed below the drawing (SetDiagram.tsx). */
+[inert] .math-text .katex {
+  overflow: hidden;
+}
 .math-text .katex-display {
   margin: 0.6em 0;
   overflow-x: auto;

@@ -2,6 +2,7 @@ import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 const PLAY_INTERVAL_MS = 1500;
 
@@ -57,8 +58,9 @@ export function useStepper(count: number) {
  * Text in a stepped artifact whose formula may be too wide for the card. The whole text scrolls as one box, and
  * only when it has to is that box a tab stop, whose arrow keys scroll rather than step. A box that stops
  * overflowing while focused stays focusable, out of the tab order, until focus leaves, so the keyboard keeps its place.
+ * A tab stop can't be hidden from screen readers, so for something they get elsewhere, hide what's inside the box.
  */
-export function ScrollableText({ children }: { children: ReactNode }) {
+export function ScrollableText({ children, label = "Formula, scrolls sideways", className }: { children: ReactNode; label?: string; className?: string }) {
   const box = useRef<HTMLSpanElement>(null);
   const [overflows, setOverflows] = useState(false);
   const [focused, setFocused] = useState(false);
@@ -76,9 +78,9 @@ export function ScrollableText({ children }: { children: ReactNode }) {
   return (
     <span
       ref={box}
-      className="step-scroll block min-w-0 overflow-x-auto overflow-y-hidden"
+      className={cn("step-scroll block min-w-0 overflow-x-auto overflow-y-hidden", className)}
       data-testid="step-scroll"
-      {...(overflows ? { role: "group", "aria-label": "Formula, scrolls sideways" } : {})}
+      {...(overflows ? { role: "group", "aria-label": label } : {})}
       tabIndex={overflows ? 0 : focused ? -1 : undefined}
       onFocus={() => setFocused(true)}
       // Leaving the window blurs the box but keeps it the active element, for when the window comes back.

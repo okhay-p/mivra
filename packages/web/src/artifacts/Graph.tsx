@@ -188,9 +188,9 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         {state.variables.length > 0 && (
           <dl className="flex flex-wrap gap-2" aria-hidden={hasSteps ? true : undefined}>
             {state.variables.map((v, i) => (
-              <div key={i} className="bg-muted flex gap-1 rounded-sm px-2 py-0.5 font-mono text-xs">
-                <dt>{v.name}</dt>
-                <dd>= {String(v.value)}</dd>
+              <div key={i} className="bg-muted flex max-w-full min-w-0 gap-1 rounded-sm px-2 py-0.5 font-mono text-xs wrap-anywhere">
+                <dt className="min-w-0">{v.name}</dt>
+                <dd className="min-w-0">= {String(v.value)}</dd>
               </div>
             ))}
           </dl>

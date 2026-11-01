@@ -73,22 +73,22 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
         <p className="sr-only" data-testid="trace-description">
           Values: {state.values.map((v, i) => `index ${i}: ${String(v)}`).join(", ")}
         </p>
-        <div className="overflow-x-auto pb-1" aria-hidden="true">
-          <div className="inline-grid w-max gap-1 wrap-normal" style={{ gridTemplateColumns: `repeat(${n}, minmax(2.5rem, max-content))` }}>
+        <ScrollableText label="Values, scrolls sideways" className="pb-1">
+          <span aria-hidden="true" className="inline-grid w-max gap-1 wrap-normal" style={{ gridTemplateColumns: `repeat(${n}, minmax(2.5rem, max-content))` }}>
             {ranges.map((r, i) => (
-              <div
+              <span
                 key={`range-${i}`}
                 className={cn("min-h-5 rounded-sm px-1 text-center text-xs font-medium", STEP_TONES[r.tone ?? "active"])}
                 style={{ gridColumn: `${r.start + 1} / ${r.end + 2}`, gridRow: i + 1 }}
                 data-testid="trace-range"
               >
                 {r.label ?? " "}
-              </div>
+              </span>
             ))}
             {state.values.map((value, i) => {
               const tone = toneAt(i);
               return (
-                <div
+                <span
                   key={`cell-${i}`}
                   className={cn(
                     "bg-background relative grid h-10 place-items-center rounded-sm border px-2 font-mono text-sm",
@@ -99,30 +99,30 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
                 >
                   {String(value)}
                   <span className="text-muted-foreground absolute right-1 bottom-0 text-[0.6rem]">{i}</span>
-                </div>
+                </span>
               );
             })}
             {Array.from({ length: n }, (_, i) => {
               const names = pointers.filter((p) => p.index === i).map((p) => p.name);
               return names.length ? (
-                <div
+                <span
                   key={`pointers-${i}`}
                   className="text-foreground text-center font-mono text-xs font-medium"
                   style={{ gridColumn: i + 1, gridRow: ranges.length + 2 }}
                   data-testid="trace-pointer"
                 >
                   ↑ {names.join(", ")}
-                </div>
+                </span>
               ) : null;
             })}
-          </div>
-        </div>
+          </span>
+        </ScrollableText>
         {state.variables.length > 0 && (
           <dl className="flex flex-wrap gap-2" aria-hidden="true">
             {state.variables.map((v, i) => (
-              <div key={i} className="bg-muted flex gap-1 rounded-sm px-2 py-0.5 font-mono text-xs">
-                <dt>{v.name}</dt>
-                <dd>= {String(v.value)}</dd>
+              <div key={i} className="bg-muted flex max-w-full min-w-0 gap-1 rounded-sm px-2 py-0.5 font-mono text-xs wrap-anywhere">
+                <dt className="min-w-0">{v.name}</dt>
+                <dd className="min-w-0">= {String(v.value)}</dd>
               </div>
             ))}
           </dl>

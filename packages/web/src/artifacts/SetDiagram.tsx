@@ -43,6 +43,15 @@ function Inline({ text }: { text: string }) {
   return <MathText text={text} mode="math" />;
 }
 
+/** Text screen readers get elsewhere. If it's too wide it must still be reachable, so the box stays out of what's hidden. */
+function SeenOnly({ children }: { children: ReactNode }) {
+  return (
+    <ScrollableText>
+      <span aria-hidden="true">{children}</span>
+    </ScrollableText>
+  );
+}
+
 function Elements({ elements }: { elements: Region["elements"] }) {
   return elements.map((element, i) => (
     <Fragment key={i}>
@@ -119,14 +128,20 @@ function renderedSize(probe: Element): Size {
   return { width: width + scrolled, height };
 }
 
+/** Whether a drawn label is wider than its corner, which is decided here rather than by a probe as labels are always shown. */
+function isCutOff(label: Element): boolean {
+  return [label, ...label.querySelectorAll(".katex")].some((box) => box.scrollWidth > box.clientWidth);
+}
+
 /**
  * Decides what each region shows from the hidden probes `Diagram` renders, which lay out like the real contents.
  * This runs before paint, and again before paint on each change of width or when fonts arrive.
  * Without layout, as in jsdom, nothing is measured and every region shows its contents.
  */
-function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTMLDivElement | null>, ReadonlyMap<number, RegionFit>] {
+function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTMLDivElement | null>, ReadonlyMap<number, RegionFit>, readonly string[]] {
   const ref = useRef<HTMLDivElement>(null);
   const [fits, setFits] = useState<ReadonlyMap<number, RegionFit>>(new Map());
+  const [cutOff, setCutOff] = useState<readonly string[]>([]);
 
   useLayoutEffect(() => {
     const root = ref.current!;
@@ -141,6 +156,8 @@ function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTM
         if (contents && marker) next.set(mask, chooseRegionFit(slotBox(layout, layout.slots[mask]!, measuredWidth), renderedSize(contents), renderedSize(marker)));
       }
       setFits((current) => (next.size === current.size && [...next].every(([mask, fit]) => current.get(mask) === fit) ? current : next));
+      const labels = [...root.querySelectorAll<HTMLElement>("[data-label]")].filter(isCutOff).map((label) => label.dataset.label!);
+      setCutOff((current) => (current.join() === labels.join() ? current : labels));
     };
     measure();
     // The drawing's width doesn't depend on what's decided here, so this can't feed back into itself.
@@ -155,8 +172,10 @@ function useRegionFits(spec: SetDiagramSpec, layout: VennLayout): [RefObject<HTM
     };
   }, [spec, layout]);
 
-  return [ref, fits];
+  return [ref, fits, cutOff];
 }
+
+const LABEL_PLACES = ["Top left", "Top right", "Bottom left"];
 
 /** A set's label goes in a corner next to its circle. */
 function labelPosition(index: number, count: number): CSSProperties {
@@ -193,7 +212,7 @@ function Diagram({ spec, layout, tones, fits, drawing }: { spec: SetDiagramSpec;
   const regions = new Map(spec.regions.map((r) => [regionMask(spec, r.in), r]));
 
   return (
-    <div ref={drawing} className="relative mx-auto w-full max-w-md" style={{ aspectRatio: `${width} / ${height}` }} aria-hidden="true" data-testid="set-diagram">
+    <div ref={drawing} className="relative mx-auto w-full max-w-md" style={{ aspectRatio: `${width} / ${height}` }} aria-hidden="true" inert data-testid="set-diagram">
       <svg viewBox={`0 0 ${width} ${height}`} className="absolute inset-0 size-full">
         <defs>
           <pattern id={ids.hatch} patternUnits="userSpaceOnUse" width="10" height="10" patternTransform="rotate(45)">
@@ -222,14 +241,14 @@ function Diagram({ spec, layout, tones, fits, drawing }: { spec: SetDiagramSpec;
         ))}
       </svg>
       {spec.sets.map((set, i) => (
-        <div key={set.id} className="absolute text-xs leading-4 font-medium" style={labelPosition(i, spec.sets.length)} data-testid="set-label">
+        <div key={set.id} className="absolute text-xs leading-4 font-medium" style={labelPosition(i, spec.sets.length)} data-testid="set-label" data-label={i}>
           <span className="bg-card/85 rounded-sm px-0.5">
             <Inline text={set.label} />
           </span>
         </div>
       ))}
       {spec.universe !== undefined && (
-        <div className="text-muted-foreground absolute bottom-[1.5%] left-1/2 w-[36%] -translate-x-1/2 text-center text-xs leading-4" data-testid="set-universe-label">
+        <div className="text-muted-foreground absolute bottom-[1.5%] left-1/2 w-[36%] -translate-x-1/2 text-center text-xs leading-4" data-testid="set-universe-label" data-label="universe">
           <span className="bg-card/85 rounded-sm px-0.5">
             <Inline text={spec.universe} />
           </span>
@@ -279,7 +298,7 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
   const masks = drawnMasks(spec);
   const regions = new Map(spec.regions.map((r) => [regionMask(spec, r.in), r]));
   const highlighted = masks.filter((mask) => state.tones.has(mask));
-  const [drawing, fits] = useRegionFits(spec, layout);
+  const [drawing, fits, cutOff] = useRegionFits(spec, layout);
   const overflowing = masks.filter((mask) => (fits.get(mask) ?? "contents") !== "contents");
 
   return (
@@ -324,51 +343,54 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
           })}
         </ul>
         <Diagram spec={spec} layout={layout} tones={state.tones} fits={fits} drawing={drawing} />
-        {overflowing.length > 0 && (
-          <div aria-hidden="true" className="flex flex-col gap-1 text-xs" data-testid="set-overflow">
-            <p className="text-muted-foreground">↓ Doesn't fit in the diagram:</p>
-            <ul className="flex flex-col gap-1">
-              {overflowing.map((mask) => (
-                <li key={mask}>
-                  <span className="font-medium">
-                    <RegionName spec={spec} mask={mask} />:
-                  </span>{" "}
-                  <span className="font-mono">
-                    <RegionContents region={regions.get(mask)!} />
-                  </span>
-                </li>
-              ))}
-            </ul>
+        {/* These three are for the eye: the description and the announcement say the same, so they're not lists to a screen reader. */}
+        {(overflowing.length > 0 || cutOff.length > 0) && (
+          <div className="flex flex-col gap-1 text-xs" data-testid="set-overflow">
+            <p aria-hidden="true" className="text-muted-foreground">
+              ↓ Doesn't fit in the diagram:
+            </p>
+            {cutOff.map((label) => (
+              <SeenOnly key={label}>
+                <span className="font-medium">{label === "universe" ? "Universe" : `${LABEL_PLACES[Number(label)]} label`}:</span>{" "}
+                <Inline text={label === "universe" ? spec.universe! : spec.sets[Number(label)]!.label} />
+              </SeenOnly>
+            ))}
+            {overflowing.map((mask) => (
+              <SeenOnly key={mask}>
+                <span className="font-medium">
+                  <RegionName spec={spec} mask={mask} />:
+                </span>{" "}
+                <span className="font-mono">
+                  <RegionContents region={regions.get(mask)!} />
+                </span>
+              </SeenOnly>
+            ))}
           </div>
         )}
         {highlighted.length > 0 && (
-          <ul aria-hidden="true" className="flex flex-wrap gap-x-3 gap-y-1 text-xs" data-testid="set-key">
+          <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs" data-testid="set-key">
             {highlighted.map((mask) => {
               const tone = state.tones.get(mask)!;
               return (
-                <li key={mask} className="flex items-baseline gap-1" data-tone={tone}>
-                  <span className="font-medium">{TONES[tone].word}:</span>
-                  <span>
-                    <RegionName spec={spec} mask={mask} />
-                  </span>
-                </li>
+                <div key={mask} className="max-w-full min-w-0" data-tone={tone}>
+                  <SeenOnly>
+                    <span className="font-medium">{TONES[tone].word}:</span> <RegionName spec={spec} mask={mask} />
+                  </SeenOnly>
+                </div>
               );
             })}
-          </ul>
+          </div>
         )}
         {state.variables.length > 0 && (
-          <dl aria-hidden="true" className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2" data-testid="set-variables">
             {state.variables.map((v, i) => (
-              <div key={i} className="bg-muted flex gap-1 rounded-sm px-2 py-0.5 font-mono text-xs">
-                <dt>
-                  <Inline text={v.name} />
-                </dt>
-                <dd>
-                  = <Inline text={String(v.value)} />
-                </dd>
+              <div key={i} className="bg-muted max-w-full min-w-0 rounded-sm px-2 py-0.5 font-mono text-xs">
+                <SeenOnly>
+                  <Inline text={v.name} /> = <Inline text={String(v.value)} />
+                </SeenOnly>
               </div>
             ))}
-          </dl>
+          </div>
         )}
         {stepCount > 0 && (
           <>
