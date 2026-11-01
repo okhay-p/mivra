@@ -15,7 +15,7 @@ export const WorkedStep = z
       .trim()
       .min(1)
       .max(1000)
-      .describe("What this step establishes, mostly as a formula in $...$. For large sums and fractions, start the formula with \\displaystyle; $$ is not available."),
+      .describe("What this step establishes, mostly as a formula in $...$. For large sums and fractions, put \\displaystyle INSIDE the dollars, e.g. $\\displaystyle\\sum_{i=1}^{n} i$; $$ is not available."),
     justification: z.string().trim().min(1).max(500).describe('Why it follows, e.g. "by the inductive hypothesis".'),
   })
   .strict();

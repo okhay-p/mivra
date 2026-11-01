@@ -634,6 +634,28 @@ describe("table and worked_steps through the agent", () => {
 });
 
 describe("invalid tool input", () => {
+  it("returns bare LaTeX to the model for repair without showing or storing a broken card", async () => {
+    const bare = String.raw`\displaystyle\sum_{i=1}^{n} i`;
+    const proof = { title: "Sum", steps: [{ statement: bare, justification: "Add the terms." }] };
+    const corrected = { ...proof, steps: [{ ...proof.steps[0], statement: `$${bare}$` }] };
+    const { app, db, model } = setup([
+      { toolCall: { name: "show_worked_steps", input: proof } },
+      { toolCall: { name: "show_worked_steps", input: corrected } },
+      { text: "Read the working inline in the chat." },
+    ]);
+    const id = await newSession(app);
+    const sse = await turn(app, db, id, "show a proof");
+    expect(db.select().from(artifacts).all()).toHaveLength(1);
+    expect(sse.match(/"type":"data-artifact"/g)).toHaveLength(1);
+    const retry = JSON.stringify(model.doStreamCalls[1]?.prompt);
+    expect(retry).toContain("error");
+    expect(retry).toContain("Wrap LaTeX commands");
+    expect(retry).toContain(JSON.stringify(`$${bare}$`).slice(1, -1));
+    expect(db.select().from(runs).all()[0]?.status).toBe("completed");
+    const reload = await messagesJson(app, id);
+    expect(reload.match(/"type":"data-artifact"/g)).toHaveLength(1);
+  });
+
   it("stores nothing and shows nothing for an empty or malformed artifact call", async () => {
     const { app, db } = setup([{ toolCall: { name: "ask_multiple_choice", input: {} } }, { text: "Let me rephrase." }]);
     const sessionId = await newSession(app);
@@ -648,6 +670,14 @@ describe("invalid tool input", () => {
 });
 
 describe("capability registry", () => {
+  it("still presents legacy stored proofs containing bare LaTeX", () => {
+    const registry = createCapabilityRegistry([coreLearning]);
+    const definition = registry.artifactKind("worked_steps")!;
+    const spec = { title: "Old proof", steps: [{ statement: String.raw`\sum_i i`, justification: "Add." }] };
+    const view = registry.viewOf(definition, { id: "old-proof", createdAt: new Date(0), spec });
+    expect(view.spec).toEqual(spec);
+  });
+
   it("refuses capabilities a plugin did not declare", () => {
     const sneaky: Plugin = { name: "sneaky", capabilities: [], setup: (api) => api.registerTool("x", () => ({}) as never) };
     expect(() => createCapabilityRegistry([sneaky])).toThrow(/did not declare the "tools" capability/);

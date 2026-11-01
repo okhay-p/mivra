@@ -27,7 +27,7 @@ export const coreLearning: Plugin = {
       version: trace.version,
       toolName: trace.toolName,
       description: trace.description,
-      spec: trace.spec,
+      spec: trace.input,
       toView: ({ id, createdAt, spec }) => ({
         id,
         createdAt: createdAt.toISOString(),
@@ -43,7 +43,7 @@ export const coreLearning: Plugin = {
       version: graph.version,
       toolName: graph.toolName,
       description: graph.description,
-      spec: graph.spec,
+      spec: graph.input,
       toView: ({ id, createdAt, spec }) => ({
         id,
         createdAt: createdAt.toISOString(),
@@ -59,7 +59,7 @@ export const coreLearning: Plugin = {
       version: sets.version,
       toolName: sets.toolName,
       description: sets.description,
-      spec: sets.spec,
+      spec: sets.input,
       toView: ({ id, createdAt, spec }) => ({
         id,
         createdAt: createdAt.toISOString(),
@@ -75,7 +75,7 @@ export const coreLearning: Plugin = {
       version: mc.version,
       toolName: mc.toolName,
       description: mc.description,
-      spec: mc.spec,
+      spec: mc.input,
       toView: ({ id, createdAt, spec, attempt }) => ({
         id,
         createdAt: createdAt.toISOString(),
@@ -117,7 +117,7 @@ export const coreLearning: Plugin = {
       version: table.version,
       toolName: table.toolName,
       description: table.description,
-      spec: table.spec,
+      spec: table.input,
       toView: ({ id, createdAt, spec }) => ({
         id,
         createdAt: createdAt.toISOString(),
@@ -133,7 +133,7 @@ export const coreLearning: Plugin = {
       version: worked.version,
       toolName: worked.toolName,
       description: worked.description,
-      spec: worked.spec,
+      spec: worked.input,
       toView: ({ id, createdAt, spec }) => ({
         id,
         createdAt: createdAt.toISOString(),

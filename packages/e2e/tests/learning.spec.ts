@@ -638,3 +638,16 @@ test.describe("learning flow", () => {
     await expect(page.getByText(/The server says/)).toBeVisible();
   });
 });
+
+test("a malformed proof retries into one inline card with rendered math", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New session" }).first().click();
+  await page.getByRole("textbox", { name: "Message" }).fill("repairproof");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("The repaired proof is inline.")).toBeVisible();
+  const proof = page.getByRole("region", { name: /Sum/ });
+  await expect(proof).toHaveCount(1);
+  await expect(proof.getByTestId("worked-step").locator(".katex")).toHaveCount(1);
+  await page.reload();
+  await expect(page.getByRole("region", { name: /Sum/ }).getByTestId("worked-step").locator(".katex")).toHaveCount(1);
+});

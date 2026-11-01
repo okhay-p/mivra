@@ -418,7 +418,15 @@ const tabTable = {
   steps: [{ explanation: "Look at this one." }, { explanation: "Then stop." }],
 };
 
+const repairProof = { title: "Sum", steps: [{ statement: String.raw`\displaystyle\sum_{i=1}^{n} i`, justification: "Add the terms." }] };
+
 const SCRIPTS: Record<string, Step[]> = {
+  repairproof: [
+    { tool: "show_worked_steps", input: repairProof },
+    { tool: "show_worked_steps", input: { ...repairProof, steps: [{ ...repairProof.steps[0], statement: `$${repairProof.steps[0]!.statement}$` }] } },
+    { text: "The repaired proof is inline." },
+  ],
+
   tabset: [{ tool: "show_set_diagram", input: tabSet }, { text: "Tab through the diagram." }],
   tabgraph: [{ tool: "show_graph", input: tabGraph }, { text: "Tab through the graph." }],
   tabtrace: [{ tool: "show_algorithm_trace", input: tabTrace }, { text: "Tab through the trace." }],
