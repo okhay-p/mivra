@@ -222,6 +222,11 @@ describe("layoutGraph", () => {
     edges: Array.from({ length: 200 }, (_, i) => ({ from: `n${i % 60}`, to: `n${(i * 7 + 11) % 60}`, weight: i })),
   };
 
+  it("gives the same coordinates for the same spec", () => {
+    expect(layoutGraph(dense)).toEqual(layoutGraph(structuredClone(dense)));
+    expect(layoutGraph(base)).toEqual(layoutGraph(base));
+  });
+
   it("ignores steps", () => {
     const stepped: GraphSpec = { ...base, title: "x", steps: [{ explanation: "x", nodeStates: [{ id: "a" }] }] };
     expect(layoutGraph(stepped)).toEqual(layoutGraph(base));
@@ -301,7 +306,7 @@ describe("layoutGraph", () => {
       expect(layout.mode).toBe("tree");
       expectInorder(layout, inorder);
       expectParentsAbove(layout, spec);
-        });
+    });
 
     it("keeps nodes on one level apart, and two siblings' weights from touching, however wide", () => {
       const spec = tree(["root", "a-very-long-node-name", "left"], ["root", "another-long-name", "right"]);
