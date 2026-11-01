@@ -13,7 +13,8 @@ async function showGraph(page: Page, script: string) {
   await page.getByRole("textbox", { name: "Message" }).fill(`${script} ${Date.now()}`);
   await page.getByRole("button", { name: "Send" }).click();
   const graph = page.getByRole("region", { name: /graph$/i });
-  await expect(graph).toBeVisible();
+  // The enlarged maths fixture can take longer to commit in Firefox/WebKit under the full suite.
+  await expect(graph).toBeVisible({ timeout: 15_000 });
   return graph;
 }
 
