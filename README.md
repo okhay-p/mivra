@@ -50,7 +50,8 @@ This worked on Debian 12 with g++ 12, taking over ten minutes, and failed on Ubu
 | `pnpm dev` | Server on :4096 with reload, plus Vite on :5173 proxying `/api` to it |
 | `pnpm build && pnpm start` | Production: the server serves the built web UI on :4096 |
 | `pnpm test` | Protocol, server API (mock model, no API key needed) and web component tests (Vitest + jsdom) |
-| `pnpm test:e2e` | Browser tests (Playwright): the built UI and real server with a scripted model, so no API key is needed. All of them run in Chromium, and the graph spec also in Firefox and WebKit. Run `pnpm --filter @mivra/e2e exec playwright install chromium firefox webkit` once first. It uses port 4198; set `MIVRA_E2E_PORT` to change it |
+| `pnpm test:e2e` | Chromium browser tests: built UI and real server with a scripted model; no API key. Install with `pnpm --filter @mivra/e2e exec playwright install chromium`. Uses port 4198; override with `MIVRA_E2E_PORT` |
+| `pnpm test:e2e:all` | Full browser suite, including graph tests in Firefox and WebKit. Required for graph, layout, font or keyboard changes. Install with `pnpm --filter @mivra/e2e exec playwright install chromium firefox webkit` |
 | `pnpm typecheck` | Type-check all packages |
 | `pnpm --filter @mivra/server db:generate` | Generate a migration after editing `src/db/schema.ts` |
 

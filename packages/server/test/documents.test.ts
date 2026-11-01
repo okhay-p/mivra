@@ -753,6 +753,20 @@ describe("naming a document", () => {
   const strongMatches = (word: string) => Array.from({ length: 50 }, (_, i) => [`${word} ${word} ${word} ${i}`]);
   const weakMatch = (word: string) => [...Array.from({ length: 12 }, () => "plain filler words that mean nothing much at all"), word];
 
+  for (const names of [["Notes.pdf", "NOTES.pdf"], ["NOTES.pdf", "Notes.pdf"], ["Set [A].pdf", "SET [a].PDF"], ["SET [a].PDF", "Set [A].pdf"]]) {
+    for (const form of ["literal", "spelled"]) {
+      it(`collects case-equivalent ${form} filenames in upload order: ${names.join(", ")}`, async () => {
+        const { newSession, upload, toldFor } = setup();
+        const id = await newSession();
+        for (const name of names) await upload(id, makePdf([["Propositions and truth tables."]]), name);
+        await upload(id, makePdf([["Unrelated opening text."]]), "Other.pdf");
+        const literal = names[0]!.toUpperCase();
+        const name = form === "literal" ? literal : literal.replace(/[^\p{L}\p{N}]+/gu, " ");
+        expect(documentsIn(await toldFor(id, `Summarize ${name}`))).toEqual(names);
+      });
+    }
+  }
+
   it("reads that document from its start, even if another's text mentions it", async () => {
     const { newSession, upload, toldFor } = setup();
     const id = await newSession();

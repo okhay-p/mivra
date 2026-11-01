@@ -190,6 +190,40 @@ test.describe("graph", () => {
       });
     }
 
+    test(`clipped vertices with shared prefixes have stable drawing keys at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      const graph = await showGraph(page, "graphcutgeneral");
+      await fontsLoaded(page);
+      const list = graph.getByTestId("graph-overflow");
+      const before = await centres(page);
+      const checkKeys = async () => {
+        for (const [i, id] of ["a", "b", "c", "d"].entries()) {
+          const key = `[${i + 1}]`;
+          const node = graph.locator(`[data-node="${id}"]`);
+          await expect(node.locator("[data-node-key]")).toHaveText(key);
+          const row = list.getByTestId("step-scroll").filter({ hasText: `Node ${key}:` });
+          await expect(row).toHaveCount(1);
+          await expect(row.locator(".katex-html")).toContainText(`WWWWWWWWWWWWW${String.fromCharCode(65 + i)}W`);
+          await expect(row.locator('span[aria-hidden="true"]').first()).toBeAttached();
+          // The key stays inside the same box as the vertex, even when its label is taller or wider.
+          expect(await node.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const key = element.querySelector("[data-node-key]")!.getBoundingClientRect();
+            return key.left >= box.left && key.right <= box.right && key.top >= box.top && key.bottom <= box.bottom;
+          })).toBe(true);
+        }
+        for (const ends of ["[1] – [2]", "[2] – [3]", "[3] – [4]", "[4] – [1]"]) {
+          await expect(list.getByText(`Edge ${ends}:`, { exact: true })).toHaveCount(1);
+        }
+      };
+      await checkKeys();
+      await expect(graph.getByTestId("graph-canvas")).toHaveAttribute("aria-hidden", "true");
+      await graph.getByRole("button", { name: "Next" }).click();
+      await checkKeys();
+      expectSamePlaces(await centres(page), before);
+      expect(await labelClashes(page)).toEqual([]);
+    });
+
     test(`labels cut short are marked, and listed in full, at ${width}px`, async ({ page }) => {
       await page.setViewportSize({ width, height: 800 });
       const graph = await showGraph(page, "graphcutkatex");
@@ -238,10 +272,17 @@ test.describe("graph", () => {
       await page.setViewportSize({ width, height: 800 });
       const graph = await showGraph(page, "graphshort");
       await fontsLoaded(page);
-      await expect(graph.getByTestId("graph-node")).toHaveCount(18);
+      await expect(graph.getByTestId("graph-node")).toHaveCount(22);
       await page.waitForTimeout(200);
       expect(await graph.locator("[data-truncated]").evaluateAll((all) => all.map((e) => `${e.getAttribute("data-label-clip")}: ${e.textContent}`))).toEqual([]);
       await expect(graph.getByTestId("graph-overflow")).toHaveCount(0);
+      await expect(graph.getByTestId("graph-edge-label")).toHaveCount(22);
+      expect(await labelClashes(page)).toEqual([]);
+      const before = await centres(page);
+      await graph.getByRole("button", { name: "Next" }).click();
+      expectSamePlaces(await centres(page), before);
+      expect(await labelClashes(page)).toEqual([]);
+      await expect(graph.locator("[data-truncated]")).toHaveCount(0);
     });
   }
 });

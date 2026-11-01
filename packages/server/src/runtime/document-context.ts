@@ -82,7 +82,7 @@ const couldBeWord = (document: DocumentRow) => wordsOf(withoutExtension(document
 
 /** The filename exactly as it's written, whatever its case or the amount of space in it. */
 function literalPattern(filename: string): string | undefined {
-  const name = filename.normalize("NFC").trim();
+  const name = filename.normalize("NFC").toLowerCase().trim();
   if (withoutExtension(name) === name || !withoutExtension(name).trim()) return undefined;
   return name.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&").replace(/\s+/g, "\\s+");
 }
@@ -160,7 +160,7 @@ function maskBoundNames(documents: DocumentRow[], text: string, named: Set<Docum
 function namedDocuments(documents: DocumentRow[], text: string): { named: DocumentRow[]; rest: string } {
   const named = new Set<DocumentRow>();
   const literal = maskForms(text.normalize("NFC"), formsOf(documents, (d) => literalPattern(d.filename)), named);
-  const spelled = maskForms(literal, formsOf(documents, (d) => (couldBeWord(d) || !literalPattern(d.filename) ? undefined : wordsPattern(wordsOf(d.filename.normalize("NFC"))))), named);
+  const spelled = maskForms(literal, formsOf(documents, (d) => (couldBeWord(d) || !literalPattern(d.filename) ? undefined : wordsPattern(wordsOf(d.filename.normalize("NFC").toLowerCase())))), named);
   const rest = maskBoundNames(documents, spelled, named);
   return { named: documents.filter((d) => named.has(d)), rest };
 }

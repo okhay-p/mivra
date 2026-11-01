@@ -12,6 +12,7 @@
     "start": "pnpm --filter @mivra/server start",
     "test": "pnpm -r test",
     "test:e2e": "pnpm --filter @mivra/e2e test:e2e",
+    "test:e2e:all": "pnpm --filter @mivra/e2e test:e2e:all",
     "typecheck": "pnpm -r typecheck"
   }
 }

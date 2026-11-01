@@ -293,6 +293,7 @@ const wideGeneral = (title: string, label: (i: number) => string) => ({
   directed: false,
   nodes: ["a", "b", "c", "d"].map((id, i) => ({ id, label: label(i) })),
   edges: [["a", "b"], ["b", "c"], ["c", "d"], ["d", "a"]].map(([from, to], i) => ({ from, to, label: label(i + 4) })),
+  steps: [{ explanation: "Start here.", nodeStates: [{ id: "a" }] }, { explanation: "Follow the cycle.", nodeStates: [{ id: "b" }] }],
 });
 // 24 characters each, but far wider than that estimates.
 const katexLabel = (i: number) => `$\\text{WWWWWWWWWWWWW${String.fromCharCode(65 + i)}W}$`;
@@ -300,12 +301,13 @@ const cjkLabel = (i: number) => `${"图论中的最短路径问题".repeat(2)}�
 // Taller than a node has room for, and one too wide even for a row of the list below the drawing.
 const graphTall = { title: "Tall labels", directed: false, nodes: [{ id: "a", label: "$\\dfrac{a^{b^c}}{d_e}$" }, { id: "b" }, { id: "c", label: "$\\Huge\\text{WWWWWWWWWW}$" }], edges: [{ from: "a", to: "b", label: "$\\dfrac{a^2}{b^2}$" }, { from: "b", to: "c" }] };
 // What a graph's labels normally look like. None of these may be cut short.
-const shortFormulas = ["$v_0$", "$v_{10}$", "$A$", "$MN$", "$x^2$", "$\\alpha$", "$\\emptyset$", "$\\{a,b\\}$", "$f(x)$", "$A \\cup B$", "$p \\land q$", "$\\sqrt{2}$", "$\\mathbb{N}$", "$2^n$", "$\\frac{a}{b}$", "start", "12", "图论"];
+const shortFormulas = ["$a+b+c$", "$\\{1,2,3\\}$", "$f:A\\to B$", "$x+y$", "$v_0$", "$v_{10}$", "$A$", "$MN$", "$x^2$", "$\\alpha$", "$\\emptyset$", "$\\{a,b\\}$", "$f(x)$", "$A \\cup B$", "$p \\land q$", "$\\sqrt{2}$", "$\\mathbb{N}$", "$2^n$", "$\\frac{a}{b}$", "start", "12", "图论"];
 const graphShort = {
   title: "Everyday labels",
   directed: true,
   nodes: shortFormulas.map((label, i) => ({ id: `n${i}`, label })),
-  edges: ["$e_1$", "$w$", "$A$", "$x^2$", "$\\alpha$", "$a+b$", "go", "a", "yes", "$\\leq$", "$1/2$", "图", "x=1"].map((label, i) => ({ from: `n${i}`, to: `n${i + 1}`, label })),
+  edges: shortFormulas.map((label, i) => ({ from: `n${i}`, to: `n${(i + 1) % shortFormulas.length}`, label })),
+  steps: [{ explanation: "Visit a vertex.", nodeStates: [{ id: "n0" }] }, { explanation: "Follow an edge.", nodeStates: [{ id: "n1" }], edgeStates: [{ from: "n0", to: "n1" }] }],
 };
 
 // Long formulas in the title and an explanation, which arrow keys scroll while the card's arrow keys step.

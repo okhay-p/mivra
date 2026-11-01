@@ -63,10 +63,22 @@ export interface GraphLayout {
 type LayoutInput = Pick<GraphSpec, "directed" | "kind" | "nodes" | "edges">;
 type GraphShape = NonNullable<ReturnType<typeof graphTreeShape>>;
 
-/** A label's source, roughly as wide as it renders: maths is shorter than the LaTeX that writes it. A label that turns out wider is clipped. */
+/** Budget one KaTeX em per visible formula character, including room for operator spacing.
+ * Commands represent one glyph; escaped delimiters remain visible, grouping braces do not.
+ * Cap formula runs at twelve em: genuine outliers still clip inside deterministic boxes.
+ */
 function labelWidth(text: string) {
-  const visible = text.includes("$") ? text.replace(/\\[a-zA-Z]+/g, "x").replace(/[$_^{}\\]/g, "") : text;
-  return visible.length * CHAR_WIDTH + (visible.match(WIDE_CHARS)?.length ?? 0) * (LABEL_FONT_PX - CHAR_WIDTH);
+  const plainWidth = (value: string) => value.length * CHAR_WIDTH + (value.match(WIDE_CHARS)?.length ?? 0) * (LABEL_FONT_PX - CHAR_WIDTH);
+  let width = 0;
+  let end = 0;
+  for (const match of text.matchAll(/\$([^$]+)\$/g)) {
+    width += plainWidth(text.slice(end, match.index));
+    const visible = match[1]!.replace(/\\(?:text|mathrm|mathbf|mathbb|mathit)\b/g, "")
+      .replace(/\\[a-zA-Z]+|\\[^a-zA-Z]/g, "x").replace(/[_^{}\s]/g, "");
+    width += Math.min(visible.length, 12) * LABEL_FONT_PX * 1.1 + 4;
+    end = match.index + match[0].length;
+  }
+  return width + plainWidth(text.slice(end));
 }
 
 export const edgeText = (edge: GraphSpec["edges"][number]) => (edge.weight !== undefined ? String(edge.weight) : edge.label);

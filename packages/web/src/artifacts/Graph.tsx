@@ -139,6 +139,9 @@ export function Graph({ view }: ArtifactProps<"graph">) {
     };
   }, [shape]);
 
+  // Spec ordinals keep keys stable across steps and font measurements without affecting layout.
+  const nodeKeys = new Map(spec.nodes.flatMap((node, i) => truncated.has(`n-${node.id}`) ? [[node.id, `[${i + 1}]`] as const] : []));
+
   const onKeyDown = (e: KeyboardEvent) => {
     // In the drawing's scrolling box the arrow keys scroll it.
     if (!scroller.current?.contains(e.target as Node)) stepper.onKeyDown(e);
@@ -239,8 +242,9 @@ export function Graph({ view }: ArtifactProps<"graph">) {
                     data-tone={tone}
                   >
                     <ClippedLabel labelKey={`n-${node.id}`} width={node.width - NODE_LABEL_INSET.x} height={node.height - NODE_LABEL_INSET.y} truncated={truncated.has(`n-${node.id}`)}>
-                      <MathText text={spec.nodes[i]!.label ?? node.id} mode="math" />
+                      <span className={nodeKeys.has(node.id) ? "invisible" : undefined}><MathText text={spec.nodes[i]!.label ?? node.id} mode="math" /></span>
                     </ClippedLabel>
+                    {nodeKeys.has(node.id) && <span className="bg-card absolute rounded-sm px-1" data-node-key={nodeKeys.get(node.id)}>{nodeKeys.get(node.id)}</span>}
                     {tone === "done" && (
                       <span className="bg-success text-card absolute -top-[0.35em] -right-[0.35em] grid size-[1.05em] place-items-center rounded-full">
                         <Check className="size-[0.8em]" strokeWidth={3.5} />
@@ -252,7 +256,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
             </div>
           </div>
         </div>
-        <CutShortLabels spec={spec} truncated={truncated} />
+        <CutShortLabels spec={spec} truncated={truncated} nodeKeys={nodeKeys} />
         {state.variables.length > 0 && (
           <dl className="flex flex-wrap gap-2" aria-hidden={hasSteps ? true : undefined}>
             {state.variables.map((v, i) => (
@@ -275,7 +279,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
 }
 
 /** The whole of each label the drawing cut short. Screen readers already have them in the graph's description. */
-function CutShortLabels({ spec, truncated }: { spec: GraphSpec; truncated: ReadonlySet<string> }) {
+function CutShortLabels({ spec, truncated, nodeKeys }: { spec: GraphSpec; truncated: ReadonlySet<string>; nodeKeys: ReadonlyMap<string, string> }) {
   if (truncated.size === 0) return null;
   const arrow = spec.directed ? "→" : "–";
   return (
@@ -286,7 +290,7 @@ function CutShortLabels({ spec, truncated }: { spec: GraphSpec; truncated: Reado
       {spec.nodes.map((node) =>
         truncated.has(`n-${node.id}`) ? (
           <SeenOnly key={node.id}>
-            <span className="font-medium">Node:</span> <NodeName spec={spec} id={node.id} />
+            <span className="font-medium">Node {nodeKeys.get(node.id)}:</span> <NodeName spec={spec} id={node.id} />
           </SeenOnly>
         ) : null,
       )}
@@ -294,7 +298,7 @@ function CutShortLabels({ spec, truncated }: { spec: GraphSpec; truncated: Reado
         truncated.has(`e-${i}`) ? (
           <SeenOnly key={i}>
             <span className="font-medium">
-              Edge <NodeName spec={spec} id={edge.from} /> {arrow} <NodeName spec={spec} id={edge.to} />:
+              Edge {nodeKeys.get(edge.from) ?? <NodeName spec={spec} id={edge.from} />} {arrow} {nodeKeys.get(edge.to) ?? <NodeName spec={spec} id={edge.to} />}:
             </span>{" "}
             {edge.weight !== undefined ? edge.weight : <MathText text={edge.label!} mode="math" />}
           </SeenOnly>

@@ -29,11 +29,11 @@ describe("Graph", () => {
     expect(free.edges[0]!.label.x).toBeCloseTo((free.nodes[0]!.x + free.nodes[1]!.x) / 2, 1);
   });
 
-  it("gives wide characters the room they render at, and leaves other labels' sizes alone", () => {
+  it("budgets for wide characters and formulas, keeping plain text sizes unchanged", () => {
     const width = (label: string) => layoutGraph({ directed: false, nodes: [{ id: "a", label }], edges: [] }).nodes[0]!.width;
     expect(width("图论中的")).toBe(4 * 13 + 18);
     expect(width("abcd")).toBeCloseTo(4 * 7.8 + 18);
-    expect(width("$v_0$")).toBe(Math.max(30, 2 * 7.8 + 18));
+    expect(width("$v_0$")).toBeCloseTo(2 * 13 * 1.1 + 4 + 18);
   });
 
   it("draws every node and edge, with arrowheads only when directed", () => {
