@@ -1,5 +1,5 @@
 import type { AlgorithmTraceSpec } from "@mivra/protocol";
-import { useId } from "react";
+import { useId, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
@@ -28,6 +28,12 @@ export function traceStateAt(spec: AlgorithmTraceSpec, index: number) {
   };
 }
 
+/** What a step changed in the sequence, in words: going by what was on show, so it also holds when stepping back. */
+export function traceValueChanges(from: AlgorithmTraceSpec["values"], to: AlgorithmTraceSpec["values"]) {
+  if (from.length !== to.length) return ` The sequence is now ${to.map(String).join(", ")}.`;
+  return to.flatMap((value, i) => (value === from[i] ? [] : [` Index ${i} is now ${String(value)}.`])).join("");
+}
+
 export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
   const { spec } = view;
   const stepper = useStepper(spec.steps.length);
@@ -35,6 +41,9 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
   const kindId = useId();
 
   const state = traceStateAt(spec, stepper.index);
+  // Kept until the step changes, so a re-render at the same step doesn't change what the live region says.
+  const shown = useRef({ index: stepper.index, from: state.values });
+  if (shown.current.index !== stepper.index) shown.current = { index: stepper.index, from: traceStateAt(spec, shown.current.index).values };
   const n = state.values.length;
   // Bounds are checked server-side; still skip anything outside the sequence rather than misdraw it.
   const ranges = state.ranges.filter((r) => r.start <= r.end && r.end < n);
@@ -130,12 +139,13 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
             <MathText text={state.explanation} mode="math" />
           </ScrollableText>
           <span className="sr-only">
+            {traceValueChanges(shown.current.from, state.values)}
             {pointers.map((p) => ` ${p.name} points to index ${p.index}, value ${String(state.values[p.index])}.`)}
             {ranges.map((r) => ` ${r.label ? `${r.label} covers` : "Highlighted:"} indices ${r.start} through ${r.end}${RANGE_TONE_WORDS[r.tone ?? "active"]}.`)}
             {state.variables.map((v) => ` ${v.name} = ${String(v.value)}.`)}
           </span>
         </div>
-        <StepperControls stepper={stepper} play announce={false} />
+        <StepperControls stepper={stepper} play />
       </CardContent>
     </Card>
   );

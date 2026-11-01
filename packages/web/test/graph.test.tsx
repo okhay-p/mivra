@@ -90,8 +90,10 @@ describe("Graph", () => {
     expect(live.textContent).toContain(same);
     expect(live.textContent).toContain("Node b is active");
     expect(live.textContent).not.toContain("Node a");
-    // The visible copies would otherwise be read twice.
-    expect(screen.getByTestId("graph-explanation").getAttribute("aria-hidden")).toBe("true");
+    // The visible explanation is the announced one, so it's read once and its box can be a tab stop.
+    expect(live.contains(screen.getByTestId("graph-explanation"))).toBe(true);
+    expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
+    // The visible counter would otherwise be read twice.
     expect(screen.getByText("Step 2 of 2").getAttribute("aria-hidden")).toBe("true");
   });
 
@@ -105,7 +107,7 @@ describe("Graph", () => {
     const region = screen.getByRole("region", { name: /Directed graph$/ });
     expect(region.getAttribute("aria-label")).toBeNull();
     const [title] = region.getAttribute("aria-labelledby")!.split(" ");
-    expect(document.getElementById(title!)!.tagName).toBe("H3");
+    expect(document.getElementById(title!)!.closest("h3")).toBeTruthy();
     expect(document.getElementById(title!)!.querySelector(".katex")).toBeTruthy();
   });
 

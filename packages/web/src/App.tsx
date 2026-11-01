@@ -267,7 +267,8 @@ function Chat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      {/* Positioned, so the sr-only text in artifacts is contained here; otherwise it stretches the outer, unscrollable box, which scrollIntoView then moves. */}
+      <div className="relative min-h-0 flex-1 overflow-y-auto" data-testid="transcript">
         <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
           {messages.map((m, mi) => (
             <div

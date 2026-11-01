@@ -151,7 +151,7 @@ describe("SetDiagram", () => {
     it("is the only live region, and screen readers don't get its contents twice", () => {
       renderDiagram();
       expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
-      expect(screen.getByTestId("set-explanation").getAttribute("aria-hidden")).toBe("true");
+      expect(screen.getByTestId("set-announcement").contains(screen.getByTestId("set-explanation"))).toBe(true);
       expect(document.querySelector("dl")?.getAttribute("aria-hidden")).toBe("true");
     });
 

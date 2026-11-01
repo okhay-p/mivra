@@ -5,7 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { FRAME_INSET, ROW_HEIGHT, VENN_LAYOUTS, chooseRegionFit, regionMasks, regionPath, slotBox, type RegionFit, type RegionSlot, type Size, type VennLayout } from "./set-diagram-geometry.js";
-import { StepperControls, useStepper } from "./stepper.js";
+import { ScrollableText, StepperControls, useStepper } from "./stepper.js";
 
 type Tone = NonNullable<SetDiagramHighlight["tone"]>;
 type Region = SetDiagramSpec["regions"][number];
@@ -285,9 +285,14 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
   return (
     <Card role="region" aria-labelledby={`${titleId} ${kindId}`} {...(stepCount > 0 ? { tabIndex: 0, onKeyDown: stepper.onKeyDown } : {})} className="whitespace-normal">
       <CardHeader>
-        <CardTitle className="font-heading text-base">
-          <h3 id={titleId}>
-            <MathText text={spec.title} mode="math" />
+        <CardTitle className="min-w-0 font-heading text-base">
+          <h3>
+            <ScrollableText>
+              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
+              <span id={titleId}>
+                <MathText text={spec.title} mode="math" />
+              </span>
+            </ScrollableText>
           </h3>
         </CardTitle>
         <CardDescription id={kindId}>Set diagram</CardDescription>
@@ -318,23 +323,6 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
             );
           })}
         </ul>
-        {/* Always there, and always different from one step to the next, so every step is announced. The visible versions of what's in it are hidden from screen readers. */}
-        {stepCount > 0 && (
-          <div className="sr-only" aria-live="polite" aria-atomic="true" data-testid="set-announcement">
-            Step {index + 1} of {stepCount}: <MathText text={state.explanation} mode="math" />{" "}
-            {highlighted.length === 0 && "Nothing highlighted. "}
-            {highlighted.map((mask) => (
-              <Fragment key={mask}>
-                {TONES[state.tones.get(mask)!].word}: <RegionName spec={spec} mask={mask} />.{" "}
-              </Fragment>
-            ))}
-            {state.variables.map((v, i) => (
-              <Fragment key={i}>
-                <Inline text={v.name} /> = <Inline text={String(v.value)} />.{" "}
-              </Fragment>
-            ))}
-          </div>
-        )}
         <Diagram spec={spec} layout={layout} tones={state.tones} fits={fits} drawing={drawing} />
         {overflowing.length > 0 && (
           <div aria-hidden="true" className="flex flex-col gap-1 text-xs" data-testid="set-overflow">
@@ -384,10 +372,31 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
         )}
         {stepCount > 0 && (
           <>
-            <div aria-hidden="true" data-testid="set-explanation">
-              <MathText text={state.explanation} mode="math" />
+            {/* Always there, and always different from one step to the next, so every step is announced. The other visible versions of what's in it are hidden from screen readers. */}
+            <div aria-live="polite" aria-atomic="true" data-testid="set-announcement">
+              <span className="sr-only">
+                Step {index + 1} of {stepCount}:{" "}
+              </span>
+              <div data-testid="set-explanation">
+                <ScrollableText>
+                  <MathText text={state.explanation} mode="math" />
+                </ScrollableText>
+              </div>
+              <span className="sr-only">
+                {highlighted.length === 0 && "Nothing highlighted. "}
+                {highlighted.map((mask) => (
+                  <Fragment key={mask}>
+                    {TONES[state.tones.get(mask)!].word}: <RegionName spec={spec} mask={mask} />.{" "}
+                  </Fragment>
+                ))}
+                {state.variables.map((v, i) => (
+                  <Fragment key={i}>
+                    <Inline text={v.name} /> = <Inline text={String(v.value)} />.{" "}
+                  </Fragment>
+                ))}
+              </span>
             </div>
-            <StepperControls stepper={stepper} play announce={false} />
+            <StepperControls stepper={stepper} play />
           </>
         )}
       </CardContent>

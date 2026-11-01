@@ -67,14 +67,22 @@ describe("WorkedSteps", () => {
     expect(steps()).toHaveLength(3);
   });
 
-  it("announces added steps and the position, and marks the current step", () => {
-    const { container } = renderSteps();
-    const list = container.querySelector("ol")!;
-    expect(list.getAttribute("aria-live")).toBe("polite");
-    expect(list.getAttribute("aria-relevant")).toBe("additions");
-    expect(screen.getByRole("status").textContent).toBe("Step 1 of 3");
+  it("announces the current step from one live region, in either direction, and marks it", () => {
+    renderSteps();
+    const live = screen.getByTestId("worked-status");
+    expect(live.getAttribute("aria-live")).toBe("polite");
+    expect(live.getAttribute("aria-atomic")).toBe("true");
+    expect(document.querySelectorAll("[aria-live]")).toHaveLength(1);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(live.textContent).toContain("Step 1 of 3.");
+    const first = live.textContent;
     next();
-    expect(screen.getByRole("status").textContent).toBe("Step 2 of 3");
+    expect(screen.getByTestId("worked-status")).toBe(live);
+    expect(live.textContent).toContain("Step 2 of 3.");
+    expect(screen.getByText("Step 2 of 3").getAttribute("aria-hidden")).toBe("true");
+    fireEvent.click(screen.getByRole("button", { name: /Prev/ }));
+    expect(live.textContent).toBe(first);
+    next();
     expect(steps()[0]!.getAttribute("aria-current")).toBeNull();
     expect(steps()[1]!.getAttribute("aria-current")).toBe("step");
   });

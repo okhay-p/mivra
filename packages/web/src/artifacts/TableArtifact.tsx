@@ -139,7 +139,7 @@ export function TableArtifact({ view }: ArtifactProps<"table">) {
             </span>
           </div>
         )}
-        <StepperControls stepper={stepper} play announce={false} />
+        <StepperControls stepper={stepper} play />
       </CardContent>
     </Card>
   );

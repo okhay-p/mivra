@@ -95,18 +95,16 @@ export function ScrollableText({ children }: { children: ReactNode }) {
 /**
  * Prev, next and a step counter, or nothing for a single step or none. At either end a button is `aria-disabled`, not
  * `disabled`, because a disabled button drops the keyboard focus of someone who has just stepped to the end.
- * An artifact that announces the step number in its own live region passes `announce={false}`, which also hides
- * this copy from screen readers, so it's said once. There's no `aria-pressed` on Play: its label already changes.
+ * Each artifact announces the step number in its own live region, so the counter is hidden from screen readers
+ * and it's said once. There's no `aria-pressed` on Play: its label already changes.
  */
 export function StepperControls({
   stepper,
   play = false,
-  announce = true,
   children,
 }: {
   stepper: ReturnType<typeof useStepper>;
   play?: boolean;
-  announce?: boolean;
   children?: ReactNode;
 }) {
   const { index, last, playing, go, togglePlay } = stepper;
@@ -129,7 +127,7 @@ export function StepperControls({
         <ChevronRight />
       </Button>
       {children}
-      <Badge variant="outline" className="ml-auto" role={announce ? "status" : undefined} aria-hidden={announce ? undefined : true} data-testid="step-counter">
+      <Badge variant="outline" className="ml-auto" aria-hidden="true" data-testid="step-counter">
         Step {index + 1} of {last + 1}
       </Badge>
     </div>

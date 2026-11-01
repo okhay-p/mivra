@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { edgeText, LABEL_FONT_PX, layoutGraph } from "./graph-layout.js";
-import { StepperControls, useStepper } from "./stepper.js";
+import { ScrollableText, StepperControls, useStepper } from "./stepper.js";
 
 /** The smallest the graph is drawn, so labels stay at 11px or more. Past this it scrolls in its own box. */
 const MIN_SCALE = 11 / LABEL_FONT_PX;
@@ -96,9 +96,14 @@ export function Graph({ view }: ArtifactProps<"graph">) {
       className="whitespace-normal"
     >
       <CardHeader>
-        <CardTitle className="font-heading text-base">
-          <h3 id={titleId}>
-            <MathText text={spec.title} mode="math" />
+        <CardTitle className="min-w-0 font-heading text-base">
+          <h3>
+            <ScrollableText>
+              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
+              <span id={titleId}>
+                <MathText text={spec.title} mode="math" />
+              </span>
+            </ScrollableText>
           </h3>
         </CardTitle>
         <CardDescription id={kindId}>{spec.directed ? "Directed graph" : "Graph"}</CardDescription>
@@ -193,10 +198,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         {hasSteps && (
           <>
             <GraphStatus spec={spec} state={state} step={stepper.index + 1} of={steps.length} />
-            <div aria-hidden="true" data-testid="graph-explanation">
-              <MathText text={state.explanation} mode="math" />
-            </div>
-            <StepperControls stepper={stepper} play announce={false} />
+            <StepperControls stepper={stepper} play />
           </>
         )}
       </CardContent>
@@ -238,14 +240,16 @@ function EdgeWords({ spec, index }: { spec: GraphSpec; index: number }) {
  */
 function GraphStatus({ spec, state, step, of }: { spec: GraphSpec; state: ReturnType<typeof graphStateAt>; step: number; of: number }) {
   return (
-    <div className="sr-only" role="status" aria-live="polite" aria-atomic="true" data-testid="graph-status">
-      <p>
+    <div role="status" aria-live="polite" aria-atomic="true" data-testid="graph-status">
+      <p className="sr-only">
         Step {step} of {of}.
       </p>
-      <p>
-        <MathText text={state.explanation} mode="math" />
-      </p>
-      <ul>
+      <div data-testid="graph-explanation">
+        <ScrollableText>
+          <MathText text={state.explanation} mode="math" />
+        </ScrollableText>
+      </div>
+      <ul className="sr-only">
         {[...state.nodes].map(([id, tone]) => (
           <li key={`n-${id}`}>
             Node <NodeName spec={spec} id={id} /> is {TONE_WORDS[tone]}.

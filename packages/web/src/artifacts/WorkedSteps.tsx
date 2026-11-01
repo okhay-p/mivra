@@ -8,13 +8,15 @@ import { ScrollableText, STEP_RULES, StepperControls, useStepper } from "./stepp
 
 /**
  * Reveals steps cumulatively. A step not yet revealed isn't in the page for anyone, and everyone reaches it the
- * same way: Next announces the new step through the live list, and Show all reveals the rest at once.
+ * same way: Next adds the new step, and Show all reveals the rest at once. Whichever way the position changes, one
+ * live region announces the step that's now current; the earlier ones stay in the list to read.
  */
 export function WorkedSteps({ view }: ArtifactProps<"worked_steps">) {
   const { spec } = view;
   const stepper = useStepper(spec.steps.length);
   const { index, last, go } = stepper;
   const allShown = index === last;
+  const current = spec.steps[index];
   const titleId = useId();
   const kindId = useId();
 
@@ -42,7 +44,7 @@ export function WorkedSteps({ view }: ArtifactProps<"worked_steps">) {
             </ScrollableText>
           </p>
         )}
-        <ol className="flex flex-col gap-3" aria-live="polite" aria-relevant="additions">
+        <ol className="flex flex-col gap-3">
           {spec.steps.slice(0, index + 1).map((step, i) => (
             <li
               key={i}
@@ -70,6 +72,15 @@ export function WorkedSteps({ view }: ArtifactProps<"worked_steps">) {
             </li>
           ))}
         </ol>
+        <div className="sr-only" aria-live="polite" aria-atomic="true" data-testid="worked-status">
+          Step {index + 1} of {last + 1}.{" "}
+          {current?.label && (
+            <>
+              <MathText text={current.label} mode="math" />.{" "}
+            </>
+          )}
+          {current && <MathText text={current.statement} mode="math" />} {current && <MathText text={current.justification} mode="math" />}
+        </div>
         <StepperControls stepper={stepper}>
           {/* The same button either way, so it keeps focus when its label changes. */}
           <Button type="button" variant="ghost" size="sm" onClick={() => go(allShown ? 0 : last)}>

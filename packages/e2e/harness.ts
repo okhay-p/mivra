@@ -279,6 +279,22 @@ const graphBst = {
   edges: [["10", "5", "left", 5], ["10", "20", "right", 10], ["5", "6", "right", 1], ["6", "7", "right", 1], ["7", "8", "right", 1]].map(([from, to, side, weight]) => ({ from, to, side, weight })),
 };
 
+// Long formulas in the title and an explanation, which arrow keys scroll while the card's arrow keys step.
+const wideTitle = `$${Array.from({ length: 18 }, (_, i) => `a_{${i}}`).join("")}$`;
+const graphWide = {
+  title: wideTitle,
+  directed: false,
+  nodes: [{ id: "a" }, { id: "b" }],
+  edges: [{ from: "a", to: "b" }],
+  steps: [{ explanation: `Add $${longFormula}$ here.`, nodeStates: [{ id: "a" }] }, { explanation: "Then stop.", nodeStates: [{ id: "b" }] }],
+};
+const vennWide = {
+  title: wideTitle,
+  sets: [{ id: "a", label: "$A$" }],
+  regions: [{ in: ["a"], elements: [1] }],
+  steps: [{ explanation: `Add $${longFormula}$ here.`, highlights: [{ in: ["a"] }] }, { explanation: "Then stop." }],
+};
+
 const truthTable = {
   title: "Truth table for $p \\land q$",
   columns: ["$p$", "$q$", "$p \\land q$"],
@@ -341,6 +357,8 @@ const wideFormulaTrace = {
 };
 
 const SCRIPTS: Record<string, Step[]> = {
+  widegraph: [{ tool: "show_graph", input: graphWide }, { text: "Scroll the long graph." }],
+  wideset: [{ tool: "show_set_diagram", input: vennWide }, { text: "Scroll the long diagram." }],
   widetrace: [{ tool: "show_algorithm_trace", input: wideFormulaTrace }, { text: "Scroll the long trace." }],
   graphbst: [{ tool: "show_graph", input: graphBst }, { text: "Here's the BST." }],
   graphskew: [{ tool: "show_graph", input: graphSkew }, { text: "Here's the skewed tree." }],

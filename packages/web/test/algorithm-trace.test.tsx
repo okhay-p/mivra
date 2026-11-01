@@ -62,6 +62,21 @@ describe("AlgorithmTrace", () => {
     expect(screen.getByText("Step 2 of 2").getAttribute("aria-hidden")).toBe("true");
   });
 
+  it("announces which values a step changed, in either direction, and only then", () => {
+    renderTrace({ ...trace, spec: { title: "Swap", values: [3, 1, 2], steps: [{ explanation: "Compare." }, { explanation: "Swap them.", values: [1, 3, 2] }, { explanation: "Move on." }] } });
+    const status = () => screen.getByTestId("trace-status").textContent;
+    expect(status()).not.toContain("is now");
+    next();
+    expect(status()).toContain("Index 0 is now 1. Index 1 is now 3.");
+    expect(status()).not.toContain("Index 2");
+    next();
+    expect(status()).not.toContain("is now");
+    fireEvent.click(screen.getByRole("button", { name: /Prev/ }));
+    expect(status()).not.toContain("is now");
+    fireEvent.click(screen.getByRole("button", { name: /Prev/ }));
+    expect(status()).toContain("Index 0 is now 3. Index 1 is now 1.");
+  });
+
   it("says what a range's tone means, and marks ranges and cells with neutral tokens, not amber", () => {
     renderTrace({
       ...trace,
