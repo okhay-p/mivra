@@ -2,17 +2,19 @@
 
 ## Knowledge base
 
-Project design docs, decisions and the work backlog live in Notion: [Mivra | Project HQ](https://app.notion.com/p/408fb102b9b68185823dc5c90dc17f7f) (reach it through the Notion MCP server).
+Decisions live in `docs/adr/`. When a task touches architecture, the stack or an open question, read `docs/adr/README.md` (the index and what's still open), then only the ADRs that touch the task.
 
-- Read **Architecture Decisions & Open Questions** first. It is the source of truth for what is decided and what is still open. Accepted so far: ADR-001 (standalone local-first app with a client/server split), ADR-002 (SQLite), ADR-003 (web UI first, Electron later), ADR-004 (Hono server framework), ADR-005 (Node.js, Drizzle, Vercel AI SDK, React + Vite), ADR-006 (learning contract: tool calls, Mivra-owned artifacts, deterministic grading first), ADR-007 (runtime interfaces built alongside features; in-process trusted plugins), ADR-008 (web UI: shadcn/ui with the Paper & Amber theme), ADR-009 (learner memory: evidence, derived concept state, automatic global memories), ADR-010 (uploaded documents: local text extraction).
-- Treat confirmed decisions as requirements. Treat anything marked proposed as a suggestion, not a requirement.
-- Don't mark a decision as accepted, change a major decision, or delete pages unless a human approves it.
-- Backlog items live in the **Mivra Work Board** database. When you finish a task, update its item with what changed, how it was tested, and the PR link.
-- Code, tests and executable config belong in this repo, not in Notion.
+- Treat accepted ADRs as requirements. Treat anything marked proposed as a suggestion, not a requirement.
+- Don't mark a decision as accepted, change a major decision, or delete Notion pages unless a human approves it.
+
+Longer design docs and the backlog live in Notion (reach it through the Notion MCP server). Open a design page only when an ADR links to it or the task needs its detail.
+
+- Backlog items live in the [Mivra Work Board](https://app.notion.com/p/16b9fc4073d548139a091ac0691b7e57) database (`collection://66d64521-6e9e-4c15-8a10-713fd2c2b02a`). When you finish a task, update its item with what changed, how it was tested, and the PR link.
+- Code, tests, ADRs and executable config belong in this repo, not in Notion.
 
 ## Development
 
-pnpm monorepo: `packages/server` (Hono, Drizzle + better-sqlite3, Vercel AI SDK), `packages/web` (React + Vite) and `packages/protocol` (shared artifact schemas; the learning contract from ADR-006). A new artifact kind needs a schema in `packages/protocol/src/index.ts` (`artifactKinds`; every spec must reject `{}`) and a registration in a server plugin (`packages/server/src/plugins/`) whose `toView` keeps private fields out. Clients only ever receive artifact views, never raw tool calls. UI uses shadcn/ui on Tailwind v4 (`packages/web/components.json`): add components with `pnpm dlx shadcn@latest add <name>` from `packages/web`, and use theme tokens from `src/styles.css` rather than raw colours. Amber is for the brand only; grading uses `success` and `destructive`. See `README.md` for commands. Before finishing a change, run `pnpm typecheck` and `pnpm test`, plus `pnpm test:e2e` if it touches the UI or the chat flow. Run `pnpm test:e2e:all` for graph, layout, font or keyboard changes. After editing `packages/server/src/db/schema.ts`, run `pnpm --filter @mivra/server db:generate` and commit the generated migration.
+pnpm monorepo: `packages/server` (Hono, Drizzle + better-sqlite3, Vercel AI SDK), `packages/web` (React + Vite) and `packages/protocol` (shared artifact schemas; the learning contract from ADR-006). A new artifact kind needs a schema in `packages/protocol/src/index.ts` (`artifactKinds`; every spec must reject `{}`) and a registration in a server plugin (`packages/server/src/plugins/`) whose `toView` keeps private fields out. Clients only ever receive artifact views, never raw tool calls. UI uses shadcn/ui on Tailwind v4 (`packages/web/components.json`): add components with `pnpm dlx shadcn@latest add <name>` from `packages/web`, and use theme tokens from `src/styles.css` rather than raw colours. Amber is for the brand only; grading uses `success` and `destructive`. See `README.md` for commands. Before finishing a change, run `pnpm typecheck` and `pnpm test`, plus `pnpm test:e2e` if it touches the UI or the chat flow. After editing `packages/server/src/db/schema.ts`, run `pnpm --filter @mivra/server db:generate` and commit the generated migration.
 
 ## Review gate
 
@@ -36,4 +38,4 @@ Default canonical vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `
 
 ### Domain docs
 
-Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context: `docs/adr/` at the repo root, plus a root `GLOSSARY.md` once a term needs defining. See `docs/agents/domain.md`.
