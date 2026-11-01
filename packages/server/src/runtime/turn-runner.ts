@@ -8,6 +8,7 @@ import {
   type LanguageModel,
   type ModelMessage,
   type UIMessage,
+  type UIMessageChunk,
   type UIMessageStreamOutcome,
 } from "ai";
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
@@ -136,6 +137,9 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       // A provider can report an error mid-stream and then close normally, which the SDK still calls
       // "completed". Remember the first error so such a run is recorded as failed.
       let streamError: unknown;
+      let hasReplyText = false;
+      const emptyReplyError = new Error("The model ended the turn without reply text or an artifact.");
+      const hasOutput = () => hasReplyText || turnTools.viewsByToolCall.size > 0;
       // If the client disconnects or stops, abort the model call; the run is recorded as cancelled.
       const result = streamText({
         model: languageModel,
@@ -144,6 +148,9 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         tools: turnTools.tools,
         stopWhen: stepCountIs(MAX_STEPS),
         abortSignal,
+        onChunk: ({ chunk }) => {
+          if (chunk.type === "text-delta" && chunk.text.trim()) hasReplyText = true;
+        },
         onError: ({ error }) => {
           streamError ??= error;
         },
@@ -158,6 +165,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         originalMessages: conversation,
         generateMessageId: randomUUID,
         onEnd: ({ responseMessage, outcome }) => {
+          if (outcome.status === "completed" && !hasOutput()) streamError ??= emptyReplyError;
           if (streamError !== undefined && outcome.status === "completed") {
             return store.finishRun(runId, sessionId, "failed", undefined, errorText(streamError));
           }
@@ -169,7 +177,23 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         // Only known-safe errors reach the learner (e.g. a missing API key); detail stays in runs.error.
         onError: publicErrorText,
       });
-      const response = createUIMessageStreamResponse({ stream: redactForClient(stream, turnTools.viewsByToolCall) });
+      let finishChunk: UIMessageChunk | undefined;
+      const clientStream = redactForClient(stream, turnTools.viewsByToolCall).pipeThrough(
+        new TransformStream<UIMessageChunk, UIMessageChunk>({
+          transform(chunk, controller) {
+            if (chunk.type === "finish") finishChunk = chunk;
+            else controller.enqueue(chunk);
+          },
+          flush(controller) {
+            // Wait for onEnd to classify a bounded repair loop with no learner-visible output.
+            if (streamError === emptyReplyError) {
+              controller.enqueue({ type: "error", errorText: publicErrorText(emptyReplyError) });
+            }
+            if (finishChunk) controller.enqueue(finishChunk);
+          },
+        }),
+      );
+      const response = createUIMessageStreamResponse({ stream: clientStream });
       return { ok: true, response };
     },
   };

@@ -656,6 +656,25 @@ describe("invalid tool input", () => {
     expect(reload.match(/"type":"data-artifact"/g)).toHaveLength(1);
   });
 
+  it("fails visibly after five invalid proofs, but accepts turns that produced text or an artifact", async () => {
+    const input = { title: "Sum", steps: [{ statement: String.raw`\displaystyle\sum_i i`, justification: "Add." }] };
+    const invalid = { toolCall: { name: "show_worked_steps", input } };
+    const corrected = { ...input, steps: [{ statement: "$1+2=3$", justification: "Add." }] };
+    for (const last of [invalid, { text: "Let me rephrase." }, { toolCall: { name: "show_worked_steps", input: corrected } }]) {
+      const { app, db, model } = setup([...Array.from({ length: 4 }, () => invalid), last]);
+      const id = await newSession(app);
+      const sse = await turn(app, db, id, "show a proof");
+      const failed = last === invalid;
+      expect(model.doStreamCalls).toHaveLength(5);
+      expect(db.select().from(artifacts).all()).toHaveLength(last !== invalid && "toolCall" in last ? 1 : 0);
+      expect(sse.includes('"type":"error"')).toBe(failed);
+      if (failed) expect(sse).toContain('"errorText":"The model request failed."');
+      expect(db.select().from(runs).all()[0]?.status).toBe(failed ? "failed" : "completed");
+      const reloaded = JSON.parse(await messagesJson(app, id)) as UIMessage[];
+      expect(reloaded.map((message) => message.role)).toEqual(failed ? ["user"] : ["user", "assistant"]);
+    }
+  });
+
   it("stores nothing and shows nothing for an empty or malformed artifact call", async () => {
     const { app, db } = setup([{ toolCall: { name: "ask_multiple_choice", input: {} } }, { text: "Let me rephrase." }]);
     const sessionId = await newSession(app);
