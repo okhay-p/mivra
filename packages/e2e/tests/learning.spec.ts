@@ -649,5 +649,6 @@ test("a malformed proof retries into one inline card with rendered math", async 
   await expect(proof).toHaveCount(1);
   await expect(proof.getByTestId("worked-step").locator(".katex")).toHaveCount(1);
   await page.reload();
+  await page.getByRole("button", { name: "repairproof", exact: true }).click();
   await expect(page.getByRole("region", { name: /Sum/ }).getByTestId("worked-step").locator(".katex")).toHaveCount(1);
 });

@@ -48,4 +48,3 @@ function closingDollar(source: string, open: number): number | undefined {
   if (isSpace(source[open + 1]) || isSpace(source[close - 1]) || isDigit(source[close + 1])) return undefined;
   return /`|\n\s*\n/.test(source.slice(open, close)) ? undefined : close;
 }
-
