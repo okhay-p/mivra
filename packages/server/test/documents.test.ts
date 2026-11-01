@@ -922,6 +922,21 @@ describe("where document text goes", () => {
     expect(JSON.stringify(context.content)).toContain("Secret name");
   });
 
+  it("preserves citation continuity when earlier per-turn excerpts are absent", async () => {
+    const { newSession, upload, toldFor, lastPrompt } = setup();
+    const id = await newSession();
+    await upload(id, makePdf([["First page opening."], ["Zebrafish citation on page two."]]));
+    await toldFor(id, "page 2");
+    expect(JSON.stringify(lastPrompt())).toContain("Zebrafish citation");
+    await toldFor(id, "page 1");
+    const system = lastPrompt()[0]!.content;
+    expect(system).toContain("Excerpts are supplied per turn");
+    expect(system).toContain("do not retract or doubt earlier citations for that reason");
+    expect(system).toContain("Do not invent page content you cannot see now");
+    expect(system).toContain("request a reread or point to the page");
+    expect(JSON.stringify(lastPrompt())).not.toContain("Zebrafish citation");
+  });
+
   it("adds no rule or message without documents", async () => {
     const { newSession, toldFor, lastPrompt } = setup();
     const told = await toldFor(await newSession(), "hello");
