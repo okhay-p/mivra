@@ -4,16 +4,17 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { openDb } from "./db/client.js";
-import { resolveModel } from "./model.js";
+import { createRegistry, resolveModel } from "./model.js";
 import { loadOrCreateToken } from "./security.js";
 import { serveWeb } from "./serve-web.js";
 
 const config = loadConfig();
 const db = openDb(join(config.dataDir, "mivra.db"));
 const token = loadOrCreateToken(config.dataDir);
+const registry = createRegistry({ reasoningEffort: config.reasoningEffort });
 const app = createApp({
   db,
-  model: () => resolveModel(config.model),
+  model: () => resolveModel(config.model, registry),
   security: { token, allowedHosts: config.allowedHosts },
 });
 
