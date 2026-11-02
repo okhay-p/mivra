@@ -97,6 +97,18 @@ const stopChat = createRoute({
   responses: { 204: { description: "Cancellation requested (also succeeds when already finished)" } },
 });
 
+const sessionActivity = createRoute({
+  method: "get", path: "/sessions/{id}/activity",
+  request: { params: SessionParams },
+  responses: {
+    200: { description: "Public automatic reply activity", content: { "application/json": { schema: z.object({
+      continuation: z.boolean(), running: z.boolean().optional(), streaming: z.boolean().optional(), runId: z.string().optional(),
+      messageId: z.string().optional(), error: z.string().optional(), messages: z.array(Message).optional(),
+    }) } } },
+    404: errorResponse("Unknown session"),
+  },
+});
+
 const chat = createRoute({
   method: "post",
   path: "/sessions/{id}/chat",
@@ -282,6 +294,21 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       const messages = presentMessages(store.loadMessages(id), registry, store);
       return c.json(messages as unknown as z.infer<typeof Message>[], 200);
     })
+    .openapi(sessionActivity, (c) => {
+      const { id } = c.req.valid("param");
+      if (!store.findSession(id)) return c.json({ error: "Session not found" }, 404);
+      const latest = store.latestRun(id);
+      if (!latest?.continuationOf) return c.json({ continuation: false }, 200);
+      const messages = presentMessages(store.loadMessages(id), registry, store);
+      const live = turns.liveContinuation(id);
+      if (live && !messages.some(m => m.id === live.id)) messages.push(live);
+      return c.json({ continuation: true, running: latest.status === "running", streaming: live !== undefined, runId: latest.id,
+        messageId: latest.userMessageId,
+        // Never expose stored provider errors, which may contain private tool arguments.
+        ...(latest.status === "failed" ? { error: "The model request failed." } : {}),
+        messages: messages as unknown as z.infer<typeof Message>[],
+      }, 200);
+    })
     .openapi(stopChat, (c) => {
       turns.stopTurn(c.req.valid("param").id, c.req.valid("json").messageId);
       return c.body(null, 204);
@@ -299,6 +326,9 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
     .openapi(submitAttemptRoute, (c) => {
       const result = submitAttempt({ artifactId: c.req.valid("param").id, answer: c.req.valid("json").answer }, { registry, store });
       if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
+      const artifact = store.findArtifact(c.req.valid("param").id)!;
+      // The durable claim in startContinuation makes retries and other tabs harmless.
+      void turns.continueAfterAnswer(artifact.sessionId);
       // Cast for the same reason as messages: hono's JSON typing recurses too deeply on the view type.
       return c.json(result.view as never, 201);
     })

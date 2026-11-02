@@ -132,6 +132,25 @@ export function createSessionStore(db: Db) {
       });
     },
 
+    latestRun(sessionId: string) {
+      return db.select().from(runs).where(eq(runs.sessionId, sessionId)).orderBy(desc(sql`rowid`)).get();
+    },
+
+    /** Claims an automatic continuation once, only for the latest completed, fully answered quiz reply. */
+    startContinuation(sessionId: string, checkKinds: string[]) {
+      return db.transaction(tx => {
+        const source = tx.select().from(runs).where(eq(runs.sessionId, sessionId)).orderBy(desc(sql`rowid`)).get();
+        if (!source || source.status !== "completed" || checkKinds.length === 0) return;
+        const checks = tx.select().from(artifacts).where(and(eq(artifacts.runId, source.id), inArray(artifacts.kind, checkKinds))).all();
+        if (checks.length === 0 || checks.some(a => !tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, a.id)).get())) return;
+        if (tx.select({ id: runs.id }).from(runs).where(eq(runs.continuationOf, source.id)).get()) return;
+        const row = { id: randomUUID(), sessionId, userMessageId: source.userMessageId,
+          continuationOf: source.id, status: "running" as const, startedAt: new Date() };
+        tx.insert(runs).values(row).run();
+        return row;
+      });
+    },
+
     /**
      * Records how a run ended. Cancelled text is saved for display, but excluded from model history.
      * Only completed tool calls belong in a durable model transcript.

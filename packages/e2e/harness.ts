@@ -517,6 +517,10 @@ interface PromptMessage {
 
 function nextStep(prompt: PromptMessage[]): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
+  if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra session event")) {
+    const result = /learnerResult\\*":\\*"([a-z ]+)/.exec(JSON.stringify(prompt))?.[1];
+    return { text: `Lesson continued after ${result ?? "unknown"}.` };
+  }
   const text = JSON.stringify(prompt[lastUser]?.content);
   if (text.includes("fail")) throw new Error("PROVIDER-SECRET-DETAIL");
   const toolResults = prompt.slice(lastUser).filter((m) => m.role === "tool").length;

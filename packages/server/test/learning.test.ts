@@ -189,6 +189,7 @@ describe("multiple_choice through the agent", () => {
       { text: "Before any evidence." },
       { toolCall: { name: "ask_multiple_choice", input: check } },
       { text: "Try it." },
+      { text: "Continue the lesson." },
       { text: "Welcome back." },
     ]);
     const first = await newSession(app);
@@ -198,8 +199,9 @@ describe("multiple_choice through the agent", () => {
     await turn(app, db, first, "quiz me");
     await answer(app, db.select().from(artifacts).get()!.id, { answer: { optionIndex: 2 } });
 
+    await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, first)).all().every(r => r.status !== "running")).toBe(true));
     const sse = await turn(app, db, await newSession(app), "what should I work on?");
-    const prompt = JSON.stringify(model.doStreamCalls[3]?.prompt);
+    const prompt = JSON.stringify(model.doStreamCalls[4]?.prompt);
     expect(prompt).toContain("binary search worst case");
     expect(prompt).toContain('\\"attempts\\":1,\\"correct\\":0,\\"lastResult\\":\\"incorrect\\"');
     // The new session's own messages carry no trace of the old conversation.

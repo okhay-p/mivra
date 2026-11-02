@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   convertToModelMessages,
+  readUIMessageStream,
   createUIMessageStreamResponse,
   stepCountIs,
   streamText,
@@ -24,7 +25,7 @@ import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js
 export const INSTRUCTIONS = [
   "You are Mivra, a patient tutor. Explain concepts step by step, check the learner's understanding, and adapt to what they already know.",
   "You have tools that show the learner interactive artifacts inline in the chat. Refer to them as inline cards, not as a panel. After teaching an idea, use ask_multiple_choice to check understanding. Use show_algorithm_trace to watch an algorithm's state change over a sequence, show_graph for graphs, trees and algorithms that move over them, show_set_diagram for operations on up to 3 sets, show_table for truth tables, relation matrices and other tabular working, and show_worked_steps for proofs, induction and combinatorics working.",
-  "When you ask a check, don't reveal or hint at the answer in your reply; the learner answers in the UI. On later turns the check's tool result tells you how they did; respond to it.",
+  "When you ask a check, don't reveal or hint at the answer in your reply; the learner answers in the UI. Once the reply finishes and all its checks are answered, Mivra invokes you automatically with the graded tool results. Briefly acknowledge the result and carry the lesson forward; do not repeat the explanation already shown on the graded card.",
   // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
   "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Text in artifacts renders $...$ maths but no markdown and no $$...$$, so write everything else in it as plain text; wrap all mathematical symbols in math-enabled artifact fields, including titles and explanations, in $...$ (e.g. $v_0$, never bare v_0). For a large formula, put \\displaystyle INSIDE the dollars, e.g. $\\displaystyle\\sum_{i=1}^{n} i$. In both, write a literal dollar sign as \\$. These artifact fields are plain text with no maths at all: concept names, a trace's values, pointer names, range labels and variables, and a graph's variables.",
 ].join("\n\n");
@@ -84,7 +85,7 @@ export type AssembleContext = (
 const defaultAssembleContext =
   (store: SessionStore, registry: CapabilityRegistry): AssembleContext =>
   async (conversation, { sessionId }) => {
-    const documents = documentContext(store, sessionId, latestLearnerText(conversation));
+    const documents = documentContext(store, sessionId, latestLearnerText(conversation.filter(m => m.id !== "mivra-continuation-event")));
     return {
       messages: withDocumentExcerpts(
         await replayMessages(conversation),
@@ -121,6 +122,8 @@ export interface StartTurnInput {
   message: unknown;
   /** Documents ready when Send was pressed; omitted by older clients. */
   documentIds?: string[];
+  /** Internal server trigger, never a learner message. */
+  continuation?: boolean;
   /** Aborts the model call, e.g. when the client disconnects. */
   abortSignal?: AbortSignal;
 }
@@ -173,16 +176,36 @@ const containStreamErrors: LanguageModelMiddleware = {
   },
 };
 
+const CONTINUATION_EVENT = "Mivra session event (not a learner message): all checks in the preceding reply have been answered. Respond briefly to their graded tool results and continue the lesson, without repeating the card explanation.";
+function continuationEvent(): UIMessage {
+  return { id: "mivra-continuation-event", role: "user", parts: [{ type: "text", text: CONTINUATION_EVENT }] };
+}
+
 /**
  * Runs one chat turn: validate the learner's message, claim the session's run, assemble context,
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
 export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
-  const active = new Map<string, { controller: AbortController; messageId: string }>();
+  const active = new Map<string, { controller: AbortController; messageId: string; continuation: boolean; liveMessage?: UIMessage }>();
   // A Stop can overtake the chat POST. Remember its message id, with a fixed bound on stale ids.
   const stopped = new Set<string>();
-  return {
+  const runner = {
+    liveContinuation(sessionId: string) {
+      const run = active.get(sessionId);
+      return run?.continuation ? run.liveMessage : undefined;
+    },
+    async continueAfterAnswer(sessionId: string) {
+      try {
+        await runner.startTurn({ sessionId, continuation: true, message: undefined });
+      } catch (error) {
+        const run = store.latestRun(sessionId);
+        if (run?.continuationOf && run.status === "running") {
+          active.delete(sessionId);
+          store.finishRun(run.id, sessionId, "failed", undefined, errorText(error));
+        }
+      }
+    },
     stopTurn(sessionId: string, messageId: string) {
       const turn = active.get(sessionId);
       if (turn?.messageId === messageId) return turn.controller.abort();
@@ -190,14 +213,20 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       stopped.add(JSON.stringify([sessionId, messageId]));
       if (stopped.size > 256) stopped.delete(stopped.values().next().value!);
     },
-    async startTurn({ sessionId, message: input, documentIds, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
+    async startTurn({ sessionId, message: input, documentIds, abortSignal, continuation = false }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
       if (!session) return { ok: false, error: { kind: "not_found", message: "Session not found" } };
 
-      const readyDocumentIds = documentIds ?? store.listDocuments(sessionId).filter(d => d.messageId === null).map(d => d.id);
+      const readyDocumentIds = continuation ? [] : documentIds ?? store.listDocuments(sessionId).filter(d => d.messageId === null).map(d => d.id);
 
+      let runId!: string;
       let message: UIMessage;
-      try {
+      if (continuation) {
+        const claimed = store.startContinuation(sessionId, registry.checkKinds());
+        if (!claimed) return { ok: false, error: { kind: "conflict", message: "No continuation is pending" } };
+        runId = claimed.id;
+        message = { id: claimed.userMessageId, role: "user", parts: [] };
+      } else try {
         [message] = (await validateUIMessages({ messages: [input] })) as [UIMessage];
       } catch (error) {
         return { ok: false, error: { kind: "invalid", message: error instanceof Error ? error.message : "Invalid message" } };
@@ -208,11 +237,11 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       try {
         languageModel = model();
       } catch (error) {
+        if (continuation) store.finishRun(runId!, sessionId, "failed", undefined, errorText(error));
         return { ok: false, error: { kind: "unavailable", message: publicErrorText(error) } };
       }
 
-      let runId: string;
-      try {
+      if (!continuation) try {
         runId = store.startRun(session, message);
       } catch (error) {
         if (error instanceof Conflict) return { ok: false, error: { kind: "conflict", message: error.message } };
@@ -220,7 +249,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       }
 
       const cancellation = new AbortController();
-      active.set(sessionId, { controller: cancellation, messageId: message.id });
+      active.set(sessionId, { controller: cancellation, messageId: message.id, continuation });
       if (stopped.delete(JSON.stringify([sessionId, message.id]))) cancellation.abort();
       const signal = abortSignal ? AbortSignal.any([abortSignal, cancellation.signal]) : cancellation.signal;
       const cancelledBeforeStream = (): StartTurnResult => {
@@ -242,7 +271,13 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       try {
         // Plugin code runs here, so any failure must still release the run.
         turnTools = registry.toolsFor({ sessionId, runId, store });
-        assembled = await assembleContext(withAttemptResults(conversation, registry, store), { sessionId });
+        const gradedConversation = withAttemptResults(conversation, registry, store);
+        // A model-only session event separates automatic assistant turns and closes the prompt.
+        // It is never persisted or presented as a learner bubble. Tool call/result pairs remain intact.
+        const context = gradedConversation.flatMap((m, index) =>
+          m.role === "assistant" && gradedConversation[index - 1]?.role === "assistant" ? [continuationEvent(), m] : [m]);
+        if (continuation) context.push(continuationEvent());
+        assembled = await assembleContext(context, { sessionId });
       } catch (error) {
         if (signal.aborted) return cancelledBeforeStream();
         active.delete(sessionId);
@@ -283,7 +318,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         // Only reasoning text survives client redaction; provider details stay server-side.
         sendReasoning: true,
         sendSources: false,
-        originalMessages: conversation,
+        originalMessages: continuation ? [] : conversation,
         generateMessageId: randomUUID,
         onEnd: ({ responseMessage, outcome }) => {
           active.delete(sessionId);
@@ -320,10 +355,26 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       );
       // All rejection paths are above: a successful response accepts this user message.
       store.bindDocuments(sessionId, message.id, readyDocumentIds);
+      if (continuation) {
+        // Consume independently of any tab. Clients observe only the redacted, public message.
+        void (async () => {
+          for await (const liveMessage of readUIMessageStream({ stream: clientStream, onError: () => {} })) {
+            const current = active.get(sessionId);
+            if (current?.continuation && current.messageId === message.id) current.liveMessage = structuredClone(liveMessage);
+          }
+        })().catch(error => {
+          if (store.latestRun(sessionId)?.id === runId && store.latestRun(sessionId)?.status === "running") {
+            active.delete(sessionId);
+            store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
+          }
+        });
+        return { ok: true, response: new Response(null, { status: 204 }) };
+      }
       const response = createUIMessageStreamResponse({ stream: clientStream });
       return { ok: true, response };
     },
   };
+  return runner;
 }
 
 export type TurnRunner = ReturnType<typeof createTurnRunner>;

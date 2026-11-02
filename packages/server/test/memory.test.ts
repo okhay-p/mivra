@@ -153,7 +153,7 @@ describe("remember", () => {
     await turn(session, "chat first");
     await turn(session, "quiz me");
     await send(`/api/artifacts/${db.select().from(artifacts).get()!.id}/attempts`, "POST", { answer: { optionIndex: 0 } });
-    await turn(session, "I answered");
+    await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true));
 
     const byText = Object.fromEntries((await list()).map((m) => [m.text, m.basis]));
     expect(byText).toEqual({ "No evidence yet": "chat", "Thinks four comparisons suffice": "wrong_answer", "Other concept": "chat" });
@@ -169,7 +169,7 @@ describe("remember", () => {
     const session = await newSession();
     await turn(session, "quiz me");
     await send(`/api/artifacts/${db.select().from(artifacts).get()!.id}/attempts`, "POST", { answer: { optionIndex: 1 } });
-    await turn(session, "I answered");
+    await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true));
     expect((await list()).map((m) => m.basis)).toEqual(["chat"]);
   });
 
@@ -197,6 +197,7 @@ describe("memory written around an unanswered check", () => {
       remember(leak),
       { text: "Try it." },
       { text: "Other session." },
+      { text: "Automatic continuation." },
       { text: "After answering." },
     ]);
     const session = await newSession();
@@ -213,8 +214,10 @@ describe("memory written around an unanswered check", () => {
 
     await send(`/api/artifacts/${db.select().from(artifacts).get()!.id}/attempts`, "POST", { answer: { optionIndex: 0 } });
     expect(await list()).toMatchObject([{ held: false, text: leak.text }]);
+    await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true));
     await turn(await newSession(), "hello again");
-    expect(promptOf(4)).toContain("SECRET");
+    expect(promptOf(4)).toContain("SECRET"); // Released for the automatic continuation.
+    expect(promptOf(5)).toContain("SECRET");
   });
 
   it("holds for a check asked after the memory in the same reply, and for one from an earlier reply", async () => {

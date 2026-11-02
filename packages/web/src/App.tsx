@@ -13,6 +13,7 @@ import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfTho
 import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ThemeToggle } from "./ThemeToggle.js";
+import { useContinuation } from "./use-continuation.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
 import { Button } from "@/components/ui/button";
@@ -307,7 +308,21 @@ function Chat({
     };
   }, [conversation.scrollRef, conversation.stopScroll]);
 
-  const busy = status === "submitted" || status === "streaming";
+  useEffect(() => {
+    // An artifact interaction pauses following before its layout changes. If it still fits at the
+    // bottom afterwards, re-arm following without moving it; the continuation can then grow normally.
+    const frame = requestAnimationFrame(() => {
+      const scroll = conversation.scrollRef.current;
+      if (scroll && scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop <= 1) {
+        void conversation.scrollToBottom("instant");
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [updatedViews, conversation.scrollRef, conversation.scrollToBottom]);
+
+  const continuation = useContinuation(sessionId, status, setMessages);
+  const displayStatus = continuation.running ? (continuation.streaming ? "streaming" : "submitted") : status;
+  const busy = status === "submitted" || status === "streaming" || continuation.running;
   const refreshViews = async () => {
     const result = await loadMessages(sessionId);
     if (result.ok) setUpdatedViews((prev) => mergeViews(prev, artifactViewsIn(result.messages)));
@@ -318,6 +333,7 @@ function Chat({
     if (!text || busy) return;
     stopRequested.current = false;
     setStopError(undefined);
+    continuation.beforeSend();
     void conversation.scrollToBottom("instant");
     const documentIds = documents.documents.filter(d => d.messageId === null).map(d => d.id);
     void sendMessage({ text }, { body: { documentIds } });
@@ -341,6 +357,7 @@ function Chat({
             <div
               key={m.id}
               data-message-id={m.id}
+              data-message-role={m.role}
               className={cn(
                 "flex min-w-0 flex-col gap-2",
                 m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2 whitespace-pre-wrap wrap-anywhere",
@@ -351,13 +368,13 @@ function Chat({
                 <ChainOfThought defaultOpen={false}>
                   <ChainOfThoughtHeader>
                     Thinking
-                    {isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "reasoning" && p.state === "streaming") &&
+                    {isReplyInProgress(displayStatus, mi, messages.length) && m.parts.some((p) => p.type === "reasoning" && p.state === "streaming") &&
                       <span className="ml-2 text-xs">In progress…</span>}
                   </ChainOfThoughtHeader>
                   <ChainOfThoughtContent>
                     {m.parts.map((part, index) => part.type === "reasoning" && (
                       <ChainOfThoughtStep key={index} label={<span className="whitespace-pre-wrap">{part.text}</span>}
-                        status={isReplyInProgress(status, mi, messages.length) && part.state === "streaming" ? "active" : "complete"} />
+                        status={isReplyInProgress(displayStatus, mi, messages.length) && part.state === "streaming" ? "active" : "complete"} />
                     ))}
                   </ChainOfThoughtContent>
                 </ChainOfThought>
@@ -369,7 +386,7 @@ function Chat({
                     <ArtifactPart
                       key={part.id ?? i}
                       data={artifactData(part, updatedViews)}
-                      replyInProgress={isReplyInProgress(status, mi, messages.length)}
+                      replyInProgress={isReplyInProgress(displayStatus, mi, messages.length)}
                       onUpdate={(view) => setUpdatedViews((prev) => mergeViews(prev, { [view.id]: view }))}
                       onRefresh={refreshViews}
                     />
@@ -379,9 +396,10 @@ function Chat({
               })}
             </div>
           ))}
-          {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
+          {displayStatus === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
           {stopError && <p className="text-destructive">{stopError}</p>}
           {error && <p className="text-destructive">{readableError(error)}</p>}
+          {continuation.error && <p className="text-destructive">{continuation.error}</p>}
         </ConversationContent>
         <ConversationScrollButton aria-label="Scroll to bottom" onClick={() => void conversation.scrollToBottom("instant")} />
       </Conversation>
@@ -404,7 +422,7 @@ function Chat({
               try {
                 if (stopRequested.current) return;
                 stopRequested.current = true;
-                const messageId = messages.findLast((message) => message.role === "user")?.id;
+                const messageId = continuation.running ? continuation.messageId : messages.findLast((message) => message.role === "user")?.id;
                 if (!messageId) return;
                 const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
                 // Disabling Send can blur Stop before this request resolves. Restore only

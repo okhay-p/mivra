@@ -1,0 +1,40 @@
+import { expect, test } from "@playwright/test";
+
+test("one graded answer continues exactly once without a learner bubble, even after retry and reload", async ({ page, request }) => {
+  const title = `teach continuation ${Date.now()}`;
+  await page.goto("/");
+  await page.getByRole("button", { name: "New session" }).first().click();
+  await page.getByRole("textbox", { name: "Message" }).fill(title);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const check = page.getByRole("region", { name: /^Check:/ });
+  const answer = check.getByRole("button", { name: /^One$/ });
+  await expect(answer).toBeEnabled();
+  const before = (await (await request.get("/e2e/state")).json()).runs.length;
+  const graded = page.waitForRequest(r => r.url().endsWith("/attempts"));
+  await answer.click();
+  const original = await graded;
+  // A lost response or a second tab can retry the same answer; neither may double-grade or run.
+  const retries = await Promise.all([page.request.fetch(original), page.request.fetch(original)]);
+  expect(retries.map(r => r.status())).toEqual([409, 409]);
+  const input = page.getByRole("textbox", { name: "Message" });
+  await input.fill("my unfinished thought");
+  await input.focus();
+  await expect(page.getByText("Lesson continued after correct.")).toBeVisible();
+  await expect(input).toHaveValue("my unfinished thought");
+  await expect(input).toBeFocused();
+  await expect(page.locator('[data-message-role="user"]')).toHaveCount(1);
+  await expect(check.getByText("Correct!", { exact: true })).toBeVisible();
+  const after = (await (await request.get("/e2e/state")).json()).runs.length;
+  expect(after - before).toBe(1);
+  const other = await page.context().newPage();
+  await other.goto("/");
+  await other.getByRole("button", { name: title, exact: true }).click();
+  await expect(other.getByText("Lesson continued after correct.")).toHaveCount(1);
+  await other.close();
+  await page.reload();
+  await page.getByRole("button", { name: title, exact: true }).click();
+  await expect(page.getByText("Lesson continued after correct.")).toHaveCount(1);
+  await expect(page.locator('[data-message-role="user"]')).toHaveCount(1);
+  await page.waitForTimeout(1000);
+  expect((await (await request.get("/e2e/state")).json()).runs.length).toBe(after);
+});
