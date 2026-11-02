@@ -155,7 +155,7 @@ export function DocumentChips({ documents: { documents: allDocuments, uploading,
           {error}
         </p>
       )}
-      {documents.length > 0 && <p className="text-muted-foreground text-xs">{NOT_READ}</p>}
+      {documents.length > 0 && !messageId && <p className="text-muted-foreground text-xs">{NOT_READ}</p>}
     </div>
   );
 }
