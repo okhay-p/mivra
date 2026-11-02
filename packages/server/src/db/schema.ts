@@ -32,7 +32,7 @@ export type RunStatus = (typeof runStatuses)[number];
 
 /**
  * One row per model generation. A session has at most one running run at a time,
- * enforced by the partial unique index. Only completed runs have a saved assistant message.
+ * enforced by the partial unique index. Cancelled runs may save display-only partial text.
  */
 export const runs = sqliteTable(
   "runs",

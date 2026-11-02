@@ -271,23 +271,37 @@ describe("chat turns", () => {
     expect((await send(app, session.id, userMessage("third"))).status).toBe(200);
   });
 
-  it("records a stopped reply as cancelled and does not save the partial text", async () => {
+  it("cancels only the requested reply, saves partial text, and handles Stop overtaking chat", async () => {
     const control = controlledModel();
     const { app, db } = setup(control.model);
     const session = await createSession(app);
-    const abort = new AbortController();
+    const message = userMessage("explain");
+    const stop = (id: string) => app.request(`/api/sessions/${session.id}/stop`, {
+      method: "POST", headers: { ...auth, "content-type": "application/json" },
+      body: JSON.stringify({ messageId: id }),
+    });
 
-    const res = await send(app, session.id, userMessage("explain"), { signal: abort.signal });
+    const res = await send(app, session.id, message);
     const reader = res.body!.getReader();
     const firstChunk = reader.read();
     await control.push("partial");
-    await firstChunk;
-    abort.abort();
-    await reader.cancel().catch(() => {});
+    let received = new TextDecoder().decode((await firstChunk).value);
+    while (!received.includes("partial")) received += new TextDecoder().decode((await reader.read()).value);
+    // A delayed Stop from another turn must not cancel the current reply.
+    expect((await stop("older-message")).status).toBe(204);
+    expect(runsFor(db, session.id)[0]?.status).toBe("running");
+    expect((await stop(message.id)).status).toBe(204);
+    while (!(await reader.read()).done) { /* Drain the server's abort and end events. */ }
 
     await vi.waitFor(() => expect(runsFor(db, session.id)[0]?.status).toBe("cancelled"));
-    expect((await getMessages(app, session.id)).map((m) => m.role)).toEqual(["user"]);
-    expect(JSON.stringify(await getMessages(app, session.id))).not.toContain("partial");
+    expect((await getMessages(app, session.id)).map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(JSON.stringify(await getMessages(app, session.id))).toContain("partial");
+
+    const next = userMessage("already stopped");
+    await stop(next.id);
+    await (await send(app, session.id, next)).text();
+    expect(runsFor(db, session.id).map((run) => run.status)).toEqual(["cancelled", "cancelled"]);
+    expect(control.model.doStreamCalls).toHaveLength(1);
   });
 
   it("records a client disconnect as cancelled and frees the session", async () => {

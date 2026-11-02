@@ -88,6 +88,15 @@ const listMessages = createRoute({
   },
 });
 
+const stopChat = createRoute({
+  method: "post", path: "/sessions/{id}/stop",
+  request: {
+    params: SessionParams,
+    body: { content: { "application/json": { schema: z.object({ messageId: z.string().min(1).max(128) }) } } },
+  },
+  responses: { 204: { description: "Cancellation requested (also succeeds when already finished)" } },
+});
+
 const chat = createRoute({
   method: "post",
   path: "/sessions/{id}/chat",
@@ -271,6 +280,10 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       // Cast to the documented wire shape: hono's JSON typing recurses too deeply on the AI SDK's UIMessage type.
       const messages = presentMessages(store.loadMessages(id), registry, store);
       return c.json(messages as unknown as z.infer<typeof Message>[], 200);
+    })
+    .openapi(stopChat, (c) => {
+      turns.stopTurn(c.req.valid("param").id, c.req.valid("json").messageId);
+      return c.body(null, 204);
     })
     .openapi(chat, async (c) => {
       const result = await turns.startTurn({

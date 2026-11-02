@@ -9,6 +9,7 @@ import {
   type LanguageModelMiddleware,
   type LanguageModel,
   type ModelMessage,
+  type ProviderMetadata,
   type UIMessage,
   type UIMessageChunk,
   type UIMessageStreamOutcome,
@@ -31,6 +32,43 @@ export const INSTRUCTIONS = [
 /** Upper bound on model steps per turn (a step ends at each round of tool calls). */
 const MAX_STEPS = 5;
 
+// Stored JSON can carry private metadata on a step boundary. Client presentation rebuilds
+// step-start from its type alone; the live stream never receives these durable-only fields.
+type PrivateStepStart = Extract<UIMessage["parts"][number], { type: "step-start" }> & {
+  providerMetadata?: ProviderMetadata;
+};
+
+/** Restore each step's message-level options, including reasoning with no text part. */
+async function replayMessages(conversation: UIMessage[]): Promise<ModelMessage[]> {
+  const result: ModelMessage[] = [];
+  for (const message of conversation) {
+    if (message.role !== "assistant") {
+      result.push(...await convertToModelMessages([message]));
+      continue;
+    }
+    let parts: UIMessage["parts"] = [];
+    let providerMetadata: PrivateStepStart["providerMetadata"];
+    const flush = async () => {
+      const converted = await convertToModelMessages([{ ...message, parts }]);
+      result.push(...converted.map((modelMessage) => modelMessage.role === "assistant" && providerMetadata
+        ? { ...modelMessage, providerOptions: providerMetadata }
+        : modelMessage));
+      parts = [];
+    };
+    for (const part of message.parts) {
+      if (part.type === "step-start") {
+        await flush();
+        providerMetadata = (part as PrivateStepStart).providerMetadata;
+      } else if (part.type !== "reasoning" || (part.providerMetadata && Object.keys(part.providerMetadata).length > 0)) {
+        // Plain reasoning costs context and some providers reject unsigned replay.
+        parts.push(part);
+      }
+    }
+    await flush();
+  }
+  return result;
+}
+
 /**
  * Decides what the model sees for a turn (ADR-007, ADR-009). `instructions` holds what Mivra knows about
  * the learner and is added to the tutor's own, so it isn't mistaken for something the learner said.
@@ -48,7 +86,10 @@ const defaultAssembleContext =
   async (conversation, { sessionId }) => {
     const documents = documentContext(store, sessionId, latestLearnerText(conversation));
     return {
-      messages: withDocumentExcerpts(await convertToModelMessages(conversation), documents?.excerpts),
+      messages: withDocumentExcerpts(
+        await replayMessages(conversation),
+        documents?.excerpts,
+      ),
       instructions: [
         learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
         documents?.rules,
@@ -94,7 +135,8 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
  * response writer. An error part uses the SDK's normal onError/onEnd path and closes SSE cleanly.
  */
 const containStreamErrors: LanguageModelMiddleware = {
-  wrapStream: async ({ doStream }) => {
+  wrapStream: async ({ doStream, params }) => {
+    params.abortSignal?.throwIfAborted();
     const result = await doStream();
     const reader = result.stream.getReader();
     let cancelled = false;
@@ -135,7 +177,17 @@ const containStreamErrors: LanguageModelMiddleware = {
  * stream (SSE) response.
  */
 export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
+  const active = new Map<string, { controller: AbortController; messageId: string }>();
+  // A Stop can overtake the chat POST. Remember its message id, with a fixed bound on stale ids.
+  const stopped = new Set<string>();
   return {
+    stopTurn(sessionId: string, messageId: string) {
+      const turn = active.get(sessionId);
+      if (turn?.messageId === messageId) return turn.controller.abort();
+      if (!store.findSession(sessionId)) return;
+      stopped.add(JSON.stringify([sessionId, messageId]));
+      if (stopped.size > 256) stopped.delete(stopped.values().next().value!);
+    },
     async startTurn({ sessionId, message: input, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
       if (!session) return { ok: false, error: { kind: "not_found", message: "Session not found" } };
@@ -163,8 +215,23 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         throw error;
       }
 
+      const cancellation = new AbortController();
+      active.set(sessionId, { controller: cancellation, messageId: message.id });
+      if (stopped.delete(JSON.stringify([sessionId, message.id]))) cancellation.abort();
+      const signal = abortSignal ? AbortSignal.any([abortSignal, cancellation.signal]) : cancellation.signal;
+      const cancelledBeforeStream = (): StartTurnResult => {
+        active.delete(sessionId);
+        store.finishRun(runId, sessionId, "cancelled");
+        return { ok: true, response: createUIMessageStreamResponse({
+          stream: new ReadableStream<UIMessageChunk>({
+            start(controller) { controller.enqueue({ type: "abort" }); controller.close(); },
+          }),
+        }) };
+      };
+      if (signal.aborted) return cancelledBeforeStream();
+
       // Load history after claiming the run, so it cannot change underneath this turn.
-      const conversation = store.loadMessages(sessionId);
+      const conversation = store.loadMessages(sessionId, true);
       let turnTools: ReturnType<CapabilityRegistry["toolsFor"]>;
       let assembled: Awaited<ReturnType<AssembleContext>>;
       try {
@@ -172,14 +239,19 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         turnTools = registry.toolsFor({ sessionId, runId, store });
         assembled = await assembleContext(withAttemptResults(conversation, registry, store), { sessionId });
       } catch (error) {
+        if (signal.aborted) return cancelledBeforeStream();
+        active.delete(sessionId);
         store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
         // Plugin or context code failed; its message isn't known to be safe to show.
         return { ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } };
       }
 
+      if (signal.aborted) return cancelledBeforeStream();
+
       // A provider can report an error mid-stream and then close normally, which the SDK still calls
       // "completed". Remember the first error so such a run is recorded as failed.
       let streamError: unknown;
+      const stepMetadata: PrivateStepStart["providerMetadata"][] = [];
       let hasReplyText = false;
       const emptyReplyError = new Error("The model ended the turn without reply text or an artifact.");
       const hasOutput = () => hasReplyText || turnTools.viewsByToolCall.size > 0;
@@ -190,7 +262,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         messages: assembled.messages,
         tools: turnTools.tools,
         stopWhen: stepCountIs(MAX_STEPS),
-        abortSignal,
+        abortSignal: signal,
+        onStepEnd: ({ providerMetadata }) => { stepMetadata.push(providerMetadata); },
         onChunk: ({ chunk }) => {
           if (chunk.type === "text-delta" && chunk.text.trim()) hasReplyText = true;
         },
@@ -202,19 +275,23 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       // onEnd sees the raw reply (with artifact tool calls), which is what gets stored; the client
       // gets the redacted stream.
       const stream = result.toUIMessageStream({
-        // Reasoning can quote tool inputs, including a check's answer key.
-        sendReasoning: false,
+        // Only reasoning text survives client redaction; provider details stay server-side.
+        sendReasoning: true,
         sendSources: false,
         originalMessages: conversation,
         generateMessageId: randomUUID,
         onEnd: ({ responseMessage, outcome }) => {
+          active.delete(sessionId);
           if (outcome.status === "completed" && !hasOutput()) streamError ??= emptyReplyError;
           if (streamError !== undefined && outcome.status === "completed") {
             return store.finishRun(runId, sessionId, "failed", undefined, errorText(streamError));
           }
           const status = runStatusFor(outcome);
           const error = outcome.status === "failed" ? errorText(outcome.error ?? streamError) : undefined;
-          const reply = { ...responseMessage, parts: responseMessage.parts.filter((part) => registry.keepsInTranscript(part.type)) };
+          let step = 0;
+          const reply = { ...responseMessage, parts: responseMessage.parts
+            .map((part) => part.type === "step-start" ? { ...part, providerMetadata: stepMetadata[step++] } : part)
+            .filter((part) => registry.keepsInTranscript(part.type)) };
           store.finishRun(runId, sessionId, status, reply, error);
         },
         // Only known-safe errors reach the learner (e.g. a missing API key); detail stays in runs.error.

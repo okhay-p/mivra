@@ -77,7 +77,7 @@ it.each(["mid-reply", "after-tool"])("survives a model stream error %s over real
     });
     expect(await (await send("recover")).text()).toContain("Recovered reply");
     const history = await (await fetch(`${base}/api/sessions/${session.id}/messages`, { headers: auth })).text();
-    expect(history).not.toContain("Partial reply");
+    expect(history).toContain("Partial reply");
     expect(child.exitCode, stderr).toBeNull();
     expect(stderr).toBe("");
   } catch (error) {

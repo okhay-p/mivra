@@ -74,6 +74,26 @@ describe("openrouter provider", () => {
     expect(request?.body.stream).toBe(true);
   });
 
+  it("sends the reasoning effort on every step, and none by default", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fakeFetch: typeof fetch = async (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return sse(bodies.length === 1 ? toolCallStream("ask_check", { question: "q?" }) : chatCompletionStream("done"));
+    };
+    const run = (reasoningEffort?: "medium") =>
+      streamText({
+        model: resolveModel("openrouter:vendor/model", createRegistry({ openrouterApiKey: "k", fetch: fakeFetch, reasoningEffort })),
+        prompt: "quiz me",
+        tools: { ask_check: tool({ inputSchema: z.object({ question: z.string() }), execute: async () => "ok" }) },
+        stopWhen: stepCountIs(2),
+      }).text;
+    await run("medium");
+    expect(bodies.map((body) => body.reasoning)).toEqual([{ effort: "medium" }, { effort: "medium" }]);
+    bodies.length = 0;
+    await run();
+    expect(bodies[0]?.reasoning).toBeUndefined();
+  });
+
   it("runs tool calls through the registry and continues to the next step", async () => {
     const bodies: Record<string, unknown>[] = [];
     const fakeFetch: typeof fetch = async (_input, init) => {

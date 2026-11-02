@@ -5,12 +5,12 @@ import type { ArtifactKindDefinition, CapabilityRegistry } from "./capabilities.
 
 /**
  * Artifact tool calls carry private fields (a check's answer key) in their input, and model
- * reasoning can quote them. Stored messages keep everything, because the model needs its own tool
- * calls as context. Everything sent to a client goes through this module, which fails closed: only
+ * reasoning can quote them (the learner may opt into seeing reasoning text). Stored messages keep
+ * everything, because the model needs its own tool calls as context. Everything sent to a client goes through this module, which fails closed: only
  * allowlisted part and chunk types pass, rebuilt field by field so attached provider metadata is
  * dropped, and artifact tool calls become `data-artifact` parts
  * holding the public view. Unknown tools (including artifact tools whose plugin is no longer
- * loaded), reasoning, sources and files are dropped.
+ * loaded), sources and files are dropped.
  */
 
 type Part = UIMessage["parts"][number];
@@ -27,7 +27,7 @@ interface ArtifactToolPart {
  * else a provider attached.
  */
 function clientPart(part: Part): Part | undefined {
-  if (part.type === "text") return { type: "text", text: part.text, ...(part.state ? { state: part.state } : {}) };
+  if (part.type === "text" || part.type === "reasoning") return { type: part.type, text: part.text, ...(part.state ? { state: part.state } : {}) };
   if (part.type === "step-start") return { type: "step-start" };
   return undefined;
 }
@@ -53,11 +53,14 @@ function clientChunk(chunk: UIMessageChunk, textId: (providerId: string) => stri
     case "finish-step":
     case "reset-step":
       return { type: chunk.type };
+    case "reasoning-start":
+    case "reasoning-end":
     case "text-start":
     case "text-end":
       return { type: chunk.type, id: textId(chunk.id) };
+    case "reasoning-delta":
     case "text-delta":
-      return { type: "text-delta", id: textId(chunk.id), delta: chunk.delta };
+      return { type: chunk.type, id: textId(chunk.id), delta: chunk.delta };
     default:
       return undefined;
   }
@@ -106,7 +109,7 @@ export function presentMessages(messages: UIMessage[], registry: CapabilityRegis
  * Filters the outgoing UI message stream: passes allowlisted chunk types rebuilt from approved
  * fields (no provider metadata or message metadata), and emits a
  * `data-artifact` chunk with the view when an artifact tool call's output arrives (that is, once the
- * artifact is saved). Every other tool chunk, reasoning, sources and files are dropped.
+ * artifact is saved). Every other tool chunk, sources and files are dropped.
  */
 export function redactForClient(
   stream: ReadableStream<UIMessageChunk>,

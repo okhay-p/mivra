@@ -3,17 +3,23 @@ import { openai } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createProviderRegistry, type LanguageModel } from "ai";
 
+export const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export type ReasoningEffort = (typeof reasoningEfforts)[number];
+
 export interface RegistryOptions {
   /** Defaults to the OPENROUTER_API_KEY environment variable. */
   openrouterApiKey?: string;
   /** Override fetch, for tests. */
   fetch?: typeof fetch;
+  /** How hard OpenRouter models think. Unset leaves it to the model's default. */
+  reasoningEffort?: ReasoningEffort;
 }
 
 export function createRegistry(options: RegistryOptions = {}) {
   const openrouter = createOpenRouter({
     apiKey: options.openrouterApiKey,
     fetch: options.fetch,
+    ...(options.reasoningEffort && { extraBody: { reasoning: { effort: options.reasoningEffort } } }),
     // "strict" is the setting OpenRouter recommends when talking to its own API.
     compatibility: "strict",
     // Shown in the OpenRouter dashboard's app attribution.

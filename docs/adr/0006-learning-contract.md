@@ -14,3 +14,5 @@ date: 29 October 2026
 **Consequences:** Requires models with tool calling; on OpenRouter, choose models that list tool support. Every tool input schema must have required fields and no defaults that make an empty object valid: @openrouter/ai-sdk-provider 3.1.0 replaces unparseable (e.g. truncated) tool arguments with {} (found in the PR #3 review). (D) is rejected because it contradicts the Visualization Protocol's typed-descriptor principle.
 
 **First kinds (decided 29 October 2026):** algorithm_trace (visualization) and multiple_choice (check). More kinds will be added later through the same schema + renderer + optional grader pattern.
+
+**Owner amendment (2026-11-02):** Model reasoning text may stream to the learner in a Thinking panel, collapsed by default. At the owner’s explicit request, opening it may reveal quiz answers or hints from the model’s reasoning. Keeping it closed makes that exposure the learner’s choice and keeps the tutor’s reply primary. Only reasoning text is exposed; provider metadata, encrypted reasoning details and raw tool inputs remain private.

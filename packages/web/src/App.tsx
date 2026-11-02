@@ -7,6 +7,7 @@ import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
+import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ThemeToggle } from "./ThemeToggle.js";
@@ -235,8 +236,12 @@ function Chat({
   // the message part, so the change survives re-renders; a reload gets it from the server instead.
   const [updatedViews, setUpdatedViews] = useState<Record<string, ArtifactView>>({});
   const bottom = useRef<HTMLDivElement>(null);
-  const { messages, sendMessage, status, error } = useChat({
+  const stopRequested = useRef(false);
+  const messageInput = useRef<HTMLInputElement>(null);
+  const [stopError, setStopError] = useState<string>();
+  const { messages, sendMessage, setMessages, status, error } = useChat({
     id: sessionId,
+    experimental_throttle: 50,
     messages: initialMessages,
     transport: new DefaultChatTransport({
       api: `/api/sessions/${sessionId}/chat`,
@@ -244,13 +249,24 @@ function Chat({
       // The server owns history, so send only the new message.
       prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1) } }),
     }),
-    onFinish: onReply,
+    onFinish: ({ message }) => {
+      if (stopRequested.current) {
+        // Reconcile with the durable result: Stop may race a naturally completed reply.
+        // A late reload must never overwrite a new turn the learner has already sent.
+        void loadMessages(sessionId).then((result) => {
+          if (result.ok) setMessages((previous) => previous.at(-1)?.id === message.id ? result.messages : previous);
+        });
+      }
+      onReply();
+    },
   });
 
+  // Reasoning growth must not drag the learner away from an opened disclosure.
+  const visibleTranscript = JSON.stringify(messages.map((m) => m.parts.filter((p) => p.type !== "reasoning")));
   // Block body: newer browsers return a Promise from scrollIntoView, which React would treat as a cleanup.
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [visibleTranscript]);
 
   const busy = status === "submitted" || status === "streaming";
   const refreshViews = async () => {
@@ -261,6 +277,8 @@ function Chat({
     e.preventDefault();
     const text = input.trim();
     if (!text || busy) return;
+    stopRequested.current = false;
+    setStopError(undefined);
     void sendMessage({ text });
     setInput("");
   };
@@ -278,6 +296,21 @@ function Chat({
                 m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2 whitespace-pre-wrap wrap-anywhere",
               )}
             >
+              {m.role === "assistant" && m.parts.some((p) => p.type === "reasoning" && p.text.length > 0) && (
+                <ChainOfThought defaultOpen={false}>
+                  <ChainOfThoughtHeader>
+                    Thinking
+                    {isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "reasoning" && p.state === "streaming") &&
+                      <span className="ml-2 text-xs">In progress…</span>}
+                  </ChainOfThoughtHeader>
+                  <ChainOfThoughtContent>
+                    {m.parts.map((part, index) => part.type === "reasoning" && (
+                      <ChainOfThoughtStep key={index} label={<span className="whitespace-pre-wrap">{part.text}</span>}
+                        status={isReplyInProgress(status, mi, messages.length) && part.state === "streaming" ? "active" : "complete"} />
+                    ))}
+                  </ChainOfThoughtContent>
+                </ChainOfThought>
+              )}
               {m.parts.map((part, i) => {
                 if (part.type === "text") return m.role === "user" ? <p key={i}>{part.text}</p> : <MathText key={i} text={part.text} />;
                 if (part.type === "data-artifact") {
@@ -296,6 +329,7 @@ function Chat({
             </div>
           ))}
           {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
+          {stopError && <p className="text-destructive">{stopError}</p>}
           {error && <p className="text-destructive">{readableError(error)}</p>}
           <div ref={bottom} />
         </div>
@@ -305,15 +339,35 @@ function Chat({
         <div className="mx-auto flex max-w-3xl gap-2 p-3">
           <AttachButton documents={documents} />
           <Input
+            ref={messageInput}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="What do you want to learn?"
             aria-label="Message"
             autoFocus
           />
-          <Button type="submit" disabled={busy || !input.trim()}>
-            Send
-          </Button>
+          {busy ? (
+            <Button type="button" variant="secondary" onClick={async (event) => {
+              const stopButton = event.currentTarget;
+              const restoreFocus = document.activeElement === stopButton;
+              try {
+                if (stopRequested.current) return;
+                stopRequested.current = true;
+                const messageId = messages.findLast((message) => message.role === "user")?.id;
+                if (!messageId) return;
+                const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
+                // Disabling Send can blur Stop before this request resolves. Restore only
+                // its focus, and leave any element the learner moved to alone.
+                if (result.ok && restoreFocus && (document.activeElement === stopButton || document.activeElement === document.body)) {
+                  messageInput.current?.focus();
+                }
+                if (!result.ok) stopRequested.current = false;
+                if (!result.ok) setStopError("Couldn’t stop the reply. Try again.");
+              } catch { stopRequested.current = false; setStopError("Couldn’t stop the reply. Try again."); }
+            }}>Stop</Button>
+          ) : (
+            <Button type="submit" disabled={!input.trim()}>Send</Button>
+          )}
         </div>
       </form>
     </div>
