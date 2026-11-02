@@ -9,6 +9,7 @@ import {
   type LanguageModelMiddleware,
   type LanguageModel,
   type ModelMessage,
+  type ProviderMetadata,
   type UIMessage,
   type UIMessageChunk,
   type UIMessageStreamOutcome,
@@ -31,6 +32,43 @@ export const INSTRUCTIONS = [
 /** Upper bound on model steps per turn (a step ends at each round of tool calls). */
 const MAX_STEPS = 5;
 
+// Stored JSON can carry private metadata on a step boundary. Client presentation rebuilds
+// step-start from its type alone; the live stream never receives these durable-only fields.
+type PrivateStepStart = Extract<UIMessage["parts"][number], { type: "step-start" }> & {
+  providerMetadata?: ProviderMetadata;
+};
+
+/** Restore each step's message-level options, including reasoning with no text part. */
+async function replayMessages(conversation: UIMessage[]): Promise<ModelMessage[]> {
+  const result: ModelMessage[] = [];
+  for (const message of conversation) {
+    if (message.role !== "assistant") {
+      result.push(...await convertToModelMessages([message]));
+      continue;
+    }
+    let parts: UIMessage["parts"] = [];
+    let providerMetadata: PrivateStepStart["providerMetadata"];
+    const flush = async () => {
+      const converted = await convertToModelMessages([{ ...message, parts }]);
+      result.push(...converted.map((modelMessage) => modelMessage.role === "assistant" && providerMetadata
+        ? { ...modelMessage, providerOptions: providerMetadata }
+        : modelMessage));
+      parts = [];
+    };
+    for (const part of message.parts) {
+      if (part.type === "step-start") {
+        await flush();
+        providerMetadata = (part as PrivateStepStart).providerMetadata;
+      } else if (part.type !== "reasoning" || (part.providerMetadata && Object.keys(part.providerMetadata).length > 0)) {
+        // Plain reasoning costs context and some providers reject unsigned replay.
+        parts.push(part);
+      }
+    }
+    await flush();
+  }
+  return result;
+}
+
 /**
  * Decides what the model sees for a turn (ADR-007, ADR-009). `instructions` holds what Mivra knows about
  * the learner and is added to the tutor's own, so it isn't mistaken for something the learner said.
@@ -49,13 +87,7 @@ const defaultAssembleContext =
     const documents = documentContext(store, sessionId, latestLearnerText(conversation));
     return {
       messages: withDocumentExcerpts(
-        await convertToModelMessages(conversation.map((message) => ({
-          ...message,
-          // Plain reasoning adds context cost and some providers reject unsigned replay. Preserve
-          // provider-bound reasoning unchanged, including signatures/encrypted reasoning details.
-          parts: message.parts.filter((part) =>
-            part.type !== "reasoning" || (part.providerMetadata && Object.keys(part.providerMetadata).length > 0)),
-        }))),
+        await replayMessages(conversation),
         documents?.excerpts,
       ),
       instructions: [
@@ -219,6 +251,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       // A provider can report an error mid-stream and then close normally, which the SDK still calls
       // "completed". Remember the first error so such a run is recorded as failed.
       let streamError: unknown;
+      const stepMetadata: PrivateStepStart["providerMetadata"][] = [];
       let hasReplyText = false;
       const emptyReplyError = new Error("The model ended the turn without reply text or an artifact.");
       const hasOutput = () => hasReplyText || turnTools.viewsByToolCall.size > 0;
@@ -230,6 +263,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         tools: turnTools.tools,
         stopWhen: stepCountIs(MAX_STEPS),
         abortSignal: signal,
+        onStepEnd: ({ providerMetadata }) => { stepMetadata.push(providerMetadata); },
         onChunk: ({ chunk }) => {
           if (chunk.type === "text-delta" && chunk.text.trim()) hasReplyText = true;
         },
@@ -254,7 +288,10 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
           }
           const status = runStatusFor(outcome);
           const error = outcome.status === "failed" ? errorText(outcome.error ?? streamError) : undefined;
-          const reply = { ...responseMessage, parts: responseMessage.parts.filter((part) => registry.keepsInTranscript(part.type)) };
+          let step = 0;
+          const reply = { ...responseMessage, parts: responseMessage.parts
+            .map((part) => part.type === "step-start" ? { ...part, providerMetadata: stepMetadata[step++] } : part)
+            .filter((part) => registry.keepsInTranscript(part.type)) };
           store.finishRun(runId, sessionId, status, reply, error);
         },
         // Only known-safe errors reach the learner (e.g. a missing API key); detail stays in runs.error.
