@@ -23,6 +23,7 @@ test("Stop cancels the model during thinking and a partial tool stream, preserve
     await stop.focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Message" })).toBeFocused();
     await expect.poll(async () => {
       const state = await (await request.get("/e2e/state")).json() as State;
       return { status: state.runs.at(-1)?.status, aborted: state.modelAborts > before.modelAborts, pending: state.pendingMemories };

@@ -237,9 +237,11 @@ function Chat({
   const [updatedViews, setUpdatedViews] = useState<Record<string, ArtifactView>>({});
   const bottom = useRef<HTMLDivElement>(null);
   const stopRequested = useRef(false);
+  const messageInput = useRef<HTMLInputElement>(null);
   const [stopError, setStopError] = useState<string>();
   const { messages, sendMessage, setMessages, status, error } = useChat({
     id: sessionId,
+    experimental_throttle: 50,
     messages: initialMessages,
     transport: new DefaultChatTransport({
       api: `/api/sessions/${sessionId}/chat`,
@@ -337,6 +339,7 @@ function Chat({
         <div className="mx-auto flex max-w-3xl gap-2 p-3">
           <AttachButton documents={documents} />
           <Input
+            ref={messageInput}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="What do you want to learn?"
@@ -344,13 +347,20 @@ function Chat({
             autoFocus
           />
           {busy ? (
-            <Button type="button" variant="secondary" onClick={async () => {
+            <Button type="button" variant="secondary" onClick={async (event) => {
+              const stopButton = event.currentTarget;
+              const restoreFocus = document.activeElement === stopButton;
               try {
                 if (stopRequested.current) return;
                 stopRequested.current = true;
                 const messageId = messages.findLast((message) => message.role === "user")?.id;
                 if (!messageId) return;
                 const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
+                // Disabling Send can blur Stop before this request resolves. Restore only
+                // its focus, and leave any element the learner moved to alone.
+                if (result.ok && restoreFocus && (document.activeElement === stopButton || document.activeElement === document.body)) {
+                  messageInput.current?.focus();
+                }
                 if (!result.ok) stopRequested.current = false;
                 if (!result.ok) setStopError("Couldn’t stop the reply. Try again.");
               } catch { stopRequested.current = false; setStopError("Couldn’t stop the reply. Try again."); }
