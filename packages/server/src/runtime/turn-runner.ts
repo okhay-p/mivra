@@ -103,7 +103,8 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
  * response writer. An error part uses the SDK's normal onError/onEnd path and closes SSE cleanly.
  */
 const containStreamErrors: LanguageModelMiddleware = {
-  wrapStream: async ({ doStream }) => {
+  wrapStream: async ({ doStream, params }) => {
+    params.abortSignal?.throwIfAborted();
     const result = await doStream();
     const reader = result.stream.getReader();
     let cancelled = false;
@@ -144,9 +145,17 @@ const containStreamErrors: LanguageModelMiddleware = {
  * stream (SSE) response.
  */
 export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
-  const active = new Map<string, AbortController>();
+  const active = new Map<string, { controller: AbortController; messageId: string }>();
+  // A Stop can overtake the chat POST. Remember its message id, with a fixed bound on stale ids.
+  const stopped = new Set<string>();
   return {
-    stopTurn(sessionId: string) { active.get(sessionId)?.abort(); },
+    stopTurn(sessionId: string, messageId: string) {
+      const turn = active.get(sessionId);
+      if (turn?.messageId === messageId) return turn.controller.abort();
+      if (!store.findSession(sessionId)) return;
+      stopped.add(JSON.stringify([sessionId, messageId]));
+      if (stopped.size > 256) stopped.delete(stopped.values().next().value!);
+    },
     async startTurn({ sessionId, message: input, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
       if (!session) return { ok: false, error: { kind: "not_found", message: "Session not found" } };
@@ -175,8 +184,19 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       }
 
       const cancellation = new AbortController();
-      active.set(sessionId, cancellation);
+      active.set(sessionId, { controller: cancellation, messageId: message.id });
+      if (stopped.delete(JSON.stringify([sessionId, message.id]))) cancellation.abort();
       const signal = abortSignal ? AbortSignal.any([abortSignal, cancellation.signal]) : cancellation.signal;
+      const cancelledBeforeStream = (): StartTurnResult => {
+        active.delete(sessionId);
+        store.finishRun(runId, sessionId, "cancelled");
+        return { ok: true, response: createUIMessageStreamResponse({
+          stream: new ReadableStream<UIMessageChunk>({
+            start(controller) { controller.enqueue({ type: "abort" }); controller.close(); },
+          }),
+        }) };
+      };
+      if (signal.aborted) return cancelledBeforeStream();
 
       // Load history after claiming the run, so it cannot change underneath this turn.
       const conversation = store.loadMessages(sessionId, true);
@@ -187,11 +207,14 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         turnTools = registry.toolsFor({ sessionId, runId, store });
         assembled = await assembleContext(withAttemptResults(conversation, registry, store), { sessionId });
       } catch (error) {
+        if (signal.aborted) return cancelledBeforeStream();
         active.delete(sessionId);
         store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
         // Plugin or context code failed; its message isn't known to be safe to show.
         return { ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } };
       }
+
+      if (signal.aborted) return cancelledBeforeStream();
 
       // A provider can report an error mid-stream and then close normally, which the SDK still calls
       // "completed". Remember the first error so such a run is recorded as failed.

@@ -247,11 +247,13 @@ function Chat({
       // The server owns history, so send only the new message.
       prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1) } }),
     }),
-    onFinish: () => {
+    onFinish: ({ message }) => {
       if (stopRequested.current) {
-        setMessages((previous) => previous.map((message, index) => index === previous.length - 1 && message.role === "assistant"
-          ? { ...message, parts: message.parts.filter((part) => part.type === "text" || part.type === "reasoning")
-            .map((part) => ({ ...part, state: "done" as const })) } : message));
+        // Reconcile with the durable result: Stop may race a naturally completed reply.
+        // A late reload must never overwrite a new turn the learner has already sent.
+        void loadMessages(sessionId).then((result) => {
+          if (result.ok) setMessages((previous) => previous.at(-1)?.id === message.id ? result.messages : previous);
+        });
       }
       onReply();
     },
@@ -344,10 +346,14 @@ function Chat({
           {busy ? (
             <Button type="button" variant="secondary" onClick={async () => {
               try {
+                if (stopRequested.current) return;
                 stopRequested.current = true;
-                const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId } });
+                const messageId = messages.findLast((message) => message.role === "user")?.id;
+                if (!messageId) return;
+                const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
+                if (!result.ok) stopRequested.current = false;
                 if (!result.ok) setStopError("Couldn’t stop the reply. Try again.");
-              } catch { setStopError("Couldn’t stop the reply. Try again."); }
+              } catch { stopRequested.current = false; setStopError("Couldn’t stop the reply. Try again."); }
             }}>Stop</Button>
           ) : (
             <Button type="submit" disabled={!input.trim()}>Send</Button>

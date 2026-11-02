@@ -94,7 +94,7 @@ For scripts: `curl -H "Authorization: Bearer $(cat ~/.mivra/auth-token)" http://
 
 ## Chat turns
 
-Each reply is a *run* (`runs` table). A session has at most one running run, so a second send while a reply streams gets `409`. Message ids are single-use, so a retried request is rejected rather than generating twice. Completed replies are saved in full. Stop cancels the model call and records the run as `cancelled`; cancelled text remains visible after reload, artifact/tool parts are discarded and pending memories roll back. Cancelled replies are excluded from later model context; provider errors are recorded as `failed` with the error. Runs left running when the server stops are marked `failed` on the next start.
+Each reply is a *run* (`runs` table). A session has at most one running run, so a second send while a reply streams gets `409`. Message ids are single-use, so a retried request is rejected rather than generating twice. Completed replies are saved in full. Stop cancels the model call and records the run as `cancelled`; cancelled text remains visible after reload, artifact/tool parts are discarded and pending memories roll back. Stop targets the learner message id (`POST /api/sessions/{id}/stop` with `{ "messageId": "..." }`), so a stale request cannot cancel a later reply. Cancelled replies are excluded from later model context; provider errors are recorded as `failed` with the error. Runs left running when the server stops are marked `failed` on the next start.
 
 ## Learning artifacts
 
