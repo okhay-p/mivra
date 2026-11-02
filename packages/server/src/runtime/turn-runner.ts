@@ -48,7 +48,16 @@ const defaultAssembleContext =
   async (conversation, { sessionId }) => {
     const documents = documentContext(store, sessionId, latestLearnerText(conversation));
     return {
-      messages: withDocumentExcerpts(await convertToModelMessages(conversation), documents?.excerpts),
+      messages: withDocumentExcerpts(
+        await convertToModelMessages(conversation.map((message) => ({
+          ...message,
+          // Plain reasoning adds context cost and some providers reject unsigned replay. Preserve
+          // provider-bound reasoning unchanged, including signatures/encrypted reasoning details.
+          parts: message.parts.filter((part) =>
+            part.type !== "reasoning" || (part.providerMetadata && Object.keys(part.providerMetadata).length > 0)),
+        }))),
+        documents?.excerpts,
+      ),
       instructions: [
         learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
         documents?.rules,
@@ -135,7 +144,9 @@ const containStreamErrors: LanguageModelMiddleware = {
  * stream (SSE) response.
  */
 export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
+  const active = new Map<string, AbortController>();
   return {
+    stopTurn(sessionId: string) { active.get(sessionId)?.abort(); },
     async startTurn({ sessionId, message: input, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
       if (!session) return { ok: false, error: { kind: "not_found", message: "Session not found" } };
@@ -163,8 +174,12 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         throw error;
       }
 
+      const cancellation = new AbortController();
+      active.set(sessionId, cancellation);
+      const signal = abortSignal ? AbortSignal.any([abortSignal, cancellation.signal]) : cancellation.signal;
+
       // Load history after claiming the run, so it cannot change underneath this turn.
-      const conversation = store.loadMessages(sessionId);
+      const conversation = store.loadMessages(sessionId, true);
       let turnTools: ReturnType<CapabilityRegistry["toolsFor"]>;
       let assembled: Awaited<ReturnType<AssembleContext>>;
       try {
@@ -172,6 +187,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         turnTools = registry.toolsFor({ sessionId, runId, store });
         assembled = await assembleContext(withAttemptResults(conversation, registry, store), { sessionId });
       } catch (error) {
+        active.delete(sessionId);
         store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
         // Plugin or context code failed; its message isn't known to be safe to show.
         return { ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } };
@@ -190,7 +206,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         messages: assembled.messages,
         tools: turnTools.tools,
         stopWhen: stepCountIs(MAX_STEPS),
-        abortSignal,
+        abortSignal: signal,
         onChunk: ({ chunk }) => {
           if (chunk.type === "text-delta" && chunk.text.trim()) hasReplyText = true;
         },
@@ -202,12 +218,13 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       // onEnd sees the raw reply (with artifact tool calls), which is what gets stored; the client
       // gets the redacted stream.
       const stream = result.toUIMessageStream({
-        // Reasoning can quote tool inputs, including a check's answer key.
-        sendReasoning: false,
+        // Only reasoning text survives client redaction; provider details stay server-side.
+        sendReasoning: true,
         sendSources: false,
         originalMessages: conversation,
         generateMessageId: randomUUID,
         onEnd: ({ responseMessage, outcome }) => {
+          active.delete(sessionId);
           if (outcome.status === "completed" && !hasOutput()) streamError ??= emptyReplyError;
           if (streamError !== undefined && outcome.status === "completed") {
             return store.finishRun(runId, sessionId, "failed", undefined, errorText(streamError));

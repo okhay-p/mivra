@@ -271,7 +271,7 @@ describe("chat turns", () => {
     expect((await send(app, session.id, userMessage("third"))).status).toBe(200);
   });
 
-  it("records a stopped reply as cancelled and does not save the partial text", async () => {
+  it("records a stopped reply as cancelled and saves partial text for display", async () => {
     const control = controlledModel();
     const { app, db } = setup(control.model);
     const session = await createSession(app);
@@ -281,13 +281,14 @@ describe("chat turns", () => {
     const reader = res.body!.getReader();
     const firstChunk = reader.read();
     await control.push("partial");
-    await firstChunk;
+    let received = new TextDecoder().decode((await firstChunk).value);
+    while (!received.includes("partial")) received += new TextDecoder().decode((await reader.read()).value);
     abort.abort();
     await reader.cancel().catch(() => {});
 
     await vi.waitFor(() => expect(runsFor(db, session.id)[0]?.status).toBe("cancelled"));
-    expect((await getMessages(app, session.id)).map((m) => m.role)).toEqual(["user"]);
-    expect(JSON.stringify(await getMessages(app, session.id))).not.toContain("partial");
+    expect((await getMessages(app, session.id)).map((m) => m.role)).toEqual(["user", "assistant"]);
+    expect(JSON.stringify(await getMessages(app, session.id))).toContain("partial");
   });
 
   it("records a client disconnect as cancelled and frees the session", async () => {

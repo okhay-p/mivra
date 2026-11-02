@@ -83,13 +83,17 @@ export function createSessionStore(db: Db) {
     },
 
     /** Messages in conversation order. */
-    loadMessages(sessionId: string): UIMessage[] {
+    loadMessages(sessionId: string, forModel = false): UIMessage[] {
+      // Cancelled replies are display-only: never replay truncated turns as complete answers.
+      const cancelled = new Set(forModel ? db.select({ id: runs.assistantMessageId }).from(runs)
+        .where(and(eq(runs.sessionId, sessionId), eq(runs.status, "cancelled"))).all().map((row) => row.id) : []);
       return db
         .select()
         .from(messages)
         .where(eq(messages.sessionId, sessionId))
         .orderBy(asc(messages.seq))
         .all()
+        .filter((row) => !cancelled.has(row.id))
         .map((row) => ({ id: row.id, role: row.role, parts: row.parts as UIMessage["parts"] }));
     },
 
@@ -129,14 +133,18 @@ export function createSessionStore(db: Db) {
     },
 
     /**
-     * Records how a run ended. Only a completed reply is saved: a cancelled or failed reply is partial,
-     * and storing it would feed truncated text back to the model as if it were a full answer.
+     * Records how a run ended. Cancelled text is saved for display, but excluded from model history.
+     * Only completed tool calls belong in a durable model transcript.
      */
     finishRun(runId: string, sessionId: string, status: RunStatus, reply?: UIMessage, error?: string) {
       db.transaction((tx) => {
         const now = new Date();
         let assistantMessageId: string | undefined;
-        if (status === "completed" && reply) {
+        if (status === "cancelled" && reply) {
+          reply = { ...reply, parts: reply.parts.filter((part) => part.type === "text" || part.type === "reasoning")
+            .map((part) => ({ ...part, state: "done" })) };
+        }
+        if ((status === "completed" || status === "cancelled") && reply && reply.parts.length > 0) {
           assistantMessageId = reply.id;
           tx.insert(messages)
             .values({ id: reply.id, sessionId, seq: nextSeq(tx, sessionId), role: "assistant", parts: reply.parts, createdAt: now })

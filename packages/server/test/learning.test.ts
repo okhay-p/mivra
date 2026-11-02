@@ -274,19 +274,34 @@ describe("fail-closed client output", () => {
     { type: "reasoning-end", id: "r" },
   ];
 
-  it("keeps model reasoning out of the stream and reloaded messages", async () => {
-    const { app, db } = setup([
-      { raw: [...leakyReasoning, { type: "tool-call", toolCallId: "c1", toolName: "ask_multiple_choice", input: JSON.stringify(check) }] },
+  it("passes reasoning text without provider details or tool inputs, live and on reload", async () => {
+    const { app, db, model } = setup([
+      { raw: [
+        ...leakyReasoning.map((chunk) => ({ ...chunk, providerMetadata: { vendor: { encrypted: "ENCRYPTED-SECRET" } } })),
+        { type: "reasoning-start", id: "unsigned" },
+        { type: "reasoning-delta", id: "unsigned", delta: "UNSIGNED-THINKING" },
+        { type: "reasoning-end", id: "unsigned" },
+        { type: "tool-call", toolCallId: "c1", toolName: "ask_multiple_choice", input: JSON.stringify(check) },
+      ] },
       { text: "Try it." },
     ]);
     const sessionId = await newSession(app);
     const sse = await turn(app, db, sessionId, "quiz me");
     const reloaded = await messagesJson(app, sessionId);
     for (const body of [sse, reloaded]) {
-      for (const secret of SECRETS) expect(body).not.toContain(secret);
-      expect(body).not.toContain("reasoning");
+      expect(body).toContain("I'll set correctOptionIndex to 1.");
+      expect(body).toContain("UNSIGNED-THINKING");
+      expect(body).not.toContain("ENCRYPTED-SECRET");
+      expect(body).not.toContain("providerMetadata");
+      expect(body).not.toContain("SECRET-FEEDBACK");
+      expect(body).not.toContain('"correctOptionIndex":1');
+      expect(body).not.toContain("tool-input");
     }
     expect(sse).toContain('"type":"data-artifact"');
+    await turn(app, db, sessionId, "continue");
+    const replay = JSON.stringify(model.doStreamCalls.at(-1)?.prompt);
+    expect(replay).toContain("ENCRYPTED-SECRET"); // Provider-bound details stay intact for replay.
+    expect(replay).not.toContain("UNSIGNED-THINKING"); // Plain thinking needn't bloat future context.
   });
 
   it("hides streamed tool-input fragments", async () => {
