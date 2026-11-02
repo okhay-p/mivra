@@ -6,6 +6,7 @@ import { serve } from "@hono/node-server";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { createApp } from "../server/src/app.js";
+import { runs, memories } from "../server/src/db/schema.js";
 import { openDb } from "../server/src/db/client.js";
 import { loadOrCreateToken } from "../server/src/security.js";
 import { serveWeb } from "../server/src/serve-web.js";
@@ -161,7 +162,7 @@ const twoSets = {
   ],
 };
 
-type Step = { tool: string; input: unknown } | { text: string; hold?: boolean; stream?: boolean };
+type Step = { controlled: "cancelstream" | "cancelthinking" | "liveThinking" } | { tool: string; input: unknown } | { text: string; hold?: boolean; stream?: boolean };
 
 const STREAM_CHUNK_CHARS = 24;
 const STREAM_CHUNK_DELAY_MS = 16;
@@ -519,6 +520,11 @@ function nextStep(prompt: PromptMessage[]): Step {
   const text = JSON.stringify(prompt[lastUser]?.content);
   if (text.includes("fail")) throw new Error("PROVIDER-SECRET-DETAIL");
   const toolResults = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
+  if (text.includes("cancelthinking")) return { controlled: "cancelthinking" };
+  if (text.includes("cancelstream")) return toolResults === 0
+    ? { tool: "remember", input: { kind: "goal", text: "Pending cancellation memory" } }
+    : { controlled: "cancelstream" };
+  if (text.includes("liveThinking")) return { controlled: "liveThinking" };
   // Asks a check on a concept named by the test, so its evidence is the test's own.
   const practise = /practise (\w+)/.exec(text)?.[1];
   if (practise) {
@@ -554,9 +560,58 @@ function nextStep(prompt: PromptMessage[]): Step {
   return { text: `The server says the answer was: ${result ?? "unknown"}.` };
 }
 
+let modelAborts = 0;
+let controlledStarts = 0;
 const model = new MockLanguageModelV4({
-  doStream: async ({ prompt }) => {
+  doStream: async ({ prompt, abortSignal }) => {
     const step = nextStep(prompt as PromptMessage[]);
+    if ("controlled" in step) {
+      controlledStarts++;
+      if (step.controlled === "cancelthinking") {
+        await new Promise<void>((_, reject) => {
+          const abort = () => { modelAborts++; reject(new DOMException("Aborted", "AbortError")); };
+          if (abortSignal?.aborted) abort();
+          else abortSignal?.addEventListener("abort", abort, { once: true });
+        });
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let abort: (() => void) | undefined;
+      const stream = new ReadableStream({
+        start(c) {
+          abort = () => {
+            modelAborts++;
+            clearTimeout(timer);
+            c.error(new DOMException("Aborted", "AbortError"));
+          };
+          if (abortSignal?.aborted) return abort();
+          abortSignal?.addEventListener("abort", abort, { once: true });
+          if (step.controlled === "cancelstream") {
+            c.enqueue({ type: "text-start", id: "t" });
+            c.enqueue({ type: "text-delta", id: "t", delta: "Here is the part already explained." });
+            // A truncated tool argument must never become a broken artifact on reload.
+            c.enqueue({ type: "tool-input-start", id: "partial", toolName: "ask_multiple_choice" });
+            c.enqueue({ type: "tool-input-delta", id: "partial", delta: '{"correctOptionIndex":' });
+          } else {
+            c.enqueue({ type: "reasoning-start", id: "r", providerMetadata: { vendor: { encrypted: "PRIVATE-REASONING" } } });
+            c.enqueue({ type: "reasoning-delta", id: "r", delta: "Considering " });
+            timer = setTimeout(() => {
+              c.enqueue({ type: "reasoning-delta", id: "r", delta: "a".repeat(500) + " $\\frac{" });
+              timer = setTimeout(() => {
+                c.enqueue({ type: "reasoning-end", id: "r" });
+                c.enqueue({ type: "text-start", id: "t" });
+                c.enqueue({ type: "text-delta", id: "t", delta: "The explanation is ready." });
+                c.enqueue({ type: "text-end", id: "t" });
+                c.enqueue({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage });
+                abortSignal?.removeEventListener("abort", abort!);
+                c.close();
+              }, 700);
+            }, 700);
+          }
+        },
+        cancel() { clearTimeout(timer); if (abort) abortSignal?.removeEventListener("abort", abort); },
+      });
+      return { stream: stream as never };
+    }
     const chunks: object[] =
       "tool" in step
         ? [
@@ -585,6 +640,12 @@ const app = createApp({
   model: () => model,
   security: { token, allowedHosts: [] },
 });
+// Test-only observability: no credentials or private provider details.
+app.get("/e2e/state", (c) => c.json({
+  runs: db.select({ sessionId: runs.sessionId, status: runs.status }).from(runs).all(),
+  pendingMemories: db.select({ status: memories.status }).from(memories).all().filter((m) => m.status === "pending").length,
+  modelAborts, controlledStarts,
+}));
 // Lets a test finish a held reply once it has seen the state it wants to check.
 app.post("/e2e/release", (c) => {
   releaseHeld();

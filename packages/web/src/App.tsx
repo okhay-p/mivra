@@ -7,6 +7,7 @@ import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
+import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ThemeToggle } from "./ThemeToggle.js";
@@ -235,7 +236,9 @@ function Chat({
   // the message part, so the change survives re-renders; a reload gets it from the server instead.
   const [updatedViews, setUpdatedViews] = useState<Record<string, ArtifactView>>({});
   const bottom = useRef<HTMLDivElement>(null);
-  const { messages, sendMessage, status, error } = useChat({
+  const stopRequested = useRef(false);
+  const [stopError, setStopError] = useState<string>();
+  const { messages, sendMessage, setMessages, status, error } = useChat({
     id: sessionId,
     messages: initialMessages,
     transport: new DefaultChatTransport({
@@ -244,13 +247,22 @@ function Chat({
       // The server owns history, so send only the new message.
       prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1) } }),
     }),
-    onFinish: onReply,
+    onFinish: () => {
+      if (stopRequested.current) {
+        setMessages((previous) => previous.map((message, index) => index === previous.length - 1 && message.role === "assistant"
+          ? { ...message, parts: message.parts.filter((part) => part.type === "text" || part.type === "reasoning")
+            .map((part) => ({ ...part, state: "done" as const })) } : message));
+      }
+      onReply();
+    },
   });
 
+  // Reasoning growth must not drag the learner away from an opened disclosure.
+  const visibleTranscript = JSON.stringify(messages.map((m) => m.parts.filter((p) => p.type !== "reasoning")));
   // Block body: newer browsers return a Promise from scrollIntoView, which React would treat as a cleanup.
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [visibleTranscript]);
 
   const busy = status === "submitted" || status === "streaming";
   const refreshViews = async () => {
@@ -261,6 +273,8 @@ function Chat({
     e.preventDefault();
     const text = input.trim();
     if (!text || busy) return;
+    stopRequested.current = false;
+    setStopError(undefined);
     void sendMessage({ text });
     setInput("");
   };
@@ -278,6 +292,21 @@ function Chat({
                 m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2 whitespace-pre-wrap wrap-anywhere",
               )}
             >
+              {m.role === "assistant" && m.parts.some((p) => p.type === "reasoning" && p.text.length > 0) && (
+                <ChainOfThought defaultOpen={false}>
+                  <ChainOfThoughtHeader>
+                    Thinking
+                    {isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "reasoning" && p.state === "streaming") &&
+                      <span className="ml-2 text-xs">In progress…</span>}
+                  </ChainOfThoughtHeader>
+                  <ChainOfThoughtContent>
+                    {m.parts.map((part, index) => part.type === "reasoning" && (
+                      <ChainOfThoughtStep key={index} label={<span className="whitespace-pre-wrap">{part.text}</span>}
+                        status={isReplyInProgress(status, mi, messages.length) && part.state === "streaming" ? "active" : "complete"} />
+                    ))}
+                  </ChainOfThoughtContent>
+                </ChainOfThought>
+              )}
               {m.parts.map((part, i) => {
                 if (part.type === "text") return m.role === "user" ? <p key={i}>{part.text}</p> : <MathText key={i} text={part.text} />;
                 if (part.type === "data-artifact") {
@@ -296,6 +325,7 @@ function Chat({
             </div>
           ))}
           {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
+          {stopError && <p className="text-destructive">{stopError}</p>}
           {error && <p className="text-destructive">{readableError(error)}</p>}
           <div ref={bottom} />
         </div>
@@ -311,9 +341,17 @@ function Chat({
             aria-label="Message"
             autoFocus
           />
-          <Button type="submit" disabled={busy || !input.trim()}>
-            Send
-          </Button>
+          {busy ? (
+            <Button type="button" variant="secondary" onClick={async () => {
+              try {
+                stopRequested.current = true;
+                const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId } });
+                if (!result.ok) setStopError("Couldn’t stop the reply. Try again.");
+              } catch { setStopError("Couldn’t stop the reply. Try again."); }
+            }}>Stop</Button>
+          ) : (
+            <Button type="submit" disabled={!input.trim()}>Send</Button>
+          )}
         </div>
       </form>
     </div>
