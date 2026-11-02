@@ -51,6 +51,13 @@ export function useDocuments(sessionId: string) {
     };
   }, [sessionId]);
 
+  const refresh = useCallback(async () => {
+    const result = await listDocuments(sessionId);
+    if (!mounted.current || current.current !== sessionId) return;
+    if (result.ok) setDocuments(prev => [...result.value, ...prev.filter(d => !result.value.some(v => v.id === d.id))]);
+    else setError(result.error);
+  }, [sessionId]);
+
   const upload = useCallback(
     async (file: File) => {
       setError(undefined);
@@ -80,7 +87,7 @@ export function useDocuments(sessionId: string) {
     [sessionId],
   );
 
-  return { documents, uploading, error, upload, remove };
+  return { documents, uploading, error, upload, remove, refresh };
 }
 
 type Documents = ReturnType<typeof useDocuments>;
@@ -116,16 +123,18 @@ export function AttachButton({ documents: { uploading, upload } }: { documents: 
 }
 
 /** Filenames are untrusted and shown as plain text. */
-export function DocumentChips({ documents: { documents, uploading, error, remove } }: { documents: Documents }) {
+export function DocumentChips({ documents: { documents: allDocuments, uploading, error, remove }, messageId }: { documents: Documents; messageId?: string }) {
+  const documents = allDocuments.filter(d => (d.messageId ?? undefined) === messageId);
+  if (messageId) { uploading = undefined; error = undefined; }
   if (documents.length === 0 && uploading === undefined && !error) return null;
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-1.5 px-3 pt-3 text-sm">
       {documents.length > 0 && (
         <ul aria-label="Attached documents" className="flex flex-wrap gap-1.5">
           {documents.map((document) => (
-            <li key={document.id} className="bg-muted flex max-w-full min-w-0 items-center gap-1.5 rounded-md border py-0.5 pr-0.5 pl-2">
+            <li key={document.id} className="bg-muted text-foreground flex max-w-full min-w-0 flex-wrap items-center gap-1.5 rounded-md border py-0.5 pr-0.5 pl-2">
               <FileText className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
-              <span className="truncate" title={document.filename}>
+              <span className="min-w-0 flex-1 truncate" title={document.filename}>
                 {document.filename}
               </span>
               <span className="text-muted-foreground shrink-0 text-xs">{pageLabel(document)}</span>

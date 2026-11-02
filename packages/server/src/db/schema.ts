@@ -140,6 +140,7 @@ export const documents = sqliteTable(
     sessionId: text("session_id")
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
+    messageId: text("message_id").references(() => messages.id, { onDelete: "set null" }),
     filename: text("filename").notNull(),
     kind: text("kind", { enum: documentKinds }).notNull(),
     byteSize: integer("byte_size").notNull(),

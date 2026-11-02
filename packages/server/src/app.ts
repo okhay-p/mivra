@@ -104,7 +104,7 @@ const chat = createRoute({
     "Append a user message and stream the assistant reply as an AI SDK UI message stream (Server-Sent Events). The server owns history; send only the new message. Message ids are single-use, so a retried request with the same id is rejected rather than generating twice.",
   request: {
     params: SessionParams,
-    body: { content: { "application/json": { schema: z.object({ message: Message }) } } },
+    body: { content: { "application/json": { schema: z.object({ message: Message, documentIds: z.array(z.string()).max(20).optional() }) } } },
   },
   responses: {
     200: { description: "UI message stream", content: { "text/event-stream": { schema: z.string() } } },
@@ -248,6 +248,7 @@ function toDocumentJson(row: DocumentRow): DocumentView {
   return {
     id: row.id,
     sessionId: row.sessionId,
+    messageId: row.messageId,
     filename: row.filename,
     kind: row.kind,
     byteSize: row.byteSize,
@@ -289,6 +290,7 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       const result = await turns.startTurn({
         sessionId: c.req.valid("param").id,
         message: c.req.valid("json").message,
+        documentIds: c.req.valid("json").documentIds,
         abortSignal: c.req.raw.signal,
       });
       if (!result.ok) return c.json({ error: result.error.message }, turnErrorStatus[result.error.kind]);

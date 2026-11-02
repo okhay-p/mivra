@@ -119,6 +119,8 @@ export interface StartTurnInput {
   sessionId: string;
   /** The new user message, unvalidated. */
   message: unknown;
+  /** Documents ready when Send was pressed; omitted by older clients. */
+  documentIds?: string[];
   /** Aborts the model call, e.g. when the client disconnects. */
   abortSignal?: AbortSignal;
 }
@@ -188,9 +190,11 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       stopped.add(JSON.stringify([sessionId, messageId]));
       if (stopped.size > 256) stopped.delete(stopped.values().next().value!);
     },
-    async startTurn({ sessionId, message: input, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
+    async startTurn({ sessionId, message: input, documentIds, abortSignal }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
       if (!session) return { ok: false, error: { kind: "not_found", message: "Session not found" } };
+
+      const readyDocumentIds = documentIds ?? store.listDocuments(sessionId).filter(d => d.messageId === null).map(d => d.id);
 
       let message: UIMessage;
       try {
@@ -222,6 +226,7 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       const cancelledBeforeStream = (): StartTurnResult => {
         active.delete(sessionId);
         store.finishRun(runId, sessionId, "cancelled");
+        store.bindDocuments(sessionId, message.id, readyDocumentIds);
         return { ok: true, response: createUIMessageStreamResponse({
           stream: new ReadableStream<UIMessageChunk>({
             start(controller) { controller.enqueue({ type: "abort" }); controller.close(); },
@@ -313,6 +318,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
           },
         }),
       );
+      // All rejection paths are above: a successful response accepts this user message.
+      store.bindDocuments(sessionId, message.id, readyDocumentIds);
       const response = createUIMessageStreamResponse({ stream: clientStream });
       return { ok: true, response };
     },

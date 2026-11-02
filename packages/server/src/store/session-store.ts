@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
-import { and, asc, desc, eq, isNotNull, max, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, isNotNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { artifacts, attempts, documentChunks, documents, memories, messages, runs, sessions, type RunStatus } from "../db/schema.js";
 
@@ -321,11 +321,18 @@ export function createSessionStore(db: Db) {
         if (tx.select({ id: documents.id }).from(documents).where(eq(documents.sessionId, input.sessionId)).all().length >= maxDocuments) {
           throw new Conflict(`A session can have at most ${maxDocuments} documents`);
         }
-        const row = { id: randomUUID(), ...input, status: "ready" as const, createdAt: new Date() };
+        const row = { id: randomUUID(), ...input, messageId: null, status: "ready" as const, createdAt: new Date() };
         tx.insert(documents).values(row).run();
         for (const chunk of chunks) tx.insert(documentChunks).values({ documentId: row.id, ...chunk }).run();
         return row;
       });
+    },
+
+    /** Display association only; retrieval remains session-wide. Never reassign an earlier attachment. */
+    bindDocuments(sessionId: string, messageId: string, ids: string[]) {
+      if (ids.length === 0) return;
+      db.update(documents).set({ messageId })
+        .where(and(eq(documents.sessionId, sessionId), isNull(documents.messageId), inArray(documents.id, ids))).run();
     },
 
     /** A session's documents in upload order. */
