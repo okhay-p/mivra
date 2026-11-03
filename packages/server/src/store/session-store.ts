@@ -140,6 +140,17 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       });
     },
 
+    /** The stored reply of the run that wrote the course's first syllabus: the end of its placement interview. */
+    interviewMessageId(courseId: string): string | null {
+      const row = db
+        .select({ messageId: runs.assistantMessageId })
+        .from(syllabusVersions)
+        .innerJoin(runs, eq(runs.id, syllabusVersions.runId))
+        .where(and(eq(syllabusVersions.courseId, courseId), eq(syllabusVersions.version, 1)))
+        .get();
+      return row?.messageId ?? null;
+    },
+
     /** Whether an automatic syllabus change was already made after a finished lesson. */
     hasAdaptiveChange(courseId: string, triggerLessonId: string): boolean {
       return Boolean(

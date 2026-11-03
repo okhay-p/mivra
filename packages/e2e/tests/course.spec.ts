@@ -3,7 +3,8 @@ import { expect, test } from "@playwright/test";
 test("a course starts from the first screen, runs the placement interview and writes the syllabus", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "What do you want to learn?" })).toBeVisible();
-  const goal = `Calculus placementcourse ${Date.now()}`;
+  // Long enough that the course bar has to truncate it on desktop.
+  const goal = `Calculus for machine learning, from limits to backprop placementcourse ${Date.now()}`;
   await page.getByRole("textbox", { name: "Learning goal" }).fill(goal);
   await page.getByRole("button", { name: "Start" }).click();
 
@@ -38,6 +39,15 @@ test("a course starts from the first screen, runs the placement interview and wr
   const check = lesson.getByRole("region", { name: /^Check: limit/ });
   await expect(check).toBeVisible();
   await expect(lesson.getByRole("button", { name: "Finish lesson" })).toBeDisabled();
+
+  // On desktop the goal truncates beside its status and actions instead of pushing them onto a second row.
+  const top = async (box: Promise<{ y: number; height: number } | null>) => {
+    const b = await box;
+    return b ? b.y + b.height / 2 : -100;
+  };
+  await expect
+    .poll(async () => Math.abs((await top(course.getByText(goal).first().boundingBox())) - (await top(course.getByRole("button", { name: "Tutor" }).boundingBox()))))
+    .toBeLessThan(8);
 
   // Ctrl+K opens the tutor. The interview is folded away, and its replies can't be added to the lesson.
   await page.keyboard.press("Control+k");

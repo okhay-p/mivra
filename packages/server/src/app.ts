@@ -378,6 +378,7 @@ function toCourseJson(row: CourseRow, store: SessionStore, lessons: LessonStore)
           createdAt: syllabus.createdAt.toISOString(),
         }
       : null,
+    interviewMessageId: store.interviewMessageId(row.id),
     createdAt: row.createdAt.toISOString(),
   };
 }

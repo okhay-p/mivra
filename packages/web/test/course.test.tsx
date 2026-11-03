@@ -58,7 +58,7 @@ describe("StartCourseForm", () => {
   it("asks what to learn and starts a course with the goal", async () => {
     const session = { id: "s1", title: "Calculus", updatedAt: placement.createdAt, courseId: "c1" };
     const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      json({ course: { id: "c1", sessionId: "s1", goal: "Calculus", status: "interviewing", syllabus: null, createdAt: placement.createdAt }, session }, 201),
+      json({ course: { id: "c1", sessionId: "s1", goal: "Calculus", status: "interviewing", syllabus: null, interviewMessageId: null, createdAt: placement.createdAt }, session }, 201),
     );
     const onStarted = vi.fn();
     render(<StartCourseForm onStarted={onStarted} onFreeChat={() => {}} />);
@@ -85,6 +85,7 @@ describe("CourseBar", () => {
     sessionId: "s1",
     goal: "Calculus",
     status: "active",
+    interviewMessageId: null,
     createdAt: placement.createdAt,
     syllabus: {
       version: 1,

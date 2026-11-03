@@ -72,7 +72,7 @@ describe("syllabus", () => {
     expect(StartCourse.safeParse({ goal: "  " }).success).toBe(false);
     expect(StartCourse.safeParse({ goal: "Calculus" }).success).toBe(true);
     expect(
-      CourseView.safeParse({ id: "c", sessionId: "s", goal: "Calculus", status: "interviewing", syllabus: null, createdAt: new Date().toISOString() }).success,
+      CourseView.safeParse({ id: "c", sessionId: "s", goal: "Calculus", status: "interviewing", syllabus: null, interviewMessageId: null, createdAt: new Date().toISOString() }).success,
     ).toBe(true);
   });
 });

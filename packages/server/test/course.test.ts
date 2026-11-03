@@ -195,6 +195,20 @@ describe("courses", () => {
     expect(view.syllabus.topics[1]!.requestedByLearner).toBe(true);
   });
 
+  it("reports the reply that wrote the syllabus as the end of the interview, even after clarifying chat", async () => {
+    const { app, db } = setup([question("derivative"), { text: "Answer below." }, { text: "It means the slope." }, syllabus, { text: "Your syllabus is ready." }]);
+    const { session } = await startCourse(app);
+    await turn(app, db, session.id, "Learn calculus");
+    expect(await course(app, session.id)).toMatchObject({ interviewMessageId: null });
+    await turn(app, db, session.id, "What does derivative mean?");
+    await turn(app, db, session.id, "Skip the rest of the questions");
+    const { createSessionStore } = await import("../src/store/session-store.js");
+    const replies = createSessionStore(db).loadMessages(session.id).filter((m) => m.role === "assistant");
+    // Three replies: the question, the clarification, and the one that wrote the syllabus.
+    expect(replies).toHaveLength(3);
+    expect(await course(app, session.id)).toMatchObject({ status: "active", interviewMessageId: replies[2]!.id });
+  });
+
   it("refuses a second first syllabus", async () => {
     const db = openDb(":memory:");
     const { app } = setup([syllabus, { text: "done" }], db);

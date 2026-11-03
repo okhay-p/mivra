@@ -42,15 +42,3 @@ export function mergeViews(
   return merged;
 }
 
-const isPlacement = (part: UIMessage["parts"][number]) =>
-  part.type === "data-artifact" && (part as { data?: { kind?: unknown } }).data?.kind === "placement_question";
-
-/**
- * Index of the last message of a course's placement interview: the tutor's reply that followed the last
- * placement question (where it wrote the syllabus), or its first reply if the learner skipped the
- * questions. -1 if there's no reply yet.
- */
-export function interviewEnd(messages: UIMessage[]): number {
-  const lastQuestion = messages.findLastIndex((m) => m.parts.some(isPlacement));
-  return messages.findIndex((m, i) => i > lastQuestion && m.role === "assistant" && !m.parts.some(isPlacement));
-}

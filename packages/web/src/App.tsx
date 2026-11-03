@@ -7,7 +7,7 @@ import { Brain, GraduationCap, MessageSquare, MessagesSquare, Plus, SquarePlus }
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
-import { artifactData, artifactViewsIn, interviewEnd, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
 import { LessonPage, TopicList, type LessonSection } from "./Lesson.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
@@ -260,8 +260,8 @@ interface SessionProps {
   onPromptUsed?: () => void;
   /** Offers "Add to lesson" on the tutor's replies. */
   onAddToLesson?: (messageId: string) => Promise<string | undefined>;
-  /** Folds away a course's placement interview, which is history once lessons have started. */
-  foldInterview?: boolean;
+  /** Folds away a course's placement interview, up to and including this reply (the one that wrote the syllabus). */
+  foldThroughMessageId?: string | null;
   /** The message box's placeholder. */
   placeholder?: string;
 }
@@ -468,7 +468,7 @@ function CourseSession(props: SessionProps) {
             lessonId={lessonId}
             prompt={prompt}
             onPromptUsed={() => setPrompt(undefined)}
-            foldInterview
+            foldThroughMessageId={course.interviewMessageId}
             placeholder="Ask the tutor…"
             onAddToLesson={openLesson?.status === "ready" ? addAnswer : undefined}
           />
@@ -501,7 +501,7 @@ function Chat({
   prompt,
   onPromptUsed,
   onAddToLesson,
-  foldInterview = false,
+  foldThroughMessageId,
   placeholder = "What do you want to learn?",
 }: SessionProps & { initialMessages: UIMessage[] }) {
   const [showInterview, setShowInterview] = useState(false);
@@ -738,6 +738,9 @@ function Chat({
     setInput("");
   };
 
+  // Messages up to the reply that wrote the syllabus are the placement interview (-1: nothing to fold).
+  const interviewEnd = foldThroughMessageId ? messages.findIndex((m) => m.id === foldThroughMessageId) : -1;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Conversation aria-busy={busy} instance={conversation} initial="instant" resize="instant" className="min-h-0 min-w-0">
@@ -751,12 +754,12 @@ function Chat({
             if (e.key !== "Tab" && (e.target as HTMLElement).closest("button, input, [role=region]")) conversation.stopScroll();
           }}>
 
-          {foldInterview && !showInterview && interviewEnd(messages) >= 0 && (
+          {interviewEnd >= 0 && !showInterview && (
             <Button variant="ghost" size="sm" className="text-muted-foreground self-center" onClick={() => setShowInterview(true)}>
               Show the placement interview
             </Button>
           )}
-          {messages.map((m, mi) => (foldInterview && !showInterview && mi <= interviewEnd(messages)) ? null : (
+          {messages.map((m, mi) => (!showInterview && mi <= interviewEnd) ? null : (
             <div
               key={m.id}
               data-message-id={m.id}
@@ -800,7 +803,7 @@ function Chat({
                 }
                 return null;
               })}
-              {onAddToLesson && m.role === "assistant" && !(foldInterview && mi <= interviewEnd(messages)) && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (
+              {onAddToLesson && m.role === "assistant" && mi > interviewEnd && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (
                 <AddToLessonButton onAdd={() => onAddToLesson(m.id)} />
               )}
             </div>

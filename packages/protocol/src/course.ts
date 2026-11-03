@@ -159,6 +159,8 @@ export const CourseView = z
     goal: z.string(),
     status: CourseStatus,
     syllabus: SyllabusView.nullable(),
+    /** The tutor's reply that wrote the first syllabus, which ends the placement interview; null if unknown. */
+    interviewMessageId: z.string().nullable(),
     createdAt: z.string().datetime(),
   })
   .strict();
