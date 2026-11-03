@@ -193,49 +193,181 @@ export function splitBlocks(source: string): string[] {
 // least as long. Models also write the fence's ends on lines with text: `$$ x = 1` (the parser drops the text as
 // the fence's info string) and `x = 1.$$ Next sentence` (the block swallows the rest of the reply). Moving that
 // text onto its own lines makes both layouts mean what they look like. It runs before splitting, so the splitter
-// and the parser see the same fences. Code fences are skipped, and raw HTML can hide a fence, so a reply with any
-// is left alone, as the splitter leaves it in one piece.
+// and the parser see the same fences. Code is skipped, and raw HTML can hide a fence, so a reply with any is left
+// alone, as the splitter leaves it in one piece.
+//
+// Fences sit inside list items and quotes, so the scan follows those containers the way the parser does: a line
+// is checked against each open container (a quote needs its `>`, a list item its content column or a blank
+// line), and what's left is the line's content. A line that fails to continue a container ends it and
+// any fence inside it, and only a paragraph can carry on lazily. Fence indentation counts from the content
+// column, so four spaces past it is indented code. Text moved off a closing `$$` line has any block marker it
+// starts with escaped, so it stays the text it was. It's a sketch of the parser's container rules, not all of them.
 
 const MATH_OPEN_WITH_TEXT = /^( {0,3})(\$\$+)[ \t]*([^$]*?)[ \t]*$/;
+const CONTAINER_START = /^ {0,3}(?:>|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))/;
+// Lines that end a paragraph rather than continuing it lazily.
+const INTERRUPTS = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$)/;
+
+type Container = { kind: "quote" } | { kind: "item"; column: number };
+
+/** The column after `text`, which starts at `column`, with tabs stopping every four columns. */
+function advance(text: string, column: number): number {
+  for (const char of text) column = char === "\t" ? column + 4 - (column % 4) : column + 1;
+  return column;
+}
+
+/** Leading spaces and tabs from `pos`, as the end position and column. */
+function indentation(line: string, pos: number, column: number): { pos: number; column: number } {
+  while (line[pos] === " " || line[pos] === "\t") column = advance(line[pos++]!, column);
+  return { pos, column };
+}
 
 /** Moves text that shares a line with a display block's opening or closing `$$` onto lines of its own. */
 export function separateDisplayFences(source: string): string {
   if (!source.includes("$$") || RAW_HTML.test(source)) return source;
   let out = "";
+  const containers: Container[] = [];
   let code: ((line: string) => boolean) | undefined;
+  let indentedCode = false;
   let math: { indent: string; size: number } | undefined;
+  let paragraph = false;
   for (const line of linesOf(source)) {
     const ending = source.slice(line.start + line.text.length, line.next);
     const newline = ending || "\n";
-    let text = line.text;
+    const text = line.text;
+
+    // Continue the open containers. `prefix` is what a continuation line inside them starts with.
+    let pos = 0;
+    let column = 0;
+    let prefix = "";
+    let matched = 0;
+    for (const container of containers) {
+      const indent = indentation(text, pos, column);
+      if (container.kind === "item" && indent.pos === text.length) {
+        // A blank line continues a list item, and ends a quote.
+        matched++;
+        continue;
+      }
+      if (container.kind === "quote") {
+        if (indent.column - column > 3 || text[indent.pos] !== ">") break;
+        let end = indent.pos + 1;
+        if (text[end] === " " || text[end] === "\t") end++;
+        prefix += text.slice(pos, end);
+        column = advance(text.slice(pos, end), column);
+        pos = end;
+      } else {
+        if (indent.column < container.column) break;
+        prefix += " ".repeat(container.column - column);
+        // A tab can reach past the content column; the rest of it then counts as content indentation.
+        while (column < container.column) column = advance(text[pos++]!, column);
+      }
+      matched++;
+    }
+
+    if (matched < containers.length) {
+      const rest = text.slice(pos);
+      const lazy = paragraph && !code && !math && !indentedCode && !CONTAINER_START.test(rest) && !INTERRUPTS.test(rest) && !FENCE_OPEN.test(rest) && !MATH_OPEN.test(rest);
+      if (lazy) {
+        out += text + ending;
+        continue;
+      }
+      containers.length = matched;
+      code = undefined;
+      math = undefined;
+      indentedCode = false;
+      paragraph = false;
+    }
+
+    // Open new containers, unless the line belongs to a fence that's still open.
+    if (!code && !math) {
+      for (;;) {
+        const indent = indentation(text, pos, column);
+        // Four columns of indentation is indented code, unless it continues a paragraph.
+        if (indent.column - column > 3) break;
+        const quote = text[indent.pos] === ">";
+        const marker = quote ? undefined : /^(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$)/.exec(text.slice(indent.pos))?.[0];
+        if (!quote && !marker) break;
+        // A list item interrupting a paragraph can't be empty, and a numbered one must start at 1.
+        if (marker && paragraph && (text.slice(indent.pos + marker.length).trim() === "" || (/\d/.test(marker) && !/^0*1\D/.test(marker)))) break;
+        // A line of dashes or stars is a rule, not a list.
+        if (marker && INTERRUPTS.test(text.slice(indent.pos))) break;
+        if (quote) {
+          let end = indent.pos + 1;
+          if (text[end] === " " || text[end] === "\t") end++;
+          prefix += text.slice(pos, end);
+          column = advance(text.slice(pos, end), column);
+          pos = end;
+          containers.push({ kind: "quote" });
+        } else {
+          const markerEnd = indent.pos + marker!.length;
+          const markerColumn = advance(text.slice(pos, markerEnd), column);
+          const after = indentation(text, markerEnd, markerColumn);
+          // One to four spaces after the marker set the content column; more, or none, put it one past the marker.
+          const content = after.pos === text.length || after.column - markerColumn > 4 ? markerColumn + 1 : after.column;
+          prefix += " ".repeat(content - column);
+          let end = markerEnd;
+          column = markerColumn;
+          while (column < content && end < text.length) column = advance(text[end++]!, column);
+          column = Math.max(column, content);
+          pos = end;
+          containers.push({ kind: "item", column: content });
+        }
+        paragraph = false;
+        indentedCode = false;
+      }
+    }
+
+    const head = text.slice(0, pos);
+    let content = text.slice(pos);
+    const blank = content.trim() === "";
+    const contentIndent = indentation(text, pos, column).column - column;
     if (code) {
-      if (code(text)) code = undefined;
+      if (code(content)) code = undefined;
     } else if (math) {
-      const close = FENCE_CLOSE.exec(text)?.[1];
+      const close = FENCE_CLOSE.exec(content)?.[1];
       if (close?.[0] === "$" && close.length >= math.size) {
         math = undefined;
       } else {
-        const run = closingRun(text, math.size);
+        const run = closingRun(content, math.size);
         if (run) {
-          const before = text.slice(0, run.start);
-          const after = text.slice(run.end).trim();
-          text = (before.trim() ? before + newline : "") + math.indent + text.slice(run.start, run.end) + (after ? newline + math.indent + after : "");
+          const before = content.slice(0, run.start);
+          const after = asText(content.slice(run.end).trim());
+          const fence = prefix + math.indent + content.slice(run.start, run.end);
+          content = before.trim() ? before + newline + fence : fence.slice(prefix.length);
+          if (after) content += newline + prefix + math.indent + after;
           math = undefined;
+          paragraph = Boolean(after);
         }
       }
-    } else if (FENCE_OPEN.test(text)) {
-      code = opensBlock(text);
+    } else if (blank) {
+      paragraph = false;
+    } else if (contentIndent > 3 && !paragraph) {
+      indentedCode = true;
+    } else if (FENCE_OPEN.test(content)) {
+      code = opensBlock(content);
+      paragraph = false;
+      indentedCode = false;
     } else {
-      const open = MATH_OPEN_WITH_TEXT.exec(text);
+      indentedCode = false;
+      const open = MATH_OPEN_WITH_TEXT.exec(content);
       if (open) {
         const [, indent, fence, rest] = open as unknown as [string, string, string, string];
         math = { indent, size: fence.length };
-        if (rest) text = indent + fence + newline + indent + rest;
+        if (rest) content = indent + fence + newline + prefix + indent + rest;
+        paragraph = false;
+      } else {
+        paragraph = !INTERRUPTS.test(content);
       }
     }
-    out += text + ending;
+    out += head + content + ending;
   }
   return out;
+}
+
+/** Escapes what would start a block (a list marker, a quote, a heading, a fence), so moved text stays text. */
+function asText(text: string): string {
+  if (!CONTAINER_START.test(text) && !INTERRUPTS.test(text) && !/^(?:`{3}|~{3}|\$\$)/.test(text)) return text;
+  return /^\d/.test(text) ? text.replace(/^(\d+)/, "$1\\") : `\\${text}`;
 }
 
 /** The first run of at least `size` dollars that no backslash escapes. */

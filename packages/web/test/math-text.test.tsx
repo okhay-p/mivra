@@ -269,6 +269,48 @@ describe("MathText display fences that share a line with text", () => {
   });
 });
 
+describe("MathText display fences in lists and quotes", () => {
+  const normal = (html: string) => html.replace(/<\/?div[^>]*>|\s+/g, "");
+  const codes = (c: Element) => [...c.querySelectorAll("pre code")].map((code) => code.textContent);
+
+  // Each case is checked through the real pipeline: the code blocks and formulas it should produce, no KaTeX error,
+  // and the same HTML as a single parse, so the splitter agrees with the parser on the normalised text.
+  it.each<[string, string, { code?: string[]; math?: string[]; text?: string[]; unchanged?: boolean }]>([
+    ["a fence opened on a list marker", "- ```\n  $$\n  x$$ tail\n  ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in a quote", "> ```\n> $$\n> x$$ tail\n> ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in a quote in a list item", "- > ```\n  > $$\n  > x$$ tail\n  > ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["indented code in a list item", "- a\n\n      $$\n      x$$ y", { code: ["$$\nx$$ y\n"], unchanged: true }],
+    ["a formula the next list item ends", "- a\n  $$\n  x\n- b\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
+    ["a formula a dedent ends", "- a\n  $$\n  x\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
+    ["a formula the end of a quote ends", "> $$\n> x\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
+    ["a formula in a nested list item", "- parent\n  - child\n    $$\n    x$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula in a quote", "> $$\n> x$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { math: ["x + y\n= z"], text: ["after"] }],
+    ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { math: ["x"], text: ["tail", "b"] }],
+    ["a formula after a lazy line", "- a\nb\n  $$\n  x$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula in a quote in a list item", "- > $$\n  > x$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula a blank line ends in a quote", "> $$\n> x\n\n> y$$ z", { math: ["x"], text: ["y$$ z"], unchanged: true }],
+    ["a formula after a blank line in a list item in a quote", "> - a\n>\n>   $$\n>   x$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula after indented code", "    $$\n    x\n$$\ny$$ tail", { code: ["$$\nx\n"], math: ["y"], text: ["tail"] }],
+    ["a list marker after the closing `$$`", "$$\nx$$ 1. next", { math: ["x"], text: ["1. next"] }],
+    ["a `$$` after the closing `$$`", "$$\nx$$ $$ y", { math: ["x"], text: ["$$ y"] }],
+    ["a quote marker after the closing `$$`", "- $$\n  x$$ > y", { math: ["x"], text: ["> y"] }],
+    ["a fence closed in a list item", "- ```\n  a\n  ```\n  $$\n  x$$ tail", { code: ["a\n"], math: ["x"], text: ["tail"] }],
+  ])("normalises %s as the parser reads it", (_name, text, want) => {
+    const normalised = separateDisplayFences(text);
+    if (want.unchanged) expect(normalised).toBe(text);
+    expect(separateDisplayFences(normalised)).toBe(normalised);
+    const c = block(text);
+    expect(c.querySelector(".katex-error")).toBeNull();
+    expect(codes(c)).toEqual(want.code ?? []);
+    expect(formulas(c)).toEqual(want.math ?? []);
+    for (const t of want.text ?? []) expect([...c.querySelectorAll("p, li")].some((p) => p.textContent?.trim().endsWith(t))).toBe(true);
+    expect(normal(c.innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${text}`).innerHTML));
+    const prose = `one\n\n${text}\n\nlast`;
+    expect(normal(block(prose).innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${prose}`).innerHTML));
+  });
+});
+
 describe("splitBlocks", () => {
   it("splits at blank lines before a new top-level block", () => {
     expect(splitBlocks("one\n\ntwo\n\n\nthree")).toEqual(["one\n\n", "two\n\n\n", "three"]);
