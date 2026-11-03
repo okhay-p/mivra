@@ -44,7 +44,7 @@ export function submitAttempt(
       answer: answer.data,
       grade: graded.grade,
       correct: graded.correct,
-      concept: check.concept?.(artifact.spec),
+      concept: check.concept?.(artifact.spec, answer.data),
     });
   } catch (error) {
     if (error instanceof Conflict) return { ok: false, error: { kind: "conflict", message: error.message } };

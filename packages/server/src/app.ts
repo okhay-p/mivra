@@ -1,9 +1,10 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { LanguageModel } from "ai";
-import { ArtifactView, DocumentView, MemoryEdit, MemoryView } from "@mivra/protocol";
+import { ArtifactView, CourseView, DocumentView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
 import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
 import type { Extract } from "./documents/extract-in-child.js";
+import { coreCourse } from "./plugins/core-course.js";
 import { coreLearning } from "./plugins/core-learning.js";
 import { coreMemory } from "./plugins/core-memory.js";
 import { presentMessages } from "./runtime/artifacts.js";
@@ -11,13 +12,13 @@ import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
-import { createSessionStore, type DocumentRow, type MemoryRow, type SessionRow } from "./store/session-store.js";
+import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
 
 export interface AppDeps {
   db: Db;
   model: () => LanguageModel;
   security: SecurityConfig;
-  /** Defaults to the first-party core-learning and core-memory plugins. */
+  /** Defaults to the first-party core-learning, core-memory and core-course plugins. */
   plugins?: Plugin[];
   /** Defaults to extracting on a worker thread. */
   extractDocument?: Extract;
@@ -29,6 +30,8 @@ const Session = z
     title: z.string(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+    /** The course this session teaches, or null for free chat. */
+    courseId: z.string().nullable(),
   })
   .openapi("Session");
 
@@ -75,6 +78,31 @@ const createSession = createRoute({
   },
   responses: {
     201: { description: "Created session", content: { "application/json": { schema: Session } } },
+  },
+});
+
+const startCourse = createRoute({
+  method: "post",
+  path: "/courses",
+  description:
+    "Start a course for one learning goal (ADR-011). Creates the course and a session for it; the placement interview runs in that session's chat, starting with the learner's first message.",
+  request: { body: { content: { "application/json": { schema: StartCourse } } } },
+  responses: {
+    201: {
+      description: "The course and its session",
+      content: { "application/json": { schema: z.object({ course: CourseView, session: Session }) } },
+    },
+    400: errorResponse("Invalid goal"),
+  },
+});
+
+const getCourse = createRoute({
+  method: "get",
+  path: "/sessions/{id}/course",
+  request: { params: SessionParams },
+  responses: {
+    200: { description: "The session's course with its latest syllabus", content: { "application/json": { schema: CourseView } } },
+    404: errorResponse("Unknown session, or the session isn't a course"),
   },
 });
 
@@ -231,12 +259,27 @@ const turnErrorStatus = { not_found: 404, invalid: 400, conflict: 409, unavailab
 
 const attemptErrorStatus = { not_found: 404, invalid: 400, conflict: 409 } as const;
 
-function toSessionJson(row: SessionRow) {
+function toSessionJson(row: SessionRow & { courseId?: string | null }) {
   return {
     id: row.id,
     title: row.title,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    courseId: row.courseId ?? null,
+  };
+}
+
+function toCourseJson(row: CourseRow, store: SessionStore): CourseView {
+  const syllabus = store.latestSyllabus(row.id);
+  return {
+    id: row.id,
+    sessionId: row.sessionId,
+    goal: row.goal,
+    status: row.status,
+    syllabus: syllabus
+      ? { version: syllabus.version, topics: syllabus.topics, known: syllabus.known, createdAt: syllabus.createdAt.toISOString() }
+      : null,
+    createdAt: row.createdAt.toISOString(),
   };
 }
 
@@ -269,7 +312,7 @@ function toDocumentJson(row: DocumentRow): DocumentView {
   };
 }
 
-export function createApp({ db, model, security, plugins = [coreLearning, coreMemory], extractDocument }: AppDeps) {
+export function createApp({ db, model, security, plugins = [coreLearning, coreMemory, coreCourse], extractDocument }: AppDeps) {
   const store = createSessionStore(db);
   store.recoverInterruptedRuns();
   const registry = createCapabilityRegistry(plugins);
@@ -284,6 +327,15 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
     .openapi(createSession, async (c) => {
       const body = c.req.header("content-type")?.includes("application/json") ? c.req.valid("json") : {};
       return c.json(toSessionJson(store.createSession(body?.title)), 201);
+    })
+    .openapi(startCourse, (c) => {
+      const { course, session } = store.createCourse(c.req.valid("json").goal);
+      return c.json({ course: toCourseJson(course, store), session: toSessionJson({ ...session, courseId: course.id }) }, 201);
+    })
+    .openapi(getCourse, (c) => {
+      const course = store.findCourseBySession(c.req.valid("param").id);
+      if (!course) return c.json({ error: "This session isn't a course" }, 404);
+      return c.json(toCourseJson(course, store), 200);
     })
     .openapi(listMessages, (c) => {
       const { id } = c.req.valid("param");

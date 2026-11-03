@@ -18,6 +18,7 @@ import { Conflict, type RunStatus, type SessionStore } from "../store/session-st
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 import { createContinuationStream } from "./continuation-stream.js";
+import { courseContext } from "./course-context.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
@@ -93,6 +94,7 @@ const defaultAssembleContext =
       ),
       instructions: [
         learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
+        courseContext(store, sessionId),
         documents?.rules,
       ]
         .filter(Boolean)

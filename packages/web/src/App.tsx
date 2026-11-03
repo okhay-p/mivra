@@ -3,11 +3,12 @@ import { Conversation, ConversationContent, ConversationScrollButton } from "@/c
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView } from "@mivra/protocol";
-import { Brain, MessageSquare, Plus } from "lucide-react";
+import { Brain, GraduationCap, MessageSquare, Plus } from "lucide-react";
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
@@ -40,12 +41,15 @@ interface Session {
   id: string;
   title: string;
   updatedAt: string;
+  courseId: string | null;
 }
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState<string>();
+  // The goal of a course just started, sent as its session's first message so the interview begins.
+  const [firstMessage, setFirstMessage] = useState<{ sessionId: string; text: string }>();
 
   const refreshSessions = async () => {
     try {
@@ -74,6 +78,12 @@ export function App() {
     }
   };
 
+  const startedCourse = ({ session, goal }: StartedCourse) => {
+    setSessions((prev) => [session, ...prev]);
+    setFirstMessage({ sessionId: session.id, text: goal });
+    setActiveId(session.id);
+  };
+
   const active = sessions.find((s) => s.id === activeId);
   // Lives here because the mobile sidebar unmounts its content when closed, and the theme must keep following the OS.
   const [theme, setTheme] = useTheme();
@@ -89,6 +99,7 @@ export function App() {
         onThemeChange={setTheme}
         onSelect={setActiveId}
         onNew={newSession}
+        onNewCourse={() => setActiveId(undefined)}
         onOpenMemory={() => setMemoryOpen(true)}
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
@@ -103,9 +114,16 @@ export function App() {
         ) : error ? (
           <Notice error>{error}</Notice>
         ) : activeId ? (
-          <SessionLoader key={activeId} sessionId={activeId} onReply={refreshSessions} />
+          <SessionLoader
+            key={activeId}
+            sessionId={activeId}
+            course={Boolean(active?.courseId)}
+            firstMessage={firstMessage?.sessionId === activeId ? firstMessage.text : undefined}
+            onFirstMessageSent={() => setFirstMessage(undefined)}
+            onReply={refreshSessions}
+          />
         ) : (
-          <Notice>Start a new session to begin learning.</Notice>
+          <StartCourseForm onStarted={startedCourse} onFreeChat={newSession} />
         )}
       </SidebarInset>
     </SidebarProvider>
@@ -123,6 +141,7 @@ function SessionSidebar({
   onThemeChange,
   onSelect,
   onNew,
+  onNewCourse,
   onOpenMemory,
 }: {
   sessions: Session[];
@@ -131,6 +150,7 @@ function SessionSidebar({
   onThemeChange: (theme: ThemeChoice) => void;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onNewCourse: () => void;
   onOpenMemory: () => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
@@ -162,6 +182,18 @@ function SessionSidebar({
               <span>New session</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="New course"
+              onClick={() => {
+                onNewCourse();
+                closeOnMobile();
+              }}
+            >
+              <GraduationCap />
+              <span>New course</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
@@ -179,7 +211,7 @@ function SessionSidebar({
                       closeOnMobile();
                     }}
                   >
-                    <MessageSquare />
+                    {s.courseId ? <GraduationCap aria-label="Course" /> : <MessageSquare />}
                     <span>{s.title}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -211,7 +243,17 @@ function SessionSidebar({
   );
 }
 
-function SessionLoader({ sessionId, onReply }: { sessionId: string; onReply: () => void }) {
+interface SessionProps {
+  sessionId: string;
+  /** Whether the session teaches a course, which shows the course bar. */
+  course: boolean;
+  /** Sent once, as soon as the empty session opens. */
+  firstMessage?: string;
+  onFirstMessageSent: () => void;
+  onReply: () => void;
+}
+
+function SessionLoader({ sessionId, onReply, ...props }: SessionProps) {
   const [initial, setInitial] = useState<UIMessage[]>();
   const [error, setError] = useState<string>();
 
@@ -220,18 +262,19 @@ function SessionLoader({ sessionId, onReply }: { sessionId: string; onReply: () 
   }, [sessionId]);
 
   if (error) return <Notice error>Couldn't load this session: {error}</Notice>;
-  return initial ? <Chat sessionId={sessionId} initialMessages={initial} onReply={onReply} /> : null;
+  return initial ? <Chat sessionId={sessionId} initialMessages={initial} onReply={onReply} {...props} /> : null;
 }
 
 function Chat({
   sessionId,
   initialMessages,
+  course,
+  firstMessage,
+  onFirstMessageSent,
   onReply,
-}: {
-  sessionId: string;
-  initialMessages: UIMessage[];
-  onReply: () => void;
-}) {
+}: SessionProps & { initialMessages: UIMessage[] }) {
+  // Bumped after each reply, so the course bar picks up a syllabus written in it.
+  const [courseVersion, setCourseVersion] = useState(0);
   const [input, setInput] = useState("");
   const documents = useDocuments(sessionId);
   const documentsRef = useRef(documents);
@@ -301,6 +344,14 @@ function Chat({
     },
   });
 
+  const firstSent = useRef(false);
+  useEffect(() => {
+    if (!firstMessage || firstSent.current || initialMessages.length > 0) return;
+    firstSent.current = true;
+    onFirstMessageSent();
+    void sendMessage({ text: firstMessage }, { body: { documentIds: [] } });
+  }, [firstMessage, initialMessages.length, onFirstMessageSent, sendMessage]);
+
   useEffect(() => {
     const scroll = conversation.scrollRef.current;
     if (!scroll) return;
@@ -352,6 +403,11 @@ function Chat({
   // Focus/visibility deliberately replace a possibly stalled subscription; only the Stop endpoint
   // cancels the server-owned run. There is no idle timer or periodic fallback.
   const busy = status === "submitted" || status === "streaming";
+  // A syllabus is written during a reply, often an automatic one, so reload the course bar whenever the
+  // chat settles or the transcript is reconciled with the server.
+  useEffect(() => {
+    if (course && !busy) setCourseVersion((v) => v + 1);
+  }, [course, busy, messages.length]);
   const chatState = useRef({ busy, resumeStream, stop });
   chatState.current = { busy, resumeStream, stop };
   async function reconcile(expected: number) {
@@ -434,6 +490,7 @@ function Chat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {course && <CourseBar sessionId={sessionId} version={courseVersion} />}
       <Conversation aria-busy={busy} instance={conversation} initial="instant" resize="instant" className="min-h-0 min-w-0">
         {/* Positioned, so sr-only artifact text cannot stretch or scroll the outer interface. */}
         <ConversationContent className="relative mx-auto max-w-3xl gap-4 p-4"

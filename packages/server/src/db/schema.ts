@@ -174,3 +174,45 @@ export const documentChunks = sqliteTable(
   },
   (t) => [uniqueIndex("document_chunks_document_seq_idx").on(t.documentId, t.seq)],
 );
+
+export const courseStatuses = ["interviewing", "active", "complete"] as const;
+
+/**
+ * A course (ADR-011): one learning goal, taught in its own chat session. It starts with a placement
+ * interview and becomes active once the AI has written its syllabus.
+ */
+export const courses = sqliteTable(
+  "courses",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    goal: text("goal").notNull(),
+    status: text("status", { enum: courseStatuses }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("courses_session_idx").on(t.sessionId)],
+);
+
+/**
+ * One immutable version of a course's syllabus. `topics` is the ordered list of topics, each with a
+ * server-assigned id that stays the same across versions, so lessons can refer to their topic.
+ * `known` is what the AI said the learner already knows, labelled by source.
+ */
+export const syllabusVersions = sqliteTable(
+  "syllabus_versions",
+  {
+    id: text("id").primaryKey(),
+    courseId: text("course_id")
+      .notNull()
+      .references(() => courses.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    topics: text("topics", { mode: "json" }).notNull(),
+    known: text("known", { mode: "json" }).notNull(),
+    runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("syllabus_versions_course_version_idx").on(t.courseId, t.version)],
+);

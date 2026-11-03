@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
 import { and, asc, desc, eq, inArray, isNull, isNotNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { artifacts, attempts, documentChunks, documents, memories, messages, runs, sessions, type RunStatus } from "../db/schema.js";
+import { artifacts, attempts, courses, documentChunks, documents, memories, messages, runs, sessions, syllabusVersions, type RunStatus } from "../db/schema.js";
 
 export type { RunStatus };
 
@@ -12,6 +12,10 @@ export type AttemptRow = typeof attempts.$inferSelect;
 export type EvidenceRow = Pick<AttemptRow, "id" | "concept" | "correct" | "createdAt">;
 export type MemoryRow = typeof memories.$inferSelect;
 export type DocumentRow = typeof documents.$inferSelect;
+export type CourseRow = typeof courses.$inferSelect;
+export type SyllabusRow = typeof syllabusVersions.$inferSelect;
+export type SyllabusTopicRow = { id: string; title: string; summary: string; reason: string; requestedByLearner: boolean; concepts: string[] };
+export type KnownConceptRow = { concept: string; source: "memory" | "test" | "guess"; note: string };
 /** A chunk of a document's text with what's needed to cite it. `documentOrder` is the document's rowid, so its upload order. */
 export type DocumentExcerpt = { documentId: string; filename: string; kind: DocumentRow["kind"]; page: number; seq: number; text: string; documentOrder: number };
 
@@ -70,8 +74,62 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       db.delete(memories).where(eq(memories.status, "pending")).run();
     },
 
-    listSessions(): SessionRow[] {
-      return db.select().from(sessions).orderBy(desc(sessions.updatedAt)).all();
+    /** Sessions, most recent first, with the course each one teaches, if any. */
+    listSessions(): (SessionRow & { courseId: string | null })[] {
+      return db
+        .select({ session: sessions, courseId: courses.id })
+        .from(sessions)
+        .leftJoin(courses, eq(courses.sessionId, sessions.id))
+        .orderBy(desc(sessions.updatedAt))
+        .all()
+        .map((row) => ({ ...row.session, courseId: row.courseId }));
+    },
+
+    /** Starts a course in a new session of its own, titled after the goal. */
+    createCourse(goal: string): { course: CourseRow; session: SessionRow } {
+      return db.transaction((tx) => {
+        const now = clock();
+        const session = { id: randomUUID(), title: goal.trim().slice(0, 60), createdAt: now, updatedAt: now };
+        tx.insert(sessions).values(session).run();
+        const course = { id: randomUUID(), sessionId: session.id, goal: goal.trim(), status: "interviewing" as const, createdAt: now, updatedAt: now };
+        tx.insert(courses).values(course).run();
+        return { course, session };
+      });
+    },
+
+    findCourseBySession(sessionId: string): CourseRow | undefined {
+      return db.select().from(courses).where(eq(courses.sessionId, sessionId)).get();
+    },
+
+    /** The course's newest syllabus version, if one has been written. */
+    latestSyllabus(courseId: string): (Omit<SyllabusRow, "topics" | "known"> & { topics: SyllabusTopicRow[]; known: KnownConceptRow[] }) | undefined {
+      const row = db.select().from(syllabusVersions).where(eq(syllabusVersions.courseId, courseId)).orderBy(desc(syllabusVersions.version)).get();
+      return row && { ...row, topics: row.topics as SyllabusTopicRow[], known: row.known as KnownConceptRow[] };
+    },
+
+    /**
+     * Writes a course's first syllabus at the end of its placement interview, and makes the course active.
+     * Returns false if the course isn't interviewing (its syllabus already exists); later versions come
+     * from Change and adaptive edits, not from this.
+     */
+    writeFirstSyllabus(courseId: string, runId: string, input: { topics: Omit<SyllabusTopicRow, "id">[]; known: KnownConceptRow[] }): SyllabusRow | undefined {
+      return db.transaction((tx) => {
+        const course = tx.select().from(courses).where(eq(courses.id, courseId)).get();
+        if (course?.status !== "interviewing") return undefined;
+        const now = clock();
+        const row = {
+          id: randomUUID(),
+          courseId,
+          version: 1,
+          topics: input.topics.map((topic) => ({ id: randomUUID(), ...topic })),
+          known: input.known,
+          runId,
+          createdAt: now,
+        };
+        tx.insert(syllabusVersions).values(row).run();
+        tx.update(courses).set({ status: "active", updatedAt: now }).where(eq(courses.id, courseId)).run();
+        return row;
+      });
     },
 
     createSession(title?: string): SessionRow {
@@ -422,7 +480,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     },
 
     /** Records the learner's single graded attempt. Throws Conflict if one already exists. */
-    createAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string }): AttemptRow {
+    createAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string | null }): AttemptRow {
       return db.transaction((tx) => {
         if (tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, input.artifactId)).get()) {
           throw new Conflict("This check has already been answered");

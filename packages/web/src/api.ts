@@ -1,4 +1,4 @@
-import { ArtifactView, DocumentView, MemoryView } from "@mivra/protocol";
+import { ArtifactView, CourseView, DocumentView, MemoryView, type PlacementAnswer } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc } from "hono/client";
@@ -25,9 +25,14 @@ export async function errorMessage(res: Response): Promise<string> {
 export type AttemptResult = { ok: true; view: ArtifactView } | { ok: false; error: string };
 
 /** Submits an answer to a multiple-choice check; the server grades it and returns the updated view. */
-export async function submitMultipleChoice(artifactId: string, optionIndex: number): Promise<AttemptResult> {
+export const submitMultipleChoice = (artifactId: string, optionIndex: number) => submitAnswer(artifactId, { optionIndex });
+
+/** Submits an answer to a placement question: an option, Not sure, or Skip. */
+export const submitPlacement = (artifactId: string, answer: PlacementAnswer) => submitAnswer(artifactId, answer);
+
+async function submitAnswer(artifactId: string, answer: unknown): Promise<AttemptResult> {
   try {
-    const res = await api.artifacts[":id"].attempts.$post({ param: { id: artifactId }, json: { answer: { optionIndex } } });
+    const res = await api.artifacts[":id"].attempts.$post({ param: { id: artifactId }, json: { answer } });
     if (!res.ok) return { ok: false, error: await errorMessage(res) };
     const view = ArtifactView.safeParse(await res.json());
     return view.success ? { ok: true, view: view.data } : { ok: false, error: "The server sent a reply this page can't display." };
@@ -100,4 +105,20 @@ export const deleteDocument = (id: string) =>
   request(
     () => api.documents[":id"].$delete({ param: { id } }),
     () => undefined,
+  );
+
+/** Starts a course for a goal; the server creates its session too. */
+export const startCourse = (goal: string) =>
+  request(
+    () => api.courses.$post({ json: { goal } }),
+    async (res) => {
+      const body = (await res.json()) as { course: unknown; session: { id: string; title: string; updatedAt: string; courseId: string | null } };
+      return { course: CourseView.parse(body.course), session: body.session };
+    },
+  );
+
+export const getCourse = (sessionId: string) =>
+  request(
+    () => api.sessions[":id"].course.$get({ param: { id: sessionId } }),
+    async (res) => CourseView.parse(await res.json()),
   );

@@ -45,6 +45,14 @@ const check = {
   explanation: "SECRET-EXPLANATION: 3 and 1 swapped once.",
 };
 
+const syllabus = {
+  topics: [
+    { title: "Limits", summary: "What a limit is.", reason: "You weren't sure about limits.", requestedByLearner: false, concepts: ["limit"] },
+    { title: "Chain rule", summary: "Derivatives of compositions.", reason: "The next step after the power rule.", requestedByLearner: false, concepts: ["chain rule"] },
+  ],
+  known: [{ concept: "derivative", source: "test", note: "Answered correctly." }],
+};
+
 const longWord = "calculateMaximumSlidingWindowSumWithoutRecomputingEveryElement";
 // The longest value the trace schema allows.
 const longValue = "calculateMaximumWindowSu";
@@ -479,6 +487,11 @@ const SCRIPTS: Record<string, Step[]> = {
   deepnesting: [{ text: `${">".repeat(2000)} deep\n\n**still fine**`, stream: true }],
   // An inequality with many closed intervals, which is ordinary discrete maths.
   intervals: [{ text: `$a<b$ ${"$[0,1]$ ".repeat(66)}` }],
+  placementcourse: [
+    { tool: "ask_placement_question", input: { concept: "derivative", question: "Is the derivative of $x^2$ equal to $2x$?", options: [{ text: "True" }, { text: "False" }], correctOptionIndex: 0, explanation: "Power rule." } },
+    { tool: "ask_placement_question", input: { concept: "limit", question: "What is the limit of $1/x$ as $x \\to \\infty$?", options: [{ text: "0" }, { text: "1" }, { text: "Infinity" }], correctOptionIndex: 0, explanation: "It shrinks towards 0." } },
+    { text: "Two quick questions first." },
+  ],
   teach: [
     { tool: "show_algorithm_trace", input: trace },
     { tool: "ask_multiple_choice", input: check },
@@ -522,6 +535,11 @@ function nextStep(prompt: PromptMessage[]): Step {
     if (history.includes("continuationstop")) return { controlled: "cancelstream" };
     if (history.includes("continuationbroken")) return { controlled: "continuationFailure" };
     if (history.includes("continuationlive")) return { controlled: "continuationLive" };
+    if (history.includes("placementcourse")) {
+      return prompt.slice(lastUser).some((m) => m.role === "tool")
+        ? { text: "Your syllabus is ready." }
+        : { tool: "write_syllabus", input: syllabus };
+    }
     const result = /learnerResult\\*":\\*"([a-z ]+)/.exec(JSON.stringify(prompt))?.[1];
     return { text: `Lesson continued after ${result ?? "unknown"}.` };
   }
