@@ -69,9 +69,10 @@ export function CourseBar({ course, children, onUndo }: { course: CourseView; ch
 
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="bg-muted/40 border-b" aria-label="Course" role="region">
-      <div className="mx-auto flex max-w-3xl items-center gap-2 px-4 py-2 text-sm">
+      <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2 text-sm">
         <GraduationCap className="text-muted-foreground size-4 shrink-0" aria-hidden />
-        <span className="min-w-0 truncate font-medium">{course.goal}</span>
+        {/* On a phone the goal keeps its own line rather than shrinking to a letter; the actions wrap below it. */}
+        <span className="min-w-0 truncate font-medium max-sm:min-w-48">{course.goal}</span>
         <Badge variant="outline" className="shrink-0">
           {course.status === "interviewing" ? "Placement interview" : course.status === "complete" ? "Complete" : "In progress"}
         </Badge>

@@ -39,10 +39,14 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(check).toBeVisible();
   await expect(lesson.getByRole("button", { name: "Finish lesson" })).toBeDisabled();
 
-  // Ctrl+K opens the tutor; the interview is still in it.
+  // Ctrl+K opens the tutor. The interview is folded away, and its replies can't be added to the lesson.
   await page.keyboard.press("Control+k");
   const tutor = page.getByRole("dialog", { name: "Tutor" });
+  await expect(tutor.getByRole("textbox", { name: "Message" })).toHaveAttribute("placeholder", "Ask the tutor…");
+  await expect(tutor.getByText("Your syllabus is ready.")).toHaveCount(0);
+  await tutor.getByRole("button", { name: "Show the placement interview" }).click();
   await expect(tutor.getByText("Your syllabus is ready.")).toBeVisible();
+  await expect(tutor.getByRole("button", { name: "Add to lesson" })).toHaveCount(0);
   await page.keyboard.press("Control+k");
   await expect(tutor).toBeHidden();
 
@@ -114,6 +118,8 @@ test("a course starts from the first screen, runs the placement interview and wr
   // An earlier lesson isn't the end of the course, and there's always a way back (also on a phone).
   await expect(earlier.getByText("You've reached the end of the syllabus.")).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 800 });
+  // On a phone the goal keeps a readable width; the course bar's actions wrap below it.
+  await expect.poll(async () => (await course.getByText(goal).first().boundingBox())?.width ?? 0).toBeGreaterThan(150);
   await page.getByRole("button", { name: "Back to lesson 2: Chain rule" }).click();
   await expect(page.getByRole("article", { name: "The chain rule" })).toBeVisible();
   await expect(page.getByText("You're looking at an earlier lesson.")).toHaveCount(0);

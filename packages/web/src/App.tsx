@@ -7,7 +7,7 @@ import { Brain, GraduationCap, MessageSquare, MessagesSquare, Plus, SquarePlus }
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
-import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { artifactData, artifactViewsIn, interviewEnd, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
 import { LessonPage, TopicList, type LessonSection } from "./Lesson.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
@@ -260,6 +260,10 @@ interface SessionProps {
   onPromptUsed?: () => void;
   /** Offers "Add to lesson" on the tutor's replies. */
   onAddToLesson?: (messageId: string) => Promise<string | undefined>;
+  /** Folds away a course's placement interview, which is history once lessons have started. */
+  foldInterview?: boolean;
+  /** The message box's placeholder. */
+  placeholder?: string;
 }
 
 function SessionView({ course, ...props }: SessionProps & { course: boolean }) {
@@ -464,6 +468,8 @@ function CourseSession(props: SessionProps) {
             lessonId={lessonId}
             prompt={prompt}
             onPromptUsed={() => setPrompt(undefined)}
+            foldInterview
+            placeholder="Ask the tutor…"
             onAddToLesson={openLesson?.status === "ready" ? addAnswer : undefined}
           />
         </SheetContent>
@@ -495,7 +501,10 @@ function Chat({
   prompt,
   onPromptUsed,
   onAddToLesson,
+  foldInterview = false,
+  placeholder = "What do you want to learn?",
 }: SessionProps & { initialMessages: UIMessage[] }) {
+  const [showInterview, setShowInterview] = useState(false);
   const lessonRef = useRef(lessonId);
   lessonRef.current = lessonId;
   const [input, setInput] = useState("");
@@ -742,7 +751,12 @@ function Chat({
             if (e.key !== "Tab" && (e.target as HTMLElement).closest("button, input, [role=region]")) conversation.stopScroll();
           }}>
 
-          {messages.map((m, mi) => (
+          {foldInterview && !showInterview && interviewEnd(messages) >= 0 && (
+            <Button variant="ghost" size="sm" className="text-muted-foreground self-center" onClick={() => setShowInterview(true)}>
+              Show the placement interview
+            </Button>
+          )}
+          {messages.map((m, mi) => (foldInterview && !showInterview && mi <= interviewEnd(messages)) ? null : (
             <div
               key={m.id}
               data-message-id={m.id}
@@ -786,7 +800,7 @@ function Chat({
                 }
                 return null;
               })}
-              {onAddToLesson && m.role === "assistant" && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (
+              {onAddToLesson && m.role === "assistant" && !(foldInterview && mi <= interviewEnd(messages)) && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (
                 <AddToLessonButton onAdd={() => onAddToLesson(m.id)} />
               )}
             </div>
@@ -805,7 +819,7 @@ function Chat({
             ref={messageInput}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="What do you want to learn?"
+            placeholder={placeholder}
             aria-label="Message"
             autoFocus
           />

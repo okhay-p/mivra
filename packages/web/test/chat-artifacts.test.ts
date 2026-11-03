@@ -1,6 +1,6 @@
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vitest";
-import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "../src/chat-artifacts.js";
+import { artifactData, artifactViewsIn, interviewEnd, isReplyInProgress, mergeViews } from "../src/chat-artifacts.js";
 import { answered, question, trace } from "./fixtures.js";
 
 const part = (data: unknown, id?: string) => ({ type: "data-artifact" as const, id, data });
@@ -43,5 +43,26 @@ describe("mergeViews", () => {
       "art-trace": trace,
     });
     expect(mergeViews({ "art-mc": question }, { "art-mc": answered })).toEqual({ "art-mc": answered });
+  });
+});
+
+describe("interviewEnd", () => {
+  const user = (id: string) => ({ id, role: "user" as const, parts: [{ type: "text" as const, text: id }] });
+  const reply = (id: string, placement = false) => ({
+    id,
+    role: "assistant" as const,
+    parts: placement ? [{ type: "data-artifact", id: `a-${id}`, data: { kind: "placement_question" } }] : [{ type: "text" as const, text: id }],
+  });
+
+  it("ends at the reply after the last placement question, where the syllabus was written", () => {
+    expect(interviewEnd([user("goal"), reply("q", true), reply("syllabus"), user("later"), reply("answer")] as never)).toBe(2);
+  });
+
+  it("ends at the first reply when the learner skipped the questions", () => {
+    expect(interviewEnd([user("skip"), reply("syllabus"), user("later"), reply("answer")] as never)).toBe(1);
+  });
+
+  it("is -1 before any reply", () => {
+    expect(interviewEnd([user("goal")] as never)).toBe(-1);
   });
 });
