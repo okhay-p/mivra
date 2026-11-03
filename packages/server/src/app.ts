@@ -97,6 +97,16 @@ const stopChat = createRoute({
   responses: { 204: { description: "Cancellation requested (also succeeds when already finished)" } },
 });
 
+const continuationStream = createRoute({
+  method: "get", path: "/sessions/{id}/continuation",
+  request: { params: SessionParams },
+  responses: {
+    200: { description: "Replay and subscribe to the redacted continuation UI message stream", content: { "text/event-stream": { schema: z.string() } } },
+    204: { description: "No continuation is running" },
+    404: errorResponse("Unknown session"),
+  },
+});
+
 const chat = createRoute({
   method: "post",
   path: "/sessions/{id}/chat",
@@ -104,7 +114,7 @@ const chat = createRoute({
     "Append a user message and stream the assistant reply as an AI SDK UI message stream (Server-Sent Events). The server owns history; send only the new message. Message ids are single-use, so a retried request with the same id is rejected rather than generating twice.",
   request: {
     params: SessionParams,
-    body: { content: { "application/json": { schema: z.object({ message: Message }) } } },
+    body: { content: { "application/json": { schema: z.object({ message: Message, documentIds: z.array(z.string()).max(20).optional() }) } } },
   },
   responses: {
     200: { description: "UI message stream", content: { "text/event-stream": { schema: z.string() } } },
@@ -248,6 +258,7 @@ function toDocumentJson(row: DocumentRow): DocumentView {
   return {
     id: row.id,
     sessionId: row.sessionId,
+    messageId: row.messageId,
     filename: row.filename,
     kind: row.kind,
     byteSize: row.byteSize,
@@ -281,6 +292,11 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       const messages = presentMessages(store.loadMessages(id), registry, store);
       return c.json(messages as unknown as z.infer<typeof Message>[], 200);
     })
+    .openapi(continuationStream, (c) => {
+      const { id } = c.req.valid("param");
+      if (!store.findSession(id)) return c.json({ error: "Session not found" }, 404);
+      return turns.subscribeContinuation(id);
+    })
     .openapi(stopChat, (c) => {
       turns.stopTurn(c.req.valid("param").id, c.req.valid("json").messageId);
       return c.body(null, 204);
@@ -289,6 +305,7 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       const result = await turns.startTurn({
         sessionId: c.req.valid("param").id,
         message: c.req.valid("json").message,
+        documentIds: c.req.valid("json").documentIds,
         abortSignal: c.req.raw.signal,
       });
       if (!result.ok) return c.json({ error: result.error.message }, turnErrorStatus[result.error.kind]);
@@ -297,6 +314,9 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
     .openapi(submitAttemptRoute, (c) => {
       const result = submitAttempt({ artifactId: c.req.valid("param").id, answer: c.req.valid("json").answer }, { registry, store });
       if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
+      const artifact = store.findArtifact(c.req.valid("param").id)!;
+      // The durable claim in startContinuation makes retries and other tabs harmless.
+      void turns.continueAfterAnswer(artifact.sessionId);
       // Cast for the same reason as messages: hono's JSON typing recurses too deeply on the view type.
       return c.json(result.view as never, 201);
     })

@@ -44,6 +44,8 @@ export const runs = sqliteTable(
     userMessageId: text("user_message_id")
       .notNull()
       .references(() => messages.id, { onDelete: "cascade" }),
+    /** A unique claim on the quiz reply this automatic run continues. No synthetic user message. */
+    continuationOf: text("continuation_of"),
     assistantMessageId: text("assistant_message_id").references(() => messages.id, { onDelete: "set null" }),
     status: text("status", { enum: runStatuses }).notNull(),
     error: text("error"),
@@ -51,6 +53,7 @@ export const runs = sqliteTable(
     endedAt: integer("ended_at", { mode: "timestamp_ms" }),
   },
   (t) => [
+    uniqueIndex("runs_continuation_once_idx").on(t.continuationOf),
     index("runs_session_idx").on(t.sessionId, t.startedAt),
     uniqueIndex("runs_one_running_per_session_idx")
       .on(t.sessionId)
@@ -140,6 +143,7 @@ export const documents = sqliteTable(
     sessionId: text("session_id")
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
+    messageId: text("message_id").references(() => messages.id, { onDelete: "set null" }),
     filename: text("filename").notNull(),
     kind: text("kind", { enum: documentKinds }).notNull(),
     byteSize: integer("byte_size").notNull(),

@@ -37,6 +37,7 @@ const trace = {
 type Step =
   | { toolCall: { name: string; input: unknown } }
   | { text: string }
+  | { stream: ReadableStream<object> }
   /** Raw provider stream parts, ending the step with a tool-calls finish. */
   | { raw: object[] }
   /** Starts a text reply that never finishes, until the request is aborted. */
@@ -48,6 +49,7 @@ function scriptedModel(steps: Step[]) {
   return new MockLanguageModelV4({
     doStream: async ({ abortSignal }) => {
       const step = steps[call++] ?? { text: "ok" };
+      if ("stream" in step) return { stream: step.stream as never };
       if ("hang" in step) {
         const stream = new ReadableStream({
           start(c) {
@@ -189,6 +191,7 @@ describe("multiple_choice through the agent", () => {
       { text: "Before any evidence." },
       { toolCall: { name: "ask_multiple_choice", input: check } },
       { text: "Try it." },
+      { text: "Continue the lesson." },
       { text: "Welcome back." },
     ]);
     const first = await newSession(app);
@@ -198,8 +201,9 @@ describe("multiple_choice through the agent", () => {
     await turn(app, db, first, "quiz me");
     await answer(app, db.select().from(artifacts).get()!.id, { answer: { optionIndex: 2 } });
 
+    await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, first)).all().every(r => r.status !== "running")).toBe(true));
     const sse = await turn(app, db, await newSession(app), "what should I work on?");
-    const prompt = JSON.stringify(model.doStreamCalls[3]?.prompt);
+    const prompt = JSON.stringify(model.doStreamCalls[4]?.prompt);
     expect(prompt).toContain("binary search worst case");
     expect(prompt).toContain('\\"attempts\\":1,\\"correct\\":0,\\"lastResult\\":\\"incorrect\\"');
     // The new session's own messages carry no trace of the old conversation.
@@ -740,4 +744,163 @@ describe("capability registry", () => {
     const definition = registry.artifactKind("multiple_choice")!;
     expect(() => registry.viewOf(definition, { id: "a", createdAt: new Date(0), spec: check })).toThrow();
   });
+});
+
+
+it("replays the full redacted continuation to a late subscriber and finishes with no subscriber", async () => {
+  for (const subscribe of [true, false]) {
+    let release!: () => void;
+    let prefixRead!: () => void;
+    const ready = new Promise<void>(resolve => { prefixRead = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let prefix = false;
+    const stream = new ReadableStream<object>({
+      async pull(controller) {
+        if (!prefix) {
+          prefix = true;
+          controller.enqueue({ type: "reasoning-start", id: "PRIVATE-ID", providerMetadata: { vendor: { secret: "PRIVATE-META" } } });
+          controller.enqueue({ type: "reasoning-delta", id: "PRIVATE-ID", delta: "Thinking about it." });
+          controller.enqueue({ type: "reasoning-end", id: "PRIVATE-ID" });
+          controller.enqueue({ type: "text-start", id: "t" });
+          controller.enqueue({ type: "text-delta", id: "t", delta: "Before subscribing. " });
+        } else {
+          prefixRead();
+          await gate;
+          controller.enqueue({ type: "text-delta", id: "t", delta: "After subscribing." });
+          controller.enqueue({ type: "text-end", id: "t" });
+          controller.enqueue({ type: "tool-call", toolCallId: "private-call", toolName: "ask_multiple_choice", input: JSON.stringify(check) });
+          controller.enqueue({ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage });
+          controller.close();
+        }
+      },
+    });
+    const { app, db } = setup([
+      { toolCall: { name: "ask_multiple_choice", input: check } }, { text: "Try it." },
+      { stream }, { text: "Next question." },
+    ]);
+    const id = await newSession(app);
+    expect((await app.request(`/api/sessions/${id}/continuation`)).status).toBe(401);
+    expect((await app.request(`/api/sessions/${id}/continuation`, { headers: auth })).status).toBe(204);
+    await turn(app, db, id, "quiz");
+    const artifact = db.select().from(artifacts).get()!;
+    expect((await answer(app, artifact.id, { answer: { optionIndex: 1 } })).status).toBe(201);
+    await ready;
+    // Let the public stream drain the prefix while the provider is blocked at the gate.
+    await new Promise(resolve => setImmediate(resolve));
+    const response = subscribe ? await app.request(`/api/sessions/${id}/continuation`, { headers: auth }) : undefined;
+    if (response) {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-mivra-continuation-stop-id")).toBeTruthy();
+    }
+    release();
+    if (response) {
+      const sse = await response.text();
+      for (const text of ["Thinking about it.", "Before subscribing.", "After subscribing.", "data-artifact", "Next question."]) expect(sse).toContain(text);
+      for (const secret of [...SECRETS, "PRIVATE-ID", "PRIVATE-META", "private-call", "tool-input", "providerMetadata"]) expect(sse).not.toContain(secret);
+    }
+    await vi.waitFor(() => expect(db.select().from(runs).all().map(r => r.status)).toEqual(["completed", "completed"]));
+    expect(await messagesJson(app, id)).toContain("Before subscribing. After subscribing.");
+    expect((await app.request(`/api/sessions/${id}/continuation`, { headers: auth })).status).toBe(204);
+    if (response) {
+      const stopId = response.headers.get("x-mivra-continuation-stop-id")!;
+      // A delayed Stop after completion must not poison the next continuation's cancellation.
+      expect((await app.request(`/api/sessions/${id}/stop`, {
+        method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ messageId: stopId }),
+      })).status).toBe(204);
+      const nextCheck = db.select().from(artifacts).all().find(a => a.id !== artifact.id)!;
+      expect((await answer(app, nextCheck.id, { answer: { optionIndex: 1 } })).status).toBe(201);
+      await vi.waitFor(() => expect(db.select().from(runs).all().map(r => r.status)).toEqual(["completed", "completed", "completed"]));
+    }
+    db.$client.close();
+  }
+});
+
+it("recovers interrupted continuations with a durable retry budget and cooldown, retaining failures", async () => {
+  const { app, db } = setup([{ toolCall: { name: "ask_multiple_choice", input: check } }, { text: "Try it." }]);
+  const id = await newSession(app);
+  await turn(app, db, id, "quiz");
+  let clock = new Date();
+  const store = createSessionStore(db, () => clock);
+  const artifact = db.select().from(artifacts).get()!;
+  store.createAttempt({ artifactId: artifact.id, sessionId: id, answer: { optionIndex: 1 }, grade: { correct: true, correctOptionIndex: 1, explanation: "Five." }, correct: true });
+  const interrupted = store.startContinuation(id, ["multiple_choice"])!;
+  expect(store.startContinuation(id, ["multiple_choice"])).toBeUndefined();
+  // A new app over the same durable database performs startup recovery, without an old pump.
+  const restarted = setup([{ text: "Recovered lesson." }], db);
+  expect(store.latestRun(id)).toMatchObject({ id: interrupted.id, status: "failed" });
+  // Inject only the store clock: streaming and the SDK still use real scheduling.
+  const registry = createCapabilityRegistry([coreLearning]);
+  const recovered = createTurnRunner({ store, registry, model: () => restarted.model });
+  const subscribe = () => recovered.subscribeContinuation(id);
+  const duringCooldown = await Promise.all(Array.from({ length: 4 }, subscribe));
+  expect(duringCooldown.every(r => r.status === 204)).toBe(true);
+  expect(restarted.model.doStreamCalls).toHaveLength(0);
+  clock = new Date(store.latestRun(id)!.endedAt!.getTime() + 30_000);
+  const responses = await Promise.all(Array.from({ length: 4 }, subscribe));
+  expect(responses.some(r => r.headers.get("x-mivra-continuation-error") === "The model request failed.")).toBe(true);
+  await Promise.all(responses.map(r => r.text()));
+  expect(db.select().from(runs).all().map(r => r.status)).toEqual(["completed", "failed", "completed"]);
+  expect(db.select().from(runs).where(eq(runs.id, interrupted.id)).get()).toMatchObject({
+    continuationOf: null, error: "The server stopped before the reply finished",
+  });
+  expect(restarted.model.doStreamCalls).toHaveLength(1);
+  expect(await messagesJson(restarted.app, id)).toContain("Recovered lesson.");
+  expect((await restarted.app.request(`/api/sessions/${id}/continuation`, { headers: auth })).status).toBe(204);
+  expect(store.startContinuation(id, ["multiple_choice"])).toBeUndefined();
+  expect(restarted.model.doStreamCalls).toHaveLength(1);
+  // A separate quiz keeps failing. Recreate the store/runner at each check to prove the
+  // budget survives restarts and the count does not depend on in-memory ownership.
+  const failingSession = store.createSession();
+  const quiz = store.startRun(failingSession, userMessage("quiz"));
+  const failedCheck = store.createArtifact({ sessionId: failingSession.id, runId: quiz, toolCallId: "fail-check", kind: "multiple_choice", version: 1, spec: check });
+  store.finishRun(quiz, failingSession.id, "completed");
+  store.createAttempt({ sessionId: failingSession.id, artifactId: failedCheck.id, answer: { optionIndex: 1 }, grade: { correct: true, correctOptionIndex: 1, explanation: "Five." }, correct: true });
+  let calls = 0;
+  const failingModel = new MockLanguageModelV4({
+    doStream: async () => {
+      calls++;
+      return { stream: simulateReadableStream({ chunks: [{ type: "error", error: new Error("provider unavailable") }] }) };
+    },
+  });
+  const freshRunner = () => createTurnRunner({
+    store: createSessionStore(db, () => clock), registry,
+    model: () => failingModel,
+  });
+  const initialRunner = freshRunner();
+  await initialRunner.continueAfterAnswer(failingSession.id);
+  await (await initialRunner.subscribeContinuation(failingSession.id)).text();
+  expect(calls).toBe(1);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const failure = store.latestRun(failingSession.id)!;
+    expect(failure.status).toBe("failed");
+    for (const elapsed of [0, 29_999]) {
+      clock = new Date(failure.endedAt!.getTime() + elapsed);
+      const checks = await Promise.all(Array.from({ length: 4 }, () => freshRunner().subscribeContinuation(failingSession.id)));
+      expect(checks.every(r => r.status === 204 && r.headers.has("x-mivra-continuation-error"))).toBe(true);
+      expect(calls).toBe(attempt);
+    }
+    clock = new Date(failure.endedAt!.getTime() + 30_000);
+    const retries = await Promise.all(Array.from({ length: 4 }, () => freshRunner().subscribeContinuation(failingSession.id)));
+    await Promise.all(retries.map(response => response.text()));
+    expect(calls).toBe(Math.min(attempt + 1, 3));
+  }
+  clock = new Date(clock.getTime() + 86_400_000);
+  await freshRunner().subscribeContinuation(failingSession.id);
+  expect(calls).toBe(3);
+  expect(db.select().from(runs).all().filter(r => r.sessionId === failingSession.id).map(r => r.status)).toEqual(["completed", "failed", "failed", "failed"]);
+  // An accepted learner turn supersedes the exhausted claim even if that turn fails.
+  const manual = store.startRun(failingSession, userMessage("continue please"));
+  store.finishRun(manual, failingSession.id, "failed");
+  await freshRunner().subscribeContinuation(failingSession.id);
+  expect(calls).toBe(3);
+  // Cancellation is a terminal claim, even if the source quiz is still fully answered.
+  const cancelledSession = store.createSession();
+  const source = store.startRun(cancelledSession, userMessage("quiz"));
+  const cancelledCheck = store.createArtifact({ sessionId: cancelledSession.id, runId: source, toolCallId: "cancel-check", kind: "multiple_choice", version: 1, spec: check });
+  store.finishRun(source, cancelledSession.id, "completed");
+  store.createAttempt({ sessionId: cancelledSession.id, artifactId: cancelledCheck.id, answer: {}, grade: {}, correct: true });
+  const cancelled = store.startContinuation(cancelledSession.id, ["multiple_choice"])!;
+  store.finishRun(cancelled.id, cancelledSession.id, "cancelled");
+  expect(store.startContinuation(cancelledSession.id, ["multiple_choice"])).toBeUndefined();
+  db.$client.close();
 });

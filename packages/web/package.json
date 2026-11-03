@@ -30,7 +30,8 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
-    "tailwind-merge": "^3.7.0"
+    "tailwind-merge": "^3.7.0",
+    "use-stick-to-bottom": "^1.1.6"
   },
   "devDependencies": {
     "@mivra/server": "workspace:*",

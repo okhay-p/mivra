@@ -1,3 +1,5 @@
+import { useStickToBottom } from "use-stick-to-bottom";
+import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView } from "@mivra/protocol";
@@ -232,25 +234,63 @@ function Chat({
 }) {
   const [input, setInput] = useState("");
   const documents = useDocuments(sessionId);
+  const documentsRef = useRef(documents);
+  documentsRef.current = documents;
   // Views the learner changed locally (e.g. a graded check), by artifact id. They win over the view in
   // the message part, so the change survives re-renders; a reload gets it from the server instead.
   const [updatedViews, setUpdatedViews] = useState<Record<string, ArtifactView>>({});
-  const bottom = useRef<HTMLDivElement>(null);
+  // Immediate container-only scrolling also respects reduced motion on load and during streaming.
+  const conversation = useStickToBottom({ initial: "instant", resize: "instant" });
   const stopRequested = useRef(false);
   const messageInput = useRef<HTMLInputElement>(null);
   const [stopError, setStopError] = useState<string>();
-  const { messages, sendMessage, setMessages, status, error } = useChat({
+  const [continuationFailure, setContinuationFailure] = useState<string>();
+  const continuationStopId = useRef<string | undefined>(undefined);
+  const continuationResponse = useRef(false);
+  const checkVersion = useRef(0);
+  const reconnecting = useRef(false);
+  const checking = useRef(false);
+  const pendingCheck = useRef(false);
+  const generation = useRef(0);
+  const mounted = useRef(true);
+  const { messages, sendMessage, setMessages, status, error, resumeStream, stop } = useChat({
     id: sessionId,
     experimental_throttle: 50,
     messages: initialMessages,
     transport: new DefaultChatTransport({
       api: `/api/sessions/${sessionId}/chat`,
       headers: authHeaders,
-      // The server owns history, so send only the new message.
-      prepareSendMessagesRequest: ({ messages }) => ({ body: { message: messages.at(-1) } }),
+      prepareReconnectToStreamRequest: () => ({ api: `/api/sessions/${sessionId}/continuation` }),
+      // Only files ready when Send is pressed travel with this message; extraction may finish later.
+      prepareSendMessagesRequest: ({ messages, body }) => ({ body: { ...body, message: messages.at(-1) } }),
+      fetch: async (url, options) => {
+        const expected = generation.current;
+        const response = await fetch(url, options);
+        if (options?.method === "GET") {
+          continuationStopId.current = response.headers.get("x-mivra-continuation-stop-id") ?? undefined;
+          continuationResponse.current = response.status === 200;
+          if (continuationResponse.current) pendingCheck.current = false;
+          if (response.status === 204) await reconcile(expected);
+          checking.current = false;
+          const failure = response.headers.get("x-mivra-continuation-error");
+          if (failure) {
+            setContinuationFailure(failure);
+            if (response.status === 204) throw new Error(failure);
+          }
+        } else if (response.ok) {
+          // Bindings come from acceptance on the server, including during a long-running reply.
+          await documentsRef.current.refresh();
+        }
+        return response;
+      },
     }),
-    onFinish: ({ message }) => {
-      if (stopRequested.current) {
+    onFinish: ({ message, isDisconnect }) => {
+      if (reconnecting.current || isDisconnect || !mounted.current) return;
+      if (continuationResponse.current) {
+        continuationResponse.current = false;
+        continuationStopId.current = undefined;
+        void reconcile(generation.current);
+      } else if (stopRequested.current) {
         // Reconcile with the durable result: Stop may race a naturally completed reply.
         // A late reload must never overwrite a new turn the learner has already sent.
         void loadMessages(sessionId).then((result) => {
@@ -261,41 +301,161 @@ function Chat({
     },
   });
 
-  // Reasoning growth must not drag the learner away from an opened disclosure.
-  const visibleTranscript = JSON.stringify(messages.map((m) => m.parts.filter((p) => p.type !== "reasoning")));
-  // Block body: newer browsers return a Promise from scrollIntoView, which React would treat as a cleanup.
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
-  }, [visibleTranscript]);
+    const scroll = conversation.scrollRef.current;
+    if (!scroll) return;
+    scroll.dataset.testid = "transcript";
+    scroll.tabIndex = 0;
+    scroll.setAttribute("aria-label", "Conversation messages");
+    // The library escapes wheel input eagerly, but its resize guard can swallow touch/keyboard
+    // scroll events during streaming. Use its escape API on upward intent, without cancelling
+    // native scrolling or writing scrollTop.
+    let touchStart: { x: number; y: number } | undefined;
+    const startTouch = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      touchStart = touch ? { x: touch.clientX, y: touch.clientY } : undefined;
+    };
+    const moveTouch = (event: TouchEvent) => {
+      const touch = event.touches[0];
+      if (!touchStart || !touch || scroll.scrollTop <= 0) return;
+      const dy = touch.clientY - touchStart.y;
+      if (dy > 8 && dy > Math.abs(touch.clientX - touchStart.x)) conversation.stopScroll();
+    };
+    const scrollKey = (event: KeyboardEvent) => {
+      if (event.target === scroll && (["ArrowUp", "PageUp", "Home"].includes(event.key) || (event.key === " " && event.shiftKey))) {
+        conversation.stopScroll();
+      }
+    };
+    scroll.addEventListener("touchstart", startTouch, { passive: true });
+    scroll.addEventListener("touchmove", moveTouch, { passive: true });
+    scroll.addEventListener("keydown", scrollKey);
+    return () => {
+      scroll.removeEventListener("touchstart", startTouch);
+      scroll.removeEventListener("touchmove", moveTouch);
+      scroll.removeEventListener("keydown", scrollKey);
+    };
+  }, [conversation.scrollRef, conversation.stopScroll]);
 
+  useEffect(() => {
+    // An artifact interaction pauses following before its layout changes. If it still fits at the
+    // bottom afterwards, re-arm following without moving it; the continuation can then grow normally.
+    const frame = requestAnimationFrame(() => {
+      const scroll = conversation.scrollRef.current;
+      if (scroll && scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop <= 1) {
+        void conversation.scrollToBottom("instant");
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [updatedViews, conversation.scrollRef, conversation.scrollToBottom]);
+
+  // The SDK replays chunks into its normal state, including reasoning, artifacts and errors.
+  // Focus/visibility deliberately replace a possibly stalled subscription; only the Stop endpoint
+  // cancels the server-owned run. There is no idle timer or periodic fallback.
   const busy = status === "submitted" || status === "streaming";
+  const chatState = useRef({ busy, resumeStream, stop });
+  chatState.current = { busy, resumeStream, stop };
+  async function reconcile(expected: number) {
+    const result = await loadMessages(sessionId);
+    if (result.ok && mounted.current && generation.current === expected) setMessages(result.messages);
+  }
+  const checkContinuation = async (afterAnswer = false) => {
+    if (checking.current) {
+      // A saved answer can overtake an older empty check. Replay that trigger after it settles.
+      if (afterAnswer) pendingCheck.current = true;
+      return;
+    }
+    if (chatState.current.busy && !continuationStopId.current) return;
+    checking.current = true;
+    const version = ++checkVersion.current;
+    const expected = generation.current;
+    try {
+      if (continuationStopId.current) {
+        reconnecting.current = true;
+        await chatState.current.stop();
+        reconnecting.current = false;
+      }
+      if (!mounted.current || generation.current !== expected) return;
+      checking.current = true;
+      stopRequested.current = false;
+      await chatState.current.resumeStream();
+    } finally {
+      if (checkVersion.current === version) {
+        checking.current = false;
+        if (pendingCheck.current && mounted.current) {
+          pendingCheck.current = false;
+          void checkRef.current();
+        }
+      }
+      reconnecting.current = false;
+    }
+  };
+  const checkRef = useRef(checkContinuation);
+  checkRef.current = checkContinuation;
+  useEffect(() => {
+    mounted.current = true;
+    const check = () => { if (document.visibilityState === "visible") void checkRef.current(); };
+    check();
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      mounted.current = false;
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, []);
   const refreshViews = async () => {
     const result = await loadMessages(sessionId);
     if (result.ok) setUpdatedViews((prev) => mergeViews(prev, artifactViewsIn(result.messages)));
+    // The attempt may have succeeded even when its response was lost.
+    void checkContinuation(true);
   };
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     const text = input.trim();
     if (!text || busy) return;
     stopRequested.current = false;
     setStopError(undefined);
-    void sendMessage({ text });
+    setContinuationFailure(undefined);
+    generation.current++;
+    checkVersion.current++;
+    pendingCheck.current = false;
+    // An idle resume check can still be in flight when Send is pressed.
+    reconnecting.current = true;
+    await stop();
+    checking.current = false;
+    reconnecting.current = false;
+    continuationResponse.current = false;
+    continuationStopId.current = undefined;
+    void conversation.scrollToBottom("instant");
+    const documentIds = documents.documents.filter(d => d.messageId === null).map(d => d.id);
+    void sendMessage({ text }, { body: { documentIds } });
     setInput("");
   };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Positioned, so the sr-only text in artifacts is contained here; otherwise it stretches the outer, unscrollable box, which scrollIntoView then moves. */}
-      <div className="relative min-h-0 flex-1 overflow-y-auto" data-testid="transcript">
-        <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
+      <Conversation aria-busy={busy} instance={conversation} initial="instant" resize="instant" className="min-h-0 min-w-0">
+        {/* Positioned, so sr-only artifact text cannot stretch or scroll the outer interface. */}
+        <ConversationContent className="relative mx-auto max-w-3xl gap-4 p-4"
+          scrollClassName="overflow-y-auto overscroll-contain [scrollbar-gutter:auto]!"
+          onPointerDownCapture={(e) => {
+            if ((e.target as HTMLElement).closest("button, input, [role=button]")) conversation.stopScroll();
+          }}
+          onKeyDownCapture={(e) => {
+            if (e.key !== "Tab" && (e.target as HTMLElement).closest("button, input, [role=region]")) conversation.stopScroll();
+          }}>
+
           {messages.map((m, mi) => (
             <div
               key={m.id}
+              data-message-id={m.id}
+              data-message-role={m.role}
               className={cn(
                 "flex min-w-0 flex-col gap-2",
                 m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2 whitespace-pre-wrap wrap-anywhere",
               )}
             >
+              {m.role === "user" && <DocumentChips documents={documents} messageId={m.id} />}
               {m.role === "assistant" && m.parts.some((p) => p.type === "reasoning" && p.text.length > 0) && (
                 <ChainOfThought defaultOpen={false}>
                   <ChainOfThoughtHeader>
@@ -319,7 +479,10 @@ function Chat({
                       key={part.id ?? i}
                       data={artifactData(part, updatedViews)}
                       replyInProgress={isReplyInProgress(status, mi, messages.length)}
-                      onUpdate={(view) => setUpdatedViews((prev) => mergeViews(prev, { [view.id]: view }))}
+                      onUpdate={(view) => {
+                        setUpdatedViews((prev) => mergeViews(prev, { [view.id]: view }));
+                        void checkContinuation(true);
+                      }}
                       onRefresh={refreshViews}
                     />
                   );
@@ -330,10 +493,10 @@ function Chat({
           ))}
           {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
           {stopError && <p className="text-destructive">{stopError}</p>}
-          {error && <p className="text-destructive">{readableError(error)}</p>}
-          <div ref={bottom} />
-        </div>
-      </div>
+          {(error || continuationFailure) && <p className="text-destructive">{error ? readableError(error) : continuationFailure}</p>}
+        </ConversationContent>
+        <ConversationScrollButton aria-label="Scroll to bottom" onClick={() => void conversation.scrollToBottom("instant")} />
+      </Conversation>
       <form onSubmit={submit} className="border-t">
         <DocumentChips documents={documents} />
         <div className="mx-auto flex max-w-3xl gap-2 p-3">
@@ -353,7 +516,7 @@ function Chat({
               try {
                 if (stopRequested.current) return;
                 stopRequested.current = true;
-                const messageId = messages.findLast((message) => message.role === "user")?.id;
+                const messageId = continuationStopId.current ?? messages.findLast((message) => message.role === "user")?.id;
                 if (!messageId) return;
                 const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
                 // Disabling Send can blur Stop before this request resolves. Restore only

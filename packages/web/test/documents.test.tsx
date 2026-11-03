@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { AttachButton, DocumentChips, useDocuments } from "../src/Documents.js";
 
 const doc = (over: Partial<DocumentView> = {}): DocumentView => ({
+  messageId: null,
   id: "d1",
   sessionId: "s1",
   filename: "Week 3.pdf",

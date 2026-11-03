@@ -7,6 +7,7 @@ export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 export const DocumentView = z.object({
   id: z.string(),
   sessionId: z.string(),
+  messageId: z.string().nullable(),
   filename: z.string(),
   kind: z.enum(["pdf", "pptx"]),
   byteSize: z.number().int(),

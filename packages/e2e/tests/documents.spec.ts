@@ -38,6 +38,27 @@ test.describe("uploaded documents", () => {
     await expect(page.getByText("No excerpt reached me.")).toBeVisible();
   });
 
+  test("a chip moves to its sent message, survives reload, and can still be removed", async ({ page }) => {
+    const title = `attached ${Date.now()}`;
+    await startSession(page);
+    await attach(page, "Sent notes.pdf", makePdf([["The durable attachment has useful text to read."]]));
+    const composer = page.locator("form");
+    await expect(composer.getByRole("list", { name: "Attached documents" }).getByText("Sent notes.pdf", { exact: true })).toBeVisible(READ);
+    await send(page, title);
+    await expect(page.getByText(/The server says/)).toBeVisible();
+    await expect(composer.getByText("Sent notes.pdf")).toHaveCount(0);
+    const message = page.getByTestId("transcript").locator("[data-message-id]").filter({ has: page.getByText(title, { exact: true }) });
+    await expect(message.getByText("Sent notes.pdf")).toBeVisible();
+    await page.reload();
+    await page.getByRole("button", { name: title, exact: true }).click();
+    await expect(message.getByText("Sent notes.pdf")).toBeVisible();
+    await expect(composer.getByText("Sent notes.pdf")).toHaveCount(0);
+    await page.setViewportSize({ width: 320, height: 640 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+    await message.getByRole("button", { name: "Remove Sent notes.pdf" }).click();
+    await expect(chips(page)).toHaveCount(0);
+  });
+
   test("keeps documents with their session", async ({ page }) => {
     const title = `one ${Date.now()}`;
     await startSession(page);

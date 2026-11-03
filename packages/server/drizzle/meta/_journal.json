@@ -36,6 +36,20 @@
       "when": 1793437422863,
       "tag": "0004_ordinary_phantom_reporter",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793643840633,
+      "tag": "0005_simple_wolf_cub",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793644201129,
+      "tag": "0006_closed_karen_page",
+      "breakpoints": true
     }
   ]
 }

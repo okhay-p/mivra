@@ -162,7 +162,7 @@ const twoSets = {
   ],
 };
 
-type Step = { controlled: "cancelstream" | "cancelthinking" | "liveThinking" } | { tool: string; input: unknown } | { text: string; hold?: boolean; stream?: boolean };
+type Step = { controlled: "cancelstream" | "cancelthinking" | "liveThinking" | "continuationLive" | "continuationFailure" } | { tool: string; input: unknown } | { text: string; hold?: boolean; stream?: boolean };
 
 const STREAM_CHUNK_CHARS = 24;
 const STREAM_CHUNK_DELAY_MS = 16;
@@ -517,6 +517,14 @@ interface PromptMessage {
 
 function nextStep(prompt: PromptMessage[]): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
+  if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra session event")) {
+    const history = JSON.stringify(prompt.slice(0, lastUser));
+    if (history.includes("continuationstop")) return { controlled: "cancelstream" };
+    if (history.includes("continuationbroken")) return { controlled: "continuationFailure" };
+    if (history.includes("continuationlive")) return { controlled: "continuationLive" };
+    const result = /learnerResult\\*":\\*"([a-z ]+)/.exec(JSON.stringify(prompt))?.[1];
+    return { text: `Lesson continued after ${result ?? "unknown"}.` };
+  }
   const text = JSON.stringify(prompt[lastUser]?.content);
   if (text.includes("fail")) throw new Error("PROVIDER-SECRET-DETAIL");
   const toolResults = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
@@ -585,7 +593,10 @@ const model = new MockLanguageModelV4({
           };
           if (abortSignal?.aborted) return abort();
           abortSignal?.addEventListener("abort", abort, { once: true });
-          if (step.controlled === "cancelstream") {
+          if (step.controlled === "continuationFailure") {
+            // A provider socket failing without an SDK error part must remain contained.
+            timer = setTimeout(() => c.error(new Error("PRIVATE-PROVIDER-SOCKET")), 300);
+          } else if (step.controlled === "cancelstream") {
             c.enqueue({ type: "text-start", id: "t" });
             c.enqueue({ type: "text-delta", id: "t", delta: "Here is the part already explained." });
             // A truncated tool argument must never become a broken artifact on reload.
@@ -594,17 +605,21 @@ const model = new MockLanguageModelV4({
           } else {
             c.enqueue({ type: "reasoning-start", id: "r", providerMetadata: { vendor: { encrypted: "PRIVATE-REASONING" } } });
             c.enqueue({ type: "reasoning-delta", id: "r", delta: "Considering " });
-            timer = setTimeout(() => {
+            const finish = (addReasoning = true) => {
+              if (abortSignal?.aborted) return;
+              if (addReasoning) c.enqueue({ type: "reasoning-delta", id: "r", delta: "a".repeat(500) + " $\\frac{" });
+              c.enqueue({ type: "reasoning-end", id: "r" });
+              c.enqueue({ type: "text-start", id: "t" });
+              c.enqueue({ type: "text-delta", id: "t", delta: "The explanation is ready." });
+              c.enqueue({ type: "text-end", id: "t" });
+              c.enqueue({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage });
+              abortSignal?.removeEventListener("abort", abort!);
+              c.close();
+            };
+            if (step.controlled === "continuationLive") void held().then(() => finish());
+            else timer = setTimeout(() => {
               c.enqueue({ type: "reasoning-delta", id: "r", delta: "a".repeat(500) + " $\\frac{" });
-              timer = setTimeout(() => {
-                c.enqueue({ type: "reasoning-end", id: "r" });
-                c.enqueue({ type: "text-start", id: "t" });
-                c.enqueue({ type: "text-delta", id: "t", delta: "The explanation is ready." });
-                c.enqueue({ type: "text-end", id: "t" });
-                c.enqueue({ type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage });
-                abortSignal?.removeEventListener("abort", abort!);
-                c.close();
-              }, 700);
+              timer = setTimeout(() => finish(false), 700);
             }, 700);
           }
         },

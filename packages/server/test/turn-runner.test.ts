@@ -71,6 +71,23 @@ describe("TurnRunner, used without HTTP", () => {
     expect(notUser.ok || notUser.error.kind).toBe("invalid");
   });
 
+  it("leaves ready documents unbound when a send is rejected, including context failure after the run is claimed", async () => {
+    const store = createSessionStore(openDb(":memory:"));
+    const session = store.createSession();
+    const document = store.createDocument({ sessionId: session.id, filename: "notes.pdf", kind: "pdf", byteSize: 1, textChars: 4, pageCount: 1, pagesWithText: 1 }, [{ page: 1, seq: 0, text: "note" }], 20);
+    for (const failure of ["invalid", "unavailable", "context", "conflict"]) {
+      const runner = createTurnRunner({ store, registry,
+        model: () => { if (failure === "unavailable") throw new Error("unavailable"); return mockModel(); },
+        ...(failure === "context" ? { assembleContext: async () => { throw new Error("context failed"); } } : {}),
+      });
+      if (failure === "conflict") store.startRun(session, userMessage("pending"));
+      const result = await runner.startTurn({ sessionId: session.id,
+        message: failure === "invalid" ? {} : userMessage("hi"), documentIds: [document.id] });
+      expect(result.ok).toBe(false);
+      expect(store.listDocuments(session.id)[0]?.messageId).toBeNull();
+    }
+  });
+
   it("records a failed run when context assembly throws", async () => {
     const db = openDb(":memory:");
     const store = createSessionStore(db);
