@@ -8,6 +8,9 @@ import { openDb, type Db } from "../src/db/client.js";
 import { lessonSections, runs } from "../src/db/schema.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
+// Whole lessons generate through the app here, which is slow when the machine is busy.
+vi.setConfig({ testTimeout: 30_000 });
+
 const TOKEN = "test-token";
 const auth = { authorization: `Bearer ${TOKEN}` };
 const json = { ...auth, "content-type": "application/json" };

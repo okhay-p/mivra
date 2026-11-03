@@ -148,3 +148,10 @@ export const retryLesson = (id: string) => request(() => api.lessons[":id"].retr
 /** Keeps one of the tutor's answers as a new section of the lesson (a Change). */
 export const addToLesson = (lessonId: string, body: { messageId: string; afterSectionId: string | null; title: string }) =>
   request(() => api.lessons[":id"].sections.$post({ param: { id: lessonId }, json: body }), readLesson);
+
+/** Undoes Mivra's automatic change to the syllabus. */
+export const undoSyllabusChange = (courseId: string, version: number) =>
+  request(
+    () => api.courses[":id"].syllabus.undo.$post({ param: { id: courseId }, json: { version } }),
+    async (res) => CourseView.parse(await res.json()),
+  );

@@ -61,8 +61,10 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
 const sourceLabel: Record<KnownSource, string> = { memory: "From memory", test: "From the test", guess: "Guessed" };
 
 /** The course's goal, where it stands, and its syllabus once written. */
-export function CourseBar({ course, children }: { course: CourseView; children?: ReactNode }) {
+export function CourseBar({ course, children, onUndo }: { course: CourseView; children?: ReactNode; onUndo?: () => Promise<string | undefined> }) {
   const [open, setOpen] = useState(false);
+  const [undoing, setUndoing] = useState(false);
+  const [undoError, setUndoError] = useState<string>();
   const syllabus = course.syllabus;
 
   return (
@@ -83,6 +85,28 @@ export function CourseBar({ course, children }: { course: CourseView; children?:
         )}
         {children && <div className={cn("flex shrink-0 gap-2", !syllabus && "ml-auto")}>{children}</div>}
       </div>
+      {syllabus?.canUndo && (
+        <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2 px-4 pb-2 text-sm" role="status">
+          <span>
+            Mivra changed the plan: {syllabus.reason}
+          </span>
+          {onUndo && (
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={undoing}
+              onClick={async () => {
+                setUndoing(true);
+                setUndoError(await onUndo());
+                setUndoing(false);
+              }}
+            >
+              Undo
+            </Button>
+          )}
+          {undoError && <span className="text-destructive">{undoError}</span>}
+        </div>
+      )}
       {syllabus && (
         <CollapsibleContent>
           <div className="mx-auto flex max-h-[50svh] max-w-3xl flex-col gap-4 overflow-y-auto px-4 pb-4">

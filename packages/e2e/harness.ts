@@ -548,7 +548,19 @@ const LESSON_STEPS: Step[] = [
 function nextStep(prompt: PromptMessage[]): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
   if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra lesson request")) {
-    return LESSON_STEPS[prompt.slice(lastUser).filter((m) => m.role === "tool").length] ?? { text: "" };
+    const done = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
+    const system = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");
+    if (!system.includes("previous_lesson")) return LESSON_STEPS[done] ?? { text: "" };
+    // The next lesson revisits the missed idea and, since the learner struggled, adapts the plan once.
+    const revisited = /"sectionId":"([^"]+)","title":"The idea"/.exec(system)?.[1] ?? "missing";
+    const steps: Step[] = [
+      { tool: "adapt_syllabus", input: { reason: "Added a limits refresher: you missed 1 of 1 checks", operation: { op: "insert", afterTopicId: null, title: "Limits refresher", summary: "Limits again, slowly.", concepts: ["limit"] } } },
+      { tool: "outline_lesson", input: { title: "The chain rule", sections: [{ title: "Looking back", kind: "prose", purpose: "Revisit the miss." }, { title: "Check", kind: "multiple_choice", purpose: "Check." }] } },
+      { tool: "write_lesson_text", input: { markdown: "Last time the limit check tripped you up.", revisits: [revisited] } },
+      { tool: "ask_multiple_choice", input: { concept: "chain rule", question: "Is $(f(g(x)))' = f'(g(x))g'(x)$?", options: [{ text: "Yes" }, { text: "No" }], correctOptionIndex: 0, explanation: "That's the rule." } },
+      { text: "" },
+    ];
+    return steps[done] ?? { text: "" };
   }
   if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra session event")) {
     const history = JSON.stringify(prompt.slice(0, lastUser));

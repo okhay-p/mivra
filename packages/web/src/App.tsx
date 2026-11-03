@@ -5,7 +5,7 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
 import { Brain, GraduationCap, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { addToLesson, api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
+import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
@@ -275,6 +275,7 @@ function CourseSession(props: SessionProps) {
   const [course, setCourse] = useState<CourseView>();
   const [lessons, setLessons] = useState<CourseLessonsView>();
   const [selected, setSelected] = useState<string>();
+  const [focusSection, setFocusSection] = useState<string>();
   const [tutorOpen, setTutorOpen] = useState(false);
   const [error, setError] = useState<string>();
   const [prompt, setPrompt] = useState<SessionProps["prompt"]>();
@@ -333,6 +334,14 @@ function CourseSession(props: SessionProps) {
     return undefined;
   };
 
+  const undo = async () => {
+    if (!course?.syllabus) return undefined;
+    const result = await undoSyllabusChange(course.id, course.syllabus.version);
+    if (!result.ok) return result.error;
+    await refresh();
+    return undefined;
+  };
+
   if (error) return <Notice error>{error}</Notice>;
   if (!course) return null;
   const next = lessons?.topics.find((t) => t.topicId === lessons.nextTopicId);
@@ -354,7 +363,7 @@ function CourseSession(props: SessionProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <CourseBar course={course}>
+      <CourseBar course={course} onUndo={undo}>
         <Button size="sm" variant="outline" onClick={() => setTutorOpen(true)} data-tutor-trigger>
           <MessagesSquare aria-hidden /> Tutor
         </Button>
@@ -362,7 +371,14 @@ function CourseSession(props: SessionProps) {
       <div className="flex min-h-0 flex-1">
         {lessons && (
           <aside className="hidden w-60 shrink-0 overflow-y-auto border-r p-3 md:block">
-            <TopicList lessons={lessons} selectedId={lessonId} onSelect={setSelected} />
+            <TopicList
+              lessons={lessons}
+              selectedId={lessonId}
+              onSelect={(id) => {
+                setFocusSection(undefined);
+                setSelected(id);
+              }}
+            />
           </aside>
         )}
         <div className="min-w-0 flex-1 overflow-y-auto" data-testid="lesson-scroll">
@@ -373,6 +389,11 @@ function CourseSession(props: SessionProps) {
             onFinished={() => void refresh()}
             onStartNext={start}
             onLoaded={setOpenLesson}
+            focusSectionId={focusSection}
+            onOpenSection={(id, sectionId) => {
+              setSelected(id);
+              setFocusSection(sectionId);
+            }}
             onExplain={(section) => {
               explained.current = section;
               ask(`Explain "${section.title}"`, true);

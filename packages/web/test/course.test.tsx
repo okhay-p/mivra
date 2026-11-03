@@ -91,6 +91,7 @@ describe("CourseBar", () => {
       source: "interview",
       reason: null,
       changedTopicIds: [],
+      canUndo: false,
       createdAt: placement.createdAt,
       topics: [
         { id: "t1", title: "Limits", summary: "What a limit is.", reason: "You weren't sure.", requestedByLearner: false, concepts: ["limit"] },
@@ -104,6 +105,14 @@ describe("CourseBar", () => {
     render(<CourseBar course={{ ...course, status: "interviewing", syllabus: null }} />);
     expect(screen.getByText("Placement interview")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Syllabus/ })).toBeNull();
+  });
+
+  it("shows Mivra's automatic change with its reason, and undoes it", async () => {
+    const onUndo = vi.fn(async () => undefined);
+    render(<CourseBar course={{ ...course, syllabus: { ...course.syllabus!, version: 2, source: "adaptive", reason: "Added a refresher", canUndo: true, changedTopicIds: ["t2"] } }} onUndo={onUndo} />);
+    expect(screen.getByText("Mivra changed the plan: Added a refresher")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(onUndo).toHaveBeenCalled());
   });
 
   it("shows the syllabus with reasons and labelled knowledge", () => {

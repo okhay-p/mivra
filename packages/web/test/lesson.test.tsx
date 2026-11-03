@@ -21,7 +21,7 @@ const base: LessonView = {
       { title: "Check", kind: "multiple_choice" },
     ],
   },
-  sections: [{ id: "s1", title: "Intro", kind: "prose", markdown: "A **limit** is where $f$ heads." }],
+  sections: [{ id: "s1", title: "Intro", kind: "prose", markdown: "A **limit** is where $f$ heads.", revisits: [] }],
   checks: { total: 0, answered: 0 },
   changedSectionIds: [],
   changeReason: null,
@@ -118,6 +118,16 @@ describe("LessonPage actions", () => {
     expect(intro.textContent).toContain("Changed in v2");
     expect(screen.getByRole("region", { name: "Check" }).dataset.changed).toBeUndefined();
     expect(screen.getByText("Version 2: Simpler intro")).toBeTruthy();
+  });
+});
+
+describe("links back", () => {
+  it("links a revisiting section back to the earlier one", async () => {
+    serve([{ ...ready, sections: [{ ...ready.sections[0]!, revisits: [{ lessonId: "l0", sectionId: "old", title: "The idea", lessonTitle: "Limits" }] } as LessonView["sections"][number], ready.sections[1]!] }]);
+    const onOpenSection = vi.fn();
+    render(<LessonPage lessonId="l1" nextTopic={undefined} onFinished={() => {}} onStartNext={async () => {}} onOpenSection={onOpenSection} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Limits: The idea" }));
+    expect(onOpenSection).toHaveBeenCalledWith("l0", "old");
   });
 });
 

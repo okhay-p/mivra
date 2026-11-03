@@ -212,7 +212,9 @@ export const syllabusVersions = sqliteTable(
     topics: text("topics", { mode: "json" }).notNull(),
     known: text("known", { mode: "json" }).notNull(),
     /** Who made this version: the interview, the tutor on request (Change), or adaptive generation (ADR-011). */
-    source: text("source", { enum: ["interview", "tutor", "adaptive"] }).notNull().default("interview"),
+    source: text("source", { enum: ["interview", "tutor", "adaptive", "undo"] }).notNull().default("interview"),
+    /** For an adaptive change, the finished lesson whose results prompted it: at most one change per lesson. */
+    triggerLessonId: text("trigger_lesson_id"),
     /** Why it changed, shown to the learner. Null for the first version. */
     reason: text("reason"),
     /** Ids of the topics this version added or changed, for highlighting. */
@@ -263,6 +265,8 @@ export const lessonSections = sqliteTable(
     title: text("title").notNull(),
     markdown: text("markdown"),
     artifactId: text("artifact_id").references(() => artifacts.id, { onDelete: "cascade" }),
+    /** Sections of the previous lesson this one revisits, by id, so the page can link back to them. */
+    revisits: text("revisits", { mode: "json" }).notNull().default(sql`'[]'`),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [index("lesson_sections_lesson_idx").on(t.lessonId), uniqueIndex("lesson_sections_artifact_idx").on(t.artifactId)],

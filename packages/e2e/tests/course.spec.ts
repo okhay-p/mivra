@@ -77,4 +77,22 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(lesson.getByText("Finished. This lesson won't change.")).toBeVisible();
   await expect(lesson.getByRole("button", { name: "Next lesson: Chain rule" })).toBeVisible();
   await expect(lesson.getByRole("button", { name: /^Change/ })).toHaveCount(0);
+
+  // The next lesson revisits the mistake with a link back, and Mivra adapts the plan once, visibly.
+  await lesson.getByRole("button", { name: "Next lesson: Chain rule" }).click();
+  const next = page.getByRole("article", { name: "The chain rule" });
+  await expect(next.getByRole("region", { name: "Looking back" })).toContainText("Last time the limit check tripped you up.");
+  await expect(course.getByText("Mivra changed the plan: Added a limits refresher: you missed 1 of 1 checks")).toBeVisible();
+  const toggle = course.getByRole("button", { name: /Syllabus/ });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  await expect(course.getByRole("list", { name: "Syllabus topics" })).toContainText("Limits refresher");
+
+  // Undo restores the plan.
+  await course.getByRole("button", { name: "Undo" }).click();
+  await expect(course.getByText(/Mivra changed the plan/)).toHaveCount(0);
+  await expect(course.getByRole("list", { name: "Syllabus topics" })).not.toContainText("Limits refresher");
+
+  // The link back opens the earlier lesson at that section.
+  await next.getByRole("button", { name: "What a limit is: The idea" }).click();
+  await expect(page.getByRole("article", { name: "What a limit is" }).getByRole("region", { name: "The idea", exact: true })).toBeFocused();
 });

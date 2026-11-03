@@ -40,6 +40,11 @@ export type LessonOutlineInput = z.infer<typeof LessonOutlineInput>;
 export const LessonTextInput = z
   .object({
     markdown: z.string().trim().min(1).max(6000).describe("The section's prose, as markdown with $...$ and $$...$$ maths. Don't repeat the section title as a heading."),
+    revisits: z
+      .array(z.string().min(1))
+      .max(5)
+      .optional()
+      .describe("sectionIds from <previous_lesson> this section revisits. The page links back to them, so don't write links yourself."),
   })
   .strict();
 export type LessonTextInput = z.infer<typeof LessonTextInput>;
@@ -67,7 +72,16 @@ export const LessonView = z
     outline: LessonOutlineView.nullable(),
     sections: z.array(
       z.discriminatedUnion("kind", [
-        z.object({ id: z.string(), title: z.string(), kind: z.literal("prose"), markdown: z.string() }).strict(),
+        z
+          .object({
+            id: z.string(),
+            title: z.string(),
+            kind: z.literal("prose"),
+            markdown: z.string(),
+            /** Earlier sections this one revisits, for links back to exactly what the learner saw. */
+            revisits: z.array(z.object({ lessonId: z.string(), sectionId: z.string(), title: z.string(), lessonTitle: z.string() }).strict()),
+          })
+          .strict(),
         z.object({ id: z.string(), title: z.string(), kind: z.literal("artifact"), artifact: z.unknown() }).strict(),
       ]),
     ),
@@ -171,3 +185,27 @@ export const AddToLesson = z
   })
   .strict();
 export type AddToLesson = z.infer<typeof AddToLesson>;
+
+const NewTopic = z
+  .object({
+    title: SectionTitle,
+    summary: z.string().trim().min(1).max(400),
+    concepts: z.array(z.string().trim().min(1).max(80)).min(1).max(8),
+  })
+  .strict();
+
+/**
+ * Input of adapt_syllabus: lesson generation's own change to future topics when the learner struggled
+ * (ADR-011). Insert, split or reorder only; never removes a topic. At most one per finished lesson.
+ */
+export const AdaptSyllabusInput = z
+  .object({
+    reason: Reason.describe('Shown to the learner, with the evidence, e.g. "Added a chain rule refresher: you missed 3 of 4 checks on derivatives".'),
+    operation: z.discriminatedUnion("op", [
+      NewTopic.extend({ op: z.literal("insert"), afterTopicId: z.string().min(1).nullable().describe("null = straight after this lesson's topic") }).strict(),
+      z.object({ op: z.literal("split"), topicId: z.string().min(1), into: z.array(NewTopic).min(2).max(3) }).strict(),
+      z.object({ op: z.literal("move"), topicId: z.string().min(1), afterTopicId: z.string().min(1).nullable() }).strict(),
+    ]),
+  })
+  .strict();
+export type AdaptSyllabusInput = z.infer<typeof AdaptSyllabusInput>;

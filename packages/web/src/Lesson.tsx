@@ -1,5 +1,5 @@
 import type { ArtifactView, CourseLessonsView, LessonView } from "@mivra/protocol";
-import { Check, CircleDashed, HelpCircle, Loader2, Pencil } from "lucide-react";
+import { Check, CircleDashed, CornerUpLeft, HelpCircle, Loader2, Pencil } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -116,8 +116,14 @@ export function LessonPage({
   onExplain,
   onChange,
   onLoaded,
+  onOpenSection,
+  focusSectionId,
 }: {
   lessonId: string;
+  /** Opens an earlier lesson at one of its sections, from a link back. */
+  onOpenSection?: (lessonId: string, sectionId: string) => void;
+  /** Scrolls to this section once the lesson has loaded. */
+  focusSectionId?: string;
   /** Ask the tutor about a section; the lesson stays as it is. */
   onExplain?: (section: LessonSection) => void;
   /** Ask the tutor to change a section, which makes a new version. */
@@ -138,6 +144,13 @@ export function LessonPage({
   useEffect(() => {
     if (lesson) loaded.current?.(lesson);
   }, [lesson]);
+  const hasLesson = Boolean(lesson);
+  useEffect(() => {
+    if (!hasLesson || !focusSectionId) return;
+    const target = document.getElementById(`section-${focusSectionId}`);
+    target?.scrollIntoView({ block: "start" });
+    target?.focus({ preventScroll: true });
+  }, [hasLesson, focusSectionId]);
 
   if (!lesson) {
     return error ? <p className="text-destructive m-auto p-6">{error}</p> : <p className="text-muted-foreground m-auto p-6">Loading the lesson…</p>;
@@ -181,6 +194,8 @@ export function LessonPage({
       {lesson.sections.map((section) => (
         <section
           key={section.id}
+          id={`section-${section.id}`}
+          tabIndex={-1}
           aria-label={section.title}
           data-changed={changed.has(section.id) || undefined}
           className={cn("group flex min-w-0 flex-col gap-2", changed.has(section.id) && "bg-muted/60 -mx-3 rounded-lg px-3 py-2")}
@@ -204,7 +219,20 @@ export function LessonPage({
             )}
           </div>
           {section.kind === "prose" ? (
-            <MathText text={section.markdown} />
+            <>
+              {section.revisits.length > 0 && (
+                <ul className="flex flex-wrap gap-2 text-sm" aria-label="Revisits">
+                  {section.revisits.map((link) => (
+                    <li key={link.sectionId}>
+                      <Button variant="outline" size="xs" onClick={() => onOpenSection?.(link.lessonId, link.sectionId)} disabled={!onOpenSection}>
+                        <CornerUpLeft aria-hidden /> {link.lessonTitle}: {link.title}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <MathText text={section.markdown} />
+            </>
           ) : (
             <ArtifactPart
               data={(section.artifact as { id?: string })?.id ? (updatedViews[(section.artifact as { id: string }).id] ?? section.artifact) : section.artifact}

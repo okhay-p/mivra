@@ -137,9 +137,11 @@ export type SyllabusTopic = z.infer<typeof SyllabusTopic>;
 export const SyllabusView = z
   .object({
     version: z.number().int().positive(),
-    source: z.enum(["interview", "tutor", "adaptive"]),
+    source: z.enum(["interview", "tutor", "adaptive", "undo"]),
     reason: z.string().nullable(),
     changedTopicIds: z.array(z.string()),
+    /** Whether the learner can undo this version: an automatic change none of whose new topics has started. */
+    canUndo: z.boolean(),
     topics: z.array(SyllabusTopic),
     known: SyllabusInput.shape.known,
     createdAt: z.string().datetime(),

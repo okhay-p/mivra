@@ -67,6 +67,17 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
       return db.select().from(lessons).where(eq(lessons.id, id)).get();
     },
 
+    /** The lesson finished most recently before this one started: the one whose mistakes it revisits (ADR-011). */
+    previousLesson(lesson: LessonRow): LessonRow | undefined {
+      return db
+        .select()
+        .from(lessons)
+        .where(and(eq(lessons.courseId, lesson.courseId), eq(lessons.status, "finished")))
+        .orderBy(desc(lessons.finishedAt))
+        .all()
+        .find((l) => l.id !== lesson.id && l.createdAt <= lesson.createdAt);
+    },
+
     findLessonBySession(sessionId: string): LessonRow | undefined {
       return db.select().from(lessons).where(eq(lessons.sessionId, sessionId)).get();
     },
@@ -102,12 +113,12 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
     },
 
     /** Appends a section to the version being generated. Refused once the outline is full or the lesson isn't generating. */
-    appendSection(lessonId: string, section: Pick<LessonSectionRow, "kind" | "title" | "markdown" | "artifactId">): LessonSectionRow | undefined {
+    appendSection(lessonId: string, section: Pick<LessonSectionRow, "kind" | "title" | "markdown" | "artifactId"> & { revisits?: string[] }): LessonSectionRow | undefined {
       return db.transaction((tx) => {
         const lesson = tx.select().from(lessons).where(eq(lessons.id, lessonId)).get();
         const version = latestVersion(lessonId);
         if (lesson?.status !== "generating" || !version || version.sectionIds.length >= version.outline.sections.length) return undefined;
-        const row = { id: randomUUID(), lessonId, ...section, createdAt: clock() };
+        const row = { id: randomUUID(), lessonId, ...section, revisits: section.revisits ?? [], createdAt: clock() };
         tx.insert(lessonSections).values(row).run();
         tx.update(lessonVersions).set({ sectionIds: [...version.sectionIds, row.id] }).where(eq(lessonVersions.id, version.id)).run();
         return row;
@@ -154,7 +165,7 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
         const resolve = (id: string) => renamed.get(id) ?? id;
         const now = clock();
         const newSection = (section: Pick<LessonSectionRow, "kind" | "title" | "markdown" | "artifactId">) => {
-          const row = { id: randomUUID(), lessonId, ...section, createdAt: now };
+          const row = { id: randomUUID(), lessonId, ...section, revisits: [], createdAt: now };
           tx.insert(lessonSections).values(row).run();
           changed.add(row.id);
           return row;

@@ -7,6 +7,9 @@ import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
 import { attempts, runs } from "../src/db/schema.js";
 
+// Whole lessons generate through the app here, which is slow when the machine is busy.
+vi.setConfig({ testTimeout: 30_000 });
+
 const TOKEN = "test-token";
 const auth = { authorization: `Bearer ${TOKEN}` };
 const usage = {

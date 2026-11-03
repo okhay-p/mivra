@@ -13,7 +13,7 @@ import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js
 import { courseLessons, createLessonGenerator, lessonRevision, lessonView } from "./runtime/lessons.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
-import { createLessonStore } from "./store/lesson-store.js";
+import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
 import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
 
 export interface AppDeps {
@@ -171,6 +171,18 @@ const addToLesson = createRoute({
     400: errorResponse("Not one of the tutor's replies in this course, or it has no text"),
     404: errorResponse("Unknown lesson or section"),
     409: errorResponse("The lesson is finished or still being written"),
+  },
+});
+
+const undoSyllabusChange = createRoute({
+  method: "post",
+  path: "/courses/{id}/syllabus/undo",
+  description: "Undo Mivra's automatic change to the syllabus (ADR-011): a new version with the topics as they were. Only the latest version, and only before any topic it added has a lesson.",
+  request: { params: CourseParams, body: { content: { "application/json": { schema: z.object({ version: z.number().int().positive() }) } } } },
+  responses: {
+    200: { description: "The course with the restored syllabus", content: { "application/json": { schema: CourseView } } },
+    404: errorResponse("Unknown course"),
+    409: errorResponse("Not the latest version, not an automatic change, or one of its lessons has started"),
   },
 });
 
@@ -346,8 +358,9 @@ function toSessionJson(row: SessionRow & { courseId?: string | null }) {
   };
 }
 
-function toCourseJson(row: CourseRow, store: SessionStore): CourseView {
+function toCourseJson(row: CourseRow, store: SessionStore, lessons: LessonStore): CourseView {
   const syllabus = store.latestSyllabus(row.id);
+  const started = new Set(lessons.listLessons(row.id).map((l) => l.topicId));
   return {
     id: row.id,
     sessionId: row.sessionId,
@@ -359,6 +372,7 @@ function toCourseJson(row: CourseRow, store: SessionStore): CourseView {
           source: syllabus.source,
           reason: syllabus.reason,
           changedTopicIds: syllabus.changedTopicIds,
+          canUndo: row.status === "active" && syllabus.source === "adaptive" && !syllabus.changedTopicIds.some((id) => started.has(id)),
           topics: syllabus.topics,
           known: syllabus.known,
           createdAt: syllabus.createdAt.toISOString(),
@@ -425,12 +439,12 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
     })
     .openapi(startCourse, (c) => {
       const { course, session } = store.createCourse(c.req.valid("json").goal);
-      return c.json({ course: toCourseJson(course, store), session: toSessionJson({ ...session, courseId: course.id }) }, 201);
+      return c.json({ course: toCourseJson(course, store, lessons), session: toSessionJson({ ...session, courseId: course.id }) }, 201);
     })
     .openapi(getCourse, (c) => {
       const course = store.findCourseBySession(c.req.valid("param").id);
       if (!course) return c.json({ error: "This session isn't a course" }, 404);
-      return c.json(toCourseJson(course, store), 200);
+      return c.json(toCourseJson(course, store, lessons), 200);
     })
     .openapi(listCourseLessons, (c) => {
       const course = store.findCourse(c.req.valid("param").id);
@@ -469,6 +483,10 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       const { id } = c.req.valid("param");
       if (!lessons.findLesson(id)) return c.json({ error: "Lesson not found" }, 404);
       if (!lessons.finishLesson(id, registry.checkKinds())) return c.json({ error: "Answer every check in the finished lesson first" }, 409);
+      // Reaching the end of the syllabus completes the course (ADR-011).
+      const courseId = lessons.findLesson(id)!.courseId;
+      const plan = courseLessons(courseId, { store, lessons });
+      if (plan.nextTopicId === null && plan.topics.every((t) => t.lesson?.status === "finished")) store.completeCourse(courseId);
       generator.changed(id);
       return c.json(lessonJson(id)! as never, 200);
     })
@@ -479,6 +497,14 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       generator.start(id);
       generator.changed(id);
       return c.json(lessonJson(id)! as never, 202);
+    })
+    .openapi(undoSyllabusChange, (c) => {
+      const course = store.findCourse(c.req.valid("param").id);
+      if (!course) return c.json({ error: "Course not found" }, 404);
+      const startedTopicIds = lessons.listLessons(course.id).map((l) => l.topicId);
+      const undone = store.undoSyllabusChange(course.id, c.req.valid("json").version, startedTopicIds);
+      if (!undone.ok) return c.json({ error: undone.reason }, 409);
+      return c.json(toCourseJson(store.findCourse(course.id)!, store, lessons), 200);
     })
     .openapi(addToLesson, (c) => {
       const { id } = c.req.valid("param");
