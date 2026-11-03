@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import katex from "katex";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MathText } from "../src/MathText.js";
-import { isTooDeep, separateDisplayFences, splitBlocks } from "../src/math-syntax.js";
+import { isTooDeep, replyBlocks, separateDisplayFences, splitBlocks } from "../src/math-syntax.js";
 
 const block = (text: string) => render(<MathText text={text} />).container;
 const math = (text: string) => render(<MathText text={text} mode="math" />).container;
@@ -261,6 +261,13 @@ describe("MathText display fences that share a line with text", () => {
     expect(paragraphs(container)).toEqual(["Intro:", "The pairwise overlaps.", "Next."]);
   });
 
+  it("shows a block too long to parse as the reply wrote it, without the escapes added to separate it", () => {
+    const text = `$$\n${"x".repeat(50_001)}$$ - tail`;
+    const c = block(text);
+    expect(c.querySelector(".katex")).toBeNull();
+    expect(c.textContent).toBe(text);
+  });
+
   it("splits the separated text the same as a single parse", () => {
     const text = `one\n\n$$\n${formula}$$ two\n\nthree`;
     expect(splitBlocks(separateDisplayFences(text)).length).toBeGreaterThan(1);
@@ -296,6 +303,24 @@ describe("MathText display fences in lists and quotes", () => {
     ["a `$$` after the closing `$$`", "$$\nx$$ $$ y", { math: ["x"], text: ["$$ y"] }],
     ["a quote marker after the closing `$$`", "- $$\n  x$$ > y", { math: ["x"], text: ["> y"] }],
     ["a fence closed in a list item", "- ```\n  a\n  ```\n  $$\n  x$$ tail", { code: ["a\n"], math: ["x"], text: ["tail"] }],
+    // The parser ends the empty item at the blank line, and then reads each line as its own indented code.
+    ["indented code after an empty item", "-\n\n    $$\n    x$$ tail", { code: ["$$\n", "x$$ tail\n"], unchanged: true }],
+    ["a fence in an item after a setext heading", "- a\n  ===\n  2. ```\n     $$\n     x$$ tail\n     ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in an item after a `-` underline", "- a\n  -\n  2. ```\n     $$\n     x$$ tail\n     ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    // After indented code, the parser takes `2. ` for text, as it would after a paragraph.
+    ["a numbered line after indented code", "    a\n\n2. ```\n   $$\n   x$$ tail", { code: ["a\n"], math: ["x"], text: ["tail"] }],
+    ["a numbered line after a quote and a blank line of spaces", "> a\n     \nb\n10. $$ x\ny tail", { text: ["y tail"], unchanged: true }],
+    // A table can't continue lazily, so `b` ends the item, and the empty item can't interrupt its paragraph.
+    ["a line after a table in a list item", "* a\n  |---|\nb\n1)\n      $$ x", { text: ["$$ x"], unchanged: true }],
+    // Once a line can't start a numbered item, no container it opens can.
+    ["a numbered line in a quote after indented code", "    a\n\n> 2. $$ x", { code: ["a\n"], text: ["2. $$ x"], unchanged: true }],
+    ["a numbered line in a list item after a paragraph", "a\n- 2. $$ x", { text: ["2. $$ x"], unchanged: true }],
+    ["a numbered line after a row indented past a table's", "a\n     ---|\n2. $$ x", { text: ["2. $$ x"], unchanged: true }],
+    ["a formula in a quote after an empty item", ">-\n  > $$\n  > x$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a definition after the closing `$$`", "$$\nx$$ [a]: https://example.com", { math: ["x"], text: ["[a]: https://example.com"] }],
+    ["a definition label left open after the closing `$$`", "$$\nx$$ [a\n]: https://example.com", { math: ["x"], text: ["]: https://example.com"] }],
+    ["an HTML tag after the closing `$$`", "$$\nx$$ <div>\n$$\ny\n$$", { math: ["x", "y"], text: ["<div>"] }],
+    ["an autolink after the closing `$$`", "$$\nx$$ <https://example.com>", { math: ["x"], text: ["https://example.com"] }],
   ])("normalises %s as the parser reads it", (_name, text, want) => {
     const normalised = separateDisplayFences(text);
     if (want.unchanged) expect(normalised).toBe(text);
@@ -333,6 +358,20 @@ describe("splitBlocks", () => {
   it("doesn't take a one-line `$$x$$` or code span for an opening fence", () => {
     expect(splitBlocks("$$x$$\n\none")).toHaveLength(2);
     expect(splitBlocks("```a```\n\none")).toHaveLength(2);
+  });
+
+  it("keeps each block's source as the reply wrote it", () => {
+    expect(replyBlocks("one\n\n$$\nx$$ - two\n\nthree")).toEqual([
+      { text: "one\n\n", source: "one\n\n" },
+      { text: "$$\nx\n$$\n\\- two\n\n", source: "$$\nx$$ - two\n\n" },
+      { text: "three", source: "three" },
+    ]);
+    expect(replyBlocks("")).toEqual([{ text: "", source: "" }]);
+  });
+
+  it("doesn't split before a list marker the parser reads as text after indented code", () => {
+    expect(splitBlocks("    a\n\n2. b")).toEqual(["    a\n\n2. b"]);
+    expect(splitBlocks("    a\n\n> - b")).toEqual(["    a\n\n> - b"]);
   });
 
   it("splits before a list that follows a paragraph, and after one", () => {

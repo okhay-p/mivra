@@ -164,6 +164,7 @@ export function splitBlocks(source: string): string[] {
   let closesWithList = false;
   let afterBlank = false;
   let inList = false;
+  let afterIndented = false;
   for (const { text: line, start } of linesOf(source)) {
     // An indented fence after a list ends here if it's in an item, and not if the item has already ended. Without
     // knowing which, nothing after this can be a boundary for certain.
@@ -174,12 +175,14 @@ export function splitBlocks(source: string): string[] {
       afterBlank = true;
     } else {
       const marker = LIST_MARKER.test(line);
-      if (afterBlank && !/^\s/.test(line) && !(marker && inList)) {
+      // After indented code, the parser may read a list marker, even one after a quote's, as text.
+      if (afterBlank && !/^\s/.test(line) && !(marker && inList) && !(afterIndented && CONTAINER_START.test(line))) {
         blocks.push(source.slice(blockStart, start));
         blockStart = start;
         inList = false;
       }
       inList ||= marker;
+      afterIndented = /^\s/.test(line);
       afterBlank = false;
       closes = opensBlock(line);
       closesWithList = inList && /^\s/.test(line);
@@ -200,15 +203,23 @@ export function splitBlocks(source: string): string[] {
 // is checked against each open container (a quote needs its `>`, a list item its content column or a blank
 // line), and what's left is the line's content. A line that fails to continue a container ends it and
 // any fence inside it, and only a paragraph can carry on lazily. Fence indentation counts from the content
-// column, so four spaces past it is indented code. Text moved off a closing `$$` line has any block marker it
-// starts with escaped, so it stays the text it was. It's a sketch of the parser's container rules, not all of them.
+// column, so four spaces past it is indented code. A paragraph ends at a rule, a setext underline or a table's
+// delimiter row, and while one is open (or indented code is) a list item can't start empty or at a number other
+// than 1. Text moved off a closing `$$` line has any block start it begins with escaped, so it stays the text it
+// was. Plain text shows the reply as written, without the moves. It's a sketch of the parser's container rules,
+// not all of them.
 
 const MATH_OPEN_WITH_TEXT = /^( {0,3})(\$\$+)[ \t]*([^$]*?)[ \t]*$/;
 const CONTAINER_START = /^ {0,3}(?:>|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))/;
 // Lines that end a paragraph rather than continuing it lazily.
 const INTERRUPTS = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$)/;
 
-type Container = { kind: "quote" } | { kind: "item"; column: number };
+const SETEXT_UNDERLINE = /^ {0,3}(?:=+|-+)[ \t]*$/;
+
+// An item's width is how far its content sits from where the item starts (its parent's content), so a line must
+// be indented that far past its parent's content to continue it. An item that starts with a blank line is empty
+// until a line of content, and a blank line ends it while it's empty.
+type Container = { kind: "quote" } | { kind: "item"; width: number; empty: boolean };
 
 /** The column after `text`, which starts at `column`, with tabs stopping every four columns. */
 function advance(text: string, column: number): number {
@@ -224,14 +235,57 @@ function indentation(line: string, pos: number, column: number): { pos: number; 
 
 /** Moves text that shares a line with a display block's opening or closing `$$` onto lines of its own. */
 export function separateDisplayFences(source: string): string {
-  if (!source.includes("$$") || RAW_HTML.test(source)) return source;
-  let out = "";
+  return fenceLines(source).join("");
+}
+
+/** A block of a reply: the text to parse, and the source it came from, for showing as plain text. */
+export interface ReplyBlock {
+  text: string;
+  source: string;
+}
+
+/**
+ * Separates display fences and splits the result into blocks, each with the part of the reply it came from. A
+ * boundary always falls at the start of a source line, as moved text never follows a blank line.
+ */
+export function replyBlocks(source: string): ReplyBlock[] {
+  const lines = fenceLines(source);
+  // Where each source line starts, keyed by where it starts in the normalised text.
+  const starts = new Map<number, number>();
+  let offset = 0;
+  for (const [i, line] of [...linesOf(source)].entries()) {
+    starts.set(offset, line.start);
+    offset += lines[i]!.length;
+  }
+  starts.set(offset, source.length);
+  const blocks = splitBlocks(lines.join(""));
+  offset = 0;
+  const result: ReplyBlock[] = [];
+  for (const text of blocks) {
+    const from = starts.get(offset);
+    const to = starts.get((offset += text.length));
+    // Unreachable, but if a boundary missed a line start, show the normalised text rather than the wrong source.
+    if (from === undefined || to === undefined) return blocks.map((block) => ({ text: block, source: block }));
+    result.push({ text, source: source.slice(from, to) });
+  }
+  return result;
+}
+
+/** What each line of the source becomes, with its line ending. */
+export function fenceLines(source: string): string[] {
+  const lines = [...linesOf(source)];
+  const unchanged = () => lines.map((line) => source.slice(line.start, line.next));
+  if (!source.includes("$$") || RAW_HTML.test(source)) return unchanged();
+  const out: string[] = [];
   const containers: Container[] = [];
   let code: ((line: string) => boolean) | undefined;
   let indentedCode = false;
   let math: { indent: string; size: number } | undefined;
   let paragraph = false;
-  for (const line of linesOf(source)) {
+  // A GFM table, and the paragraph line that could become its header.
+  let table = false;
+  let paragraphLine = "";
+  for (const line of lines) {
     const ending = source.slice(line.start + line.text.length, line.next);
     const newline = ending || "\n";
     const text = line.text;
@@ -244,7 +298,8 @@ export function separateDisplayFences(source: string): string {
     for (const container of containers) {
       const indent = indentation(text, pos, column);
       if (container.kind === "item" && indent.pos === text.length) {
-        // A blank line continues a list item, and ends a quote.
+        // A blank line continues a list item that has content, and ends a quote.
+        if (container.empty) break;
         matched++;
         continue;
       }
@@ -256,19 +311,21 @@ export function separateDisplayFences(source: string): string {
         column = advance(text.slice(pos, end), column);
         pos = end;
       } else {
-        if (indent.column < container.column) break;
-        prefix += " ".repeat(container.column - column);
+        if (indent.column - column < container.width) break;
+        prefix += " ".repeat(container.width);
         // A tab can reach past the content column; the rest of it then counts as content indentation.
-        while (column < container.column) column = advance(text[pos++]!, column);
+        const target = column + container.width;
+        while (column < target) column = advance(text[pos++]!, column);
       }
       matched++;
     }
 
     if (matched < containers.length) {
       const rest = text.slice(pos);
-      const lazy = paragraph && !code && !math && !indentedCode && !CONTAINER_START.test(rest) && !INTERRUPTS.test(rest) && !FENCE_OPEN.test(rest) && !MATH_OPEN.test(rest);
+      const lazy = paragraph && rest.trim() !== "" && !code && !math && !indentedCode && !CONTAINER_START.test(rest) && !INTERRUPTS.test(rest) && !FENCE_OPEN.test(rest) && !MATH_OPEN.test(rest);
       if (lazy) {
-        out += text + ending;
+        paragraphLine = rest;
+        out.push(text + ending);
         continue;
       }
       containers.length = matched;
@@ -276,10 +333,13 @@ export function separateDisplayFences(source: string): string {
       math = undefined;
       indentedCode = false;
       paragraph = false;
+      table = false;
     }
 
     // Open new containers, unless the line belongs to a fence that's still open.
     if (!code && !math) {
+      // Whether the line could interrupt a paragraph or indented code. It holds for every container the line opens.
+      const interrupting = paragraph || indentedCode;
       for (;;) {
         const indent = indentation(text, pos, column);
         // Four columns of indentation is indented code, unless it continues a paragraph.
@@ -287,8 +347,9 @@ export function separateDisplayFences(source: string): string {
         const quote = text[indent.pos] === ">";
         const marker = quote ? undefined : /^(?:[-*+]|\d{1,9}[.)])(?=[ \t]|$)/.exec(text.slice(indent.pos))?.[0];
         if (!quote && !marker) break;
-        // A list item interrupting a paragraph can't be empty, and a numbered one must start at 1.
-        if (marker && paragraph && (text.slice(indent.pos + marker.length).trim() === "" || (/\d/.test(marker) && !/^0*1\D/.test(marker)))) break;
+        // A list item interrupting a paragraph can't be empty, and a numbered one must start at 1. The parser applies
+        // the same rule after indented code, even past blank lines, and to the rest of the line once it applies.
+        if (marker && interrupting && (text.slice(indent.pos + marker.length).trim() === "" || (/\d/.test(marker) && !/^0*1\D/.test(marker)))) break;
         // A line of dashes or stars is a rule, not a list.
         if (marker && INTERRUPTS.test(text.slice(indent.pos))) break;
         if (quote) {
@@ -304,15 +365,17 @@ export function separateDisplayFences(source: string): string {
           const after = indentation(text, markerEnd, markerColumn);
           // One to four spaces after the marker set the content column; more, or none, put it one past the marker.
           const content = after.pos === text.length || after.column - markerColumn > 4 ? markerColumn + 1 : after.column;
-          prefix += " ".repeat(content - column);
+          const width = content - column;
+          prefix += " ".repeat(width);
           let end = markerEnd;
           column = markerColumn;
           while (column < content && end < text.length) column = advance(text[end++]!, column);
           column = Math.max(column, content);
           pos = end;
-          containers.push({ kind: "item", column: content });
+          containers.push({ kind: "item", width, empty: true });
         }
         paragraph = false;
+        table = false;
         indentedCode = false;
       }
     }
@@ -337,15 +400,19 @@ export function separateDisplayFences(source: string): string {
           if (after) content += newline + prefix + math.indent + after;
           math = undefined;
           paragraph = Boolean(after);
+          paragraphLine = after;
+          table = false;
         }
       }
     } else if (blank) {
       paragraph = false;
+      table = false;
     } else if (contentIndent > 3 && !paragraph) {
       indentedCode = true;
     } else if (FENCE_OPEN.test(content)) {
       code = opensBlock(content);
       paragraph = false;
+      table = false;
       indentedCode = false;
     } else {
       indentedCode = false;
@@ -355,19 +422,51 @@ export function separateDisplayFences(source: string): string {
         math = { indent, size: fence.length };
         if (rest) content = indent + fence + newline + prefix + indent + rest;
         paragraph = false;
+        table = false;
+      } else if (table && !INTERRUPTS.test(content)) {
+        // A table row. A table takes no lazy lines, and doesn't stop a list item from starting.
+      } else if (paragraph && isDelimiterRow(content) && cellCount(content) === cellCount(paragraphLine)) {
+        // The paragraph's last line was a table's header.
+        paragraph = false;
+        table = true;
       } else {
-        paragraph = !INTERRUPTS.test(content);
+        table = false;
+        // A rule ends a paragraph, and so does a setext underline, which makes it a heading.
+        paragraph = !INTERRUPTS.test(content) && !(paragraph && SETEXT_UNDERLINE.test(content));
+        paragraphLine = content;
       }
     }
-    out += head + content + ending;
+    // An item holding another container, or a line of content, isn't empty.
+    containers.forEach((container, i) => {
+      if (container.kind === "item" && (i < containers.length - 1 || !blank)) container.empty = false;
+    });
+    out.push(head + content + ending);
   }
   return out;
 }
 
-/** Escapes what would start a block (a list marker, a quote, a heading, a fence), so moved text stays text. */
+// What moved text can start with that would make it something other than a paragraph: a list marker, a quote, a
+// heading, a rule, a fence, a definition (with its label closed on this line or not), or an HTML block other than
+// an autolink. A setext underline needs a paragraph above it, so can't start one, and a table row keeps its text.
+const BLOCK_START = new RegExp(
+  [CONTAINER_START.source, INTERRUPTS.source, /^(?:`{3}|~{3}|\$\$)/.source, /^\[(?:[^\]\\]|\\.)*(?:\]:|$)/.source, /^<(?![a-z][a-z\d+.-]{1,31}:[^\s<>]*>|[^\s<>@]+@[^\s<>]+>)[a-z/!?]/i.source].join("|"),
+);
+
+/** Escapes what would start a block, so moved text stays a paragraph of the text it was. */
 function asText(text: string): string {
-  if (!CONTAINER_START.test(text) && !INTERRUPTS.test(text) && !/^(?:`{3}|~{3}|\$\$)/.test(text)) return text;
+  if (!BLOCK_START.test(text)) return text;
   return /^\d/.test(text) ? text.replace(/^(\d+)/, "$1\\") : `\\${text}`;
+}
+
+/** A GFM table's delimiter row, such as `| --- | :-: |`. Without a pipe it would be a rule or an underline. */
+function isDelimiterRow(line: string): boolean {
+  return line.includes("|") && /^ {0,3}(?=[|:-])\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/.test(line);
+}
+
+/** How many cells a table row has: its unescaped pipes, less one at either end. */
+function cellCount(line: string): number {
+  const row = line.trim().replace(/^\|/, "").replace(/(^|[^\\])\|$/, "$1");
+  return 1 + (row.match(/(?<!\\)\|/g)?.length ?? 0);
 }
 
 /** The first run of at least `size` dollars that no backslash escapes. */

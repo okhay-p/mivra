@@ -4,7 +4,7 @@ import { Component, isValidElement, memo, useDeferredValue, useMemo, type Compon
 import Markdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { blockSections, isTooDeep, remarkDollarRule, separateDisplayFences, splitBlocks, splitMath } from "./math-syntax.js";
+import { blockSections, isTooDeep, remarkDollarRule, replyBlocks, splitMath } from "./math-syntax.js";
 
 interface MathTextProps {
   /** The text. May be half-written, while a reply streams. */
@@ -134,11 +134,14 @@ class PlainTextOnError extends Component<{ text: string; children: ReactNode }, 
   }
 }
 
-/** Memoised on its text, so only the block a delta touches is parsed again. */
-const Block = memo(function Block({ text }: { text: string }) {
-  if (isTooDeep(text)) return <PlainBlock text={text} />;
+/**
+ * Memoised on its text, so only the block a delta touches is parsed again. `source` is the block as the reply wrote
+ * it, before display fences were separated, which is what plain text shows.
+ */
+const Block = memo(function Block({ text, source }: { text: string; source: string }) {
+  if (isTooDeep(text)) return <PlainBlock text={source} />;
   return (
-    <PlainTextOnError text={text}>
+    <PlainTextOnError text={source}>
       <Markdown remarkPlugins={remarkPlugins} urlTransform={safeUrl} components={components}>
         {text}
       </Markdown>
@@ -149,11 +152,11 @@ const Block = memo(function Block({ text }: { text: string }) {
 function BlockText({ text, className }: { text: string; className: string }) {
   // Keeps typing and scrolling responsive during a long reply: a render that falls behind skips to the latest delta.
   const deferred = useDeferredValue(text);
-  const blocks = useMemo(() => splitBlocks(separateDisplayFences(deferred)), [deferred]);
+  const blocks = useMemo(() => replyBlocks(deferred), [deferred]);
   return (
     <div className={className}>
       {blocks.map((block, i) => (
-        <Block key={i} text={block} />
+        <Block key={i} text={block.text} source={block.source} />
       ))}
     </div>
   );
