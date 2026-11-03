@@ -76,3 +76,20 @@ describe("syllabus", () => {
     ).toBe(true);
   });
 });
+
+describe("lesson schemas", async () => {
+  const { LessonOutlineInput, LessonSectionKind, LessonTextInput, artifactKinds } = await import("../src/index.js");
+
+  it("plans every artifact kind except placement questions, plus prose", () => {
+    const expected = [...Object.keys(artifactKinds).filter((k) => k !== "placement_question"), "prose"].sort();
+    expect([...LessonSectionKind.options].sort()).toEqual(expected);
+  });
+
+  it("rejects {} and an outline without a check", () => {
+    expect(LessonOutlineInput.safeParse({}).success).toBe(false);
+    expect(LessonTextInput.safeParse({}).success).toBe(false);
+    const sections = [{ title: "a", kind: "prose", purpose: "p" }, { title: "b", kind: "table", purpose: "p" }];
+    expect(LessonOutlineInput.safeParse({ title: "t", sections }).success).toBe(false);
+    expect(LessonOutlineInput.safeParse({ title: "t", sections: [...sections, { title: "c", kind: "multiple_choice", purpose: "p" }] }).success).toBe(true);
+  });
+});

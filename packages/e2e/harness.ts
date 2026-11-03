@@ -528,8 +528,28 @@ interface PromptMessage {
   content: unknown;
 }
 
+/** A lesson's generation: the outline, then one section per call (ADR-011). */
+const LESSON_STEPS: Step[] = [
+  {
+    tool: "outline_lesson",
+    input: {
+      title: "What a limit is",
+      sections: [
+        { title: "The idea", kind: "prose", purpose: "Explain limits." },
+        { title: "Quick check", kind: "multiple_choice", purpose: "Check the idea." },
+      ],
+    },
+  },
+  { tool: "write_lesson_text", input: { markdown: "A **limit** is the value $f(x)$ heads towards as $x$ approaches a point." } },
+  { tool: "ask_multiple_choice", input: { concept: "limit", question: "What does $1/x$ approach as $x$ grows?", options: [{ text: "0" }, { text: "1" }], correctOptionIndex: 0, explanation: "It shrinks towards 0." } },
+  { text: "" },
+];
+
 function nextStep(prompt: PromptMessage[]): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
+  if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra lesson request")) {
+    return LESSON_STEPS[prompt.slice(lastUser).filter((m) => m.role === "tool").length] ?? { text: "" };
+  }
   if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra session event")) {
     const history = JSON.stringify(prompt.slice(0, lastUser));
     if (history.includes("continuationstop")) return { controlled: "cancelstream" };

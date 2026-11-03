@@ -12,6 +12,7 @@ export * from "./artifact-math-input.js";
 export * from "./math-text.js";
 export * from "./algorithm-trace.js";
 export * from "./course.js";
+export * from "./lesson.js";
 export * from "./graph.js";
 export * from "./multiple-choice.js";
 export * from "./set-diagram.js";

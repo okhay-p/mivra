@@ -1,4 +1,4 @@
-import { ArtifactView, CourseView, DocumentView, MemoryView, type PlacementAnswer } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryView, type PlacementAnswer } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc } from "hono/client";
@@ -122,3 +122,25 @@ export const getCourse = (sessionId: string) =>
     () => api.sessions[":id"].course.$get({ param: { id: sessionId } }),
     async (res) => CourseView.parse(await res.json()),
   );
+
+export const listCourseLessons = (courseId: string) =>
+  request(
+    () => api.courses[":id"].lessons.$get({ param: { id: courseId } }),
+    async (res) => CourseLessonsView.parse(await res.json()),
+  );
+
+const readLesson = async (res: Response) => {
+  const body = (await res.json()) as { lesson: unknown; revision: string };
+  return { lesson: LessonView.parse(body.lesson), revision: body.revision };
+};
+
+export const startLesson = (courseId: string, topicId: string) =>
+  request(() => api.courses[":id"].lessons.$post({ param: { id: courseId }, json: { topicId } }), readLesson);
+
+/** The lesson; with `after`, waits on the server for the next change. */
+export const getLesson = (id: string, after?: string, signal?: AbortSignal) =>
+  request(() => api.lessons[":id"].$get({ param: { id }, query: after ? { after } : {} }, { init: { signal } }), readLesson);
+
+export const finishLesson = (id: string) => request(() => api.lessons[":id"].finish.$post({ param: { id } }), readLesson);
+
+export const retryLesson = (id: string) => request(() => api.lessons[":id"].retry.$post({ param: { id } }), readLesson);

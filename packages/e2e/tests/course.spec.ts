@@ -30,4 +30,23 @@ test("a course starts from the first screen, runs the placement interview and wr
 
   // The course is marked in the sidebar.
   await expect(page.getByRole("button", { name: goal.slice(0, 60) })).toBeVisible();
+
+  // The first lesson is written when the learner reaches it, and becomes the page.
+  await course.getByRole("button", { name: "Start lesson 1" }).click();
+  const lesson = page.getByRole("article", { name: "What a limit is" });
+  await expect(lesson.getByRole("region", { name: "The idea" })).toContainText("A limit is the value");
+  const check = lesson.getByRole("region", { name: /^Check: limit/ });
+  await expect(check).toBeVisible();
+  await expect(lesson.getByRole("button", { name: "Finish lesson" })).toBeDisabled();
+
+  // A wrong answer still finishes the lesson: scores never block moving on.
+  await check.getByRole("button", { name: /^1/ }).click();
+  await expect(check.getByText("Not quite.")).toBeVisible();
+  await lesson.getByRole("button", { name: "Finish lesson" }).click();
+  await expect(lesson.getByText("Finished. This lesson won't change.")).toBeVisible();
+  await expect(lesson.getByRole("button", { name: "Next lesson: Chain rule" })).toBeVisible();
+
+  // The tutor's chat is in a drawer, with the interview still in it.
+  await course.getByRole("button", { name: "Tutor" }).click();
+  await expect(page.getByRole("dialog", { name: "Tutor" }).getByText("Your syllabus is ready.")).toBeVisible();
 });

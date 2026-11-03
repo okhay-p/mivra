@@ -97,30 +97,19 @@ describe("CourseBar", () => {
     },
   };
 
-  it("shows the interview status before a syllabus exists", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(json({ ...course, status: "interviewing", syllabus: null }));
-    render(<CourseBar sessionId="s1" version={0} />);
-    await screen.findByText("Placement interview");
+  it("shows the interview status before a syllabus exists", () => {
+    render(<CourseBar course={{ ...course, status: "interviewing", syllabus: null }} />);
+    expect(screen.getByText("Placement interview")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /Syllabus/ })).toBeNull();
   });
 
-  it("shows the syllabus with reasons and labelled knowledge", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(json(course));
-    render(<CourseBar sessionId="s1" version={0} />);
-    fireEvent.click(await screen.findByRole("button", { name: /Syllabus · 2 topics/ }));
+  it("shows the syllabus with reasons and labelled knowledge", () => {
+    render(<CourseBar course={course} />);
+    fireEvent.click(screen.getByRole("button", { name: /Syllabus · 2 topics/ }));
     const topics = screen.getByRole("list", { name: "Syllabus topics" });
     expect(topics.textContent).toContain("Limits");
     expect(topics.textContent).toContain("Why: You weren't sure.");
     expect(topics.textContent).toContain("You asked for this");
     expect(screen.getByRole("list", { name: "What Mivra thinks you know" }).textContent).toContain("From the test");
-  });
-
-  it("reloads when the version changes", async () => {
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(json({ ...course, status: "interviewing", syllabus: null }));
-    const { rerender } = render(<CourseBar sessionId="s1" version={0} />);
-    await screen.findByText("Placement interview");
-    fetch.mockResolvedValue(json(course));
-    rerender(<CourseBar sessionId="s1" version={1} />);
-    await screen.findByText("In progress");
   });
 });

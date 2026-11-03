@@ -199,7 +199,7 @@ describe("courses", () => {
     await turn(app, db, session.id, "skip");
     const { createSessionStore } = await import("../src/store/session-store.js");
     const store = createSessionStore(db);
-    expect(store.writeFirstSyllabus(started.id, "run", { topics: [], known: [] })).toBeUndefined();
+    expect(store.writeFirstSyllabus(started.id, null, { topics: [], known: [] })).toBeUndefined();
     expect(store.latestSyllabus(started.id)?.version).toBe(1);
   });
 

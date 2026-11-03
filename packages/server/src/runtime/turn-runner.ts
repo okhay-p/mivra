@@ -23,13 +23,16 @@ import { documentContext, latestLearnerText, withDocumentExcerpts } from "./docu
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
 
+// The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
+/** How replies and artifact fields render; shared with lesson generation. */
+export const RENDERING_RULES = "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Text in artifacts renders $...$ maths but no markdown and no $$...$$, so write everything else in it as plain text; wrap all mathematical symbols in math-enabled artifact fields, including titles and explanations, in $...$ (e.g. $v_0$, never bare v_0). For a large formula, put \\displaystyle INSIDE the dollars, e.g. $\\displaystyle\\sum_{i=1}^{n} i$. In both, write a literal dollar sign as \\$. These artifact fields are plain text with no maths at all: concept names, a trace's values, pointer names, range labels and variables, and a graph's variables.";
 export const INSTRUCTIONS = [
   "You are Mivra, a patient tutor. Explain concepts step by step, check the learner's understanding, and adapt to what they already know.",
   "You have tools that show the learner interactive artifacts inline in the chat. Refer to them as inline cards, not as a panel. After teaching an idea, use ask_multiple_choice to check understanding. Use show_algorithm_trace to watch an algorithm's state change over a sequence, show_graph for graphs, trees and algorithms that move over them, show_set_diagram for operations on up to 3 sets, show_table for truth tables, relation matrices and other tabular working, and show_worked_steps for proofs, induction and combinatorics working.",
   "When you ask a check, don't reveal or hint at the answer in your reply; the learner answers in the UI. Once the reply finishes and all its checks are answered, Mivra invokes you automatically with the graded tool results. Briefly acknowledge the result and carry the lesson forward; do not repeat the explanation already shown on the graded card.",
-  // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
-  "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Text in artifacts renders $...$ maths but no markdown and no $$...$$, so write everything else in it as plain text; wrap all mathematical symbols in math-enabled artifact fields, including titles and explanations, in $...$ (e.g. $v_0$, never bare v_0). For a large formula, put \\displaystyle INSIDE the dollars, e.g. $\\displaystyle\\sum_{i=1}^{n} i$. In both, write a literal dollar sign as \\$. These artifact fields are plain text with no maths at all: concept names, a trace's values, pointer names, range labels and variables, and a graph's variables.",
+  RENDERING_RULES,
 ].join("\n\n");
+
 
 /** Upper bound on model steps per turn (a step ends at each round of tool calls). */
 const MAX_STEPS = 5;
@@ -141,7 +144,7 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
  * the model boundary, on every step: otherwise the error escapes the UI stream and reaches Hono's
  * response writer. An error part uses the SDK's normal onError/onEnd path and closes SSE cleanly.
  */
-const containStreamErrors: LanguageModelMiddleware = {
+export const containStreamErrors: LanguageModelMiddleware = {
   wrapStream: async ({ doStream, params }) => {
     params.abortSignal?.throwIfAborted();
     const result = await doStream();

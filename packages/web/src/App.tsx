@@ -2,13 +2,14 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
-import type { ArtifactView } from "@mivra/protocol";
-import { Brain, GraduationCap, MessageSquare, Plus } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
+import type { ArtifactView, CourseLessonsView, CourseView } from "@mivra/protocol";
+import { Brain, GraduationCap, MessageSquare, MessagesSquare, Plus } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
+import { LessonPage, TopicList } from "./Lesson.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
@@ -19,6 +20,7 @@ import { groupSessions } from "./session-groups.js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   Sidebar,
   SidebarContent,
@@ -114,7 +116,7 @@ export function App() {
         ) : error ? (
           <Notice error>{error}</Notice>
         ) : activeId ? (
-          <SessionLoader
+          <SessionView
             key={activeId}
             sessionId={activeId}
             course={Boolean(active?.courseId)}
@@ -245,12 +247,104 @@ function SessionSidebar({
 
 interface SessionProps {
   sessionId: string;
-  /** Whether the session teaches a course, which shows the course bar. */
-  course: boolean;
   /** Sent once, as soon as the empty session opens. */
   firstMessage?: string;
   onFirstMessageSent: () => void;
   onReply: () => void;
+  /** Called whenever the chat settles after a reply, e.g. to pick up a syllabus written in it. */
+  onSettled?: () => void;
+}
+
+function SessionView({ course, ...props }: SessionProps & { course: boolean }) {
+  return course ? <CourseSession {...props} /> : <SessionLoader {...props} />;
+}
+
+/**
+ * A course's session (ADR-011): the placement interview runs as a chat; once the first lesson starts,
+ * the lesson is the page and the tutor's chat moves into a drawer.
+ */
+function CourseSession(props: SessionProps) {
+  const { sessionId } = props;
+  const [course, setCourse] = useState<CourseView>();
+  const [lessons, setLessons] = useState<CourseLessonsView>();
+  const [selected, setSelected] = useState<string>();
+  const [tutorOpen, setTutorOpen] = useState(false);
+  const [error, setError] = useState<string>();
+
+  const refresh = useCallback(async () => {
+    const found = await getCourse(sessionId);
+    if (!found.ok) return setError(found.error);
+    setCourse(found.value);
+    if (found.value.status === "interviewing") return;
+    const list = await listCourseLessons(found.value.id);
+    if (list.ok) setLessons(list.value);
+  }, [sessionId]);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const start = async (topicId: string) => {
+    if (!course) return;
+    const result = await startLesson(course.id, topicId);
+    if (!result.ok) return setError(result.error);
+    setSelected(result.value.lesson.id);
+    await refresh();
+  };
+
+  if (error) return <Notice error>{error}</Notice>;
+  if (!course) return null;
+  const lessonId = selected ?? lessons?.currentLessonId ?? undefined;
+  const next = lessons?.topics.find((t) => t.topicId === lessons.nextTopicId);
+
+  if (!lessonId) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <CourseBar course={course}>
+          {next && (
+            <Button size="sm" onClick={() => void start(next.topicId)}>
+              Start lesson 1
+            </Button>
+          )}
+        </CourseBar>
+        <SessionLoader {...props} onSettled={refresh} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <CourseBar course={course}>
+        <Button size="sm" variant="outline" onClick={() => setTutorOpen(true)} data-tutor-trigger>
+          <MessagesSquare aria-hidden /> Tutor
+        </Button>
+      </CourseBar>
+      <div className="flex min-h-0 flex-1">
+        {lessons && (
+          <aside className="hidden w-60 shrink-0 overflow-y-auto border-r p-3 md:block">
+            <TopicList lessons={lessons} selectedId={lessonId} onSelect={setSelected} />
+          </aside>
+        )}
+        <div className="min-w-0 flex-1 overflow-y-auto" data-testid="lesson-scroll">
+          <LessonPage
+            key={lessonId}
+            lessonId={lessonId}
+            nextTopic={next && { id: next.topicId, title: next.title }}
+            onFinished={() => void refresh()}
+            onStartNext={start}
+          />
+        </div>
+      </div>
+      <Sheet open={tutorOpen} onOpenChange={setTutorOpen}>
+        <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
+          <SheetHeader className="border-b">
+            <SheetTitle className="font-heading">Tutor</SheetTitle>
+            <SheetDescription>Ask about the course. The lesson stays as it is.</SheetDescription>
+          </SheetHeader>
+          <SessionLoader {...props} onSettled={refresh} />
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
 }
 
 function SessionLoader({ sessionId, onReply, ...props }: SessionProps) {
@@ -268,13 +362,11 @@ function SessionLoader({ sessionId, onReply, ...props }: SessionProps) {
 function Chat({
   sessionId,
   initialMessages,
-  course,
   firstMessage,
   onFirstMessageSent,
   onReply,
+  onSettled,
 }: SessionProps & { initialMessages: UIMessage[] }) {
-  // Bumped after each reply, so the course bar picks up a syllabus written in it.
-  const [courseVersion, setCourseVersion] = useState(0);
   const [input, setInput] = useState("");
   const documents = useDocuments(sessionId);
   const documentsRef = useRef(documents);
@@ -403,11 +495,13 @@ function Chat({
   // Focus/visibility deliberately replace a possibly stalled subscription; only the Stop endpoint
   // cancels the server-owned run. There is no idle timer or periodic fallback.
   const busy = status === "submitted" || status === "streaming";
-  // A syllabus is written during a reply, often an automatic one, so reload the course bar whenever the
-  // chat settles or the transcript is reconciled with the server.
+  // A syllabus is written during a reply, often an automatic one, so tell the course whenever the chat
+  // settles or the transcript is reconciled with the server.
+  const settled = useRef(onSettled);
+  settled.current = onSettled;
   useEffect(() => {
-    if (course && !busy) setCourseVersion((v) => v + 1);
-  }, [course, busy, messages.length]);
+    if (!busy) settled.current?.();
+  }, [busy, messages.length]);
   const chatState = useRef({ busy, resumeStream, stop });
   chatState.current = { busy, resumeStream, stop };
   async function reconcile(expected: number) {
@@ -490,7 +584,6 @@ function Chat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {course && <CourseBar sessionId={sessionId} version={courseVersion} />}
       <Conversation aria-busy={busy} instance={conversation} initial="instant" resize="instant" className="min-h-0 min-w-0">
         {/* Positioned, so sr-only artifact text cannot stretch or scroll the outer interface. */}
         <ConversationContent className="relative mx-auto max-w-3xl gap-4 p-4"

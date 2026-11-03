@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { LanguageModel } from "ai";
-import { ArtifactView, CourseView, DocumentView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
 import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
 import type { Extract } from "./documents/extract-in-child.js";
@@ -10,8 +10,10 @@ import { coreMemory } from "./plugins/core-memory.js";
 import { presentMessages } from "./runtime/artifacts.js";
 import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
+import { courseLessons, createLessonGenerator, lessonRevision, lessonView } from "./runtime/lessons.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
+import { createLessonStore } from "./store/lesson-store.js";
 import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
 
 export interface AppDeps {
@@ -105,6 +107,61 @@ const getCourse = createRoute({
     404: errorResponse("Unknown session, or the session isn't a course"),
   },
 });
+
+const CourseParams = z.object({ id: z.string() });
+const LessonParams = z.object({ id: z.string() });
+const LessonResponse = z.object({ lesson: LessonView, revision: z.string() });
+const lessonResponse = (description: string) => ({ description, content: { "application/json": { schema: LessonResponse } } });
+
+const listCourseLessons = createRoute({
+  method: "get",
+  path: "/courses/{id}/lessons",
+  request: { params: CourseParams },
+  responses: {
+    200: { description: "The syllabus topics with their lessons", content: { "application/json": { schema: CourseLessonsView } } },
+    404: errorResponse("Unknown course"),
+  },
+});
+
+const startLesson = createRoute({
+  method: "post",
+  path: "/courses/{id}/lessons",
+  description:
+    "Start the lesson for the next topic (ADR-011). Lessons are written just in time: only once every earlier lesson is finished. Generation runs in the background; follow it with GET /lessons/{id}?after=.",
+  request: { params: CourseParams, body: { content: { "application/json": { schema: z.object({ topicId: z.string().min(1) }) } } } },
+  responses: {
+    201: lessonResponse("The new lesson, or the topic's existing one"),
+    404: errorResponse("Unknown course or topic"),
+    409: errorResponse("The course has no syllabus yet, or an earlier lesson isn't finished"),
+  },
+});
+
+const getLesson = createRoute({
+  method: "get",
+  path: "/lessons/{id}",
+  description: "The lesson. With `after` set to a revision the client already has, waits up to 20 s for the next change.",
+  request: { params: LessonParams, query: z.object({ after: z.string().max(100).optional() }) },
+  responses: { 200: lessonResponse("The lesson and its revision"), 404: errorResponse("Unknown lesson") },
+});
+
+const finishLesson = createRoute({
+  method: "post",
+  path: "/lessons/{id}/finish",
+  description: "Finish a lesson the learner has read to the end. Every section must be written and every check answered; scores don't matter. A finished lesson is frozen.",
+  request: { params: LessonParams },
+  responses: { 200: lessonResponse("The finished lesson"), 404: errorResponse("Unknown lesson"), 409: errorResponse("Not finished being written, or a check is unanswered") },
+});
+
+const retryLesson = createRoute({
+  method: "post",
+  path: "/lessons/{id}/retry",
+  description: "Resume a lesson whose generation stopped part-way. Sections already written are kept.",
+  request: { params: LessonParams },
+  responses: { 202: lessonResponse("The lesson, generating again"), 404: errorResponse("Unknown lesson"), 409: errorResponse("The lesson didn't fail") },
+});
+
+/** How long a client waiting on a lesson is held before it asks again. */
+const LESSON_WAIT_MS = 20_000;
 
 const listMessages = createRoute({
   method: "get",
@@ -315,8 +372,17 @@ function toDocumentJson(row: DocumentRow): DocumentView {
 export function createApp({ db, model, security, plugins = [coreLearning, coreMemory, coreCourse], extractDocument }: AppDeps) {
   const store = createSessionStore(db);
   store.recoverInterruptedRuns();
+  const lessons = createLessonStore(db);
+  lessons.recoverInterrupted();
   const registry = createCapabilityRegistry(plugins);
   const turns = createTurnRunner({ store, registry, model });
+  const generator = createLessonGenerator({ store, lessons, registry, model });
+  const lessonJson = (id: string) => {
+    const row = lessons.findLesson(id);
+    if (!row) return undefined;
+    const lesson = lessonView(row, { store, lessons, registry });
+    return { lesson, revision: lessonRevision(lesson) };
+  };
   const attachDocument = createDocumentAttacher({ store, ...(extractDocument ? { extract: extractDocument } : {}) });
 
   const base = new OpenAPIHono();
@@ -336,6 +402,54 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       const course = store.findCourseBySession(c.req.valid("param").id);
       if (!course) return c.json({ error: "This session isn't a course" }, 404);
       return c.json(toCourseJson(course, store), 200);
+    })
+    .openapi(listCourseLessons, (c) => {
+      const course = store.findCourse(c.req.valid("param").id);
+      if (!course) return c.json({ error: "Course not found" }, 404);
+      return c.json(courseLessons(course.id, { store, lessons }), 200);
+    })
+    .openapi(startLesson, (c) => {
+      const course = store.findCourse(c.req.valid("param").id);
+      if (!course) return c.json({ error: "Course not found" }, 404);
+      const { topicId } = c.req.valid("json");
+      const topics = store.latestSyllabus(course.id)?.topics;
+      if (!topics) return c.json({ error: "The course has no syllabus yet" }, 409);
+      const position = topics.findIndex((t) => t.id === topicId);
+      if (position < 0) return c.json({ error: "Topic not found" }, 404);
+      const existing = lessons.listLessons(course.id).find((l) => l.topicId === topicId);
+      if (!existing && courseLessons(course.id, { store, lessons }).nextTopicId !== topicId) {
+        return c.json({ error: "Finish the earlier lessons first" }, 409);
+      }
+      const { lesson } = lessons.createLesson({ courseId: course.id, topicId, topicTitle: topics[position]!.title, position });
+      generator.start(lesson.id);
+      return c.json(lessonJson(lesson.id)! as never, 201);
+    })
+    .openapi(getLesson, async (c) => {
+      const { id } = c.req.valid("param");
+      const { after } = c.req.valid("query");
+      const first = lessonJson(id);
+      if (!first) return c.json({ error: "Lesson not found" }, 404);
+      if (after === first.revision) {
+        await generator.waitForChange(id, LESSON_WAIT_MS, c.req.raw.signal);
+        return c.json(lessonJson(id)! as never, 200);
+      }
+      // Cast for the same reason as messages: hono's JSON typing recurses too deeply on artifact views.
+      return c.json(first as never, 200);
+    })
+    .openapi(finishLesson, (c) => {
+      const { id } = c.req.valid("param");
+      if (!lessons.findLesson(id)) return c.json({ error: "Lesson not found" }, 404);
+      if (!lessons.finishLesson(id, registry.checkKinds())) return c.json({ error: "Answer every check in the finished lesson first" }, 409);
+      generator.changed(id);
+      return c.json(lessonJson(id)! as never, 200);
+    })
+    .openapi(retryLesson, (c) => {
+      const { id } = c.req.valid("param");
+      if (!lessons.findLesson(id)) return c.json({ error: "Lesson not found" }, 404);
+      if (!lessons.restartLesson(id)) return c.json({ error: "This lesson didn't fail" }, 409);
+      generator.start(id);
+      generator.changed(id);
+      return c.json(lessonJson(id)! as never, 202);
     })
     .openapi(listMessages, (c) => {
       const { id } = c.req.valid("param");
@@ -364,9 +478,18 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       return result.response;
     })
     .openapi(submitAttemptRoute, (c) => {
-      const result = submitAttempt({ artifactId: c.req.valid("param").id, answer: c.req.valid("json").answer }, { registry, store });
+      const result = submitAttempt(
+        { artifactId: c.req.valid("param").id, answer: c.req.valid("json").answer },
+        { registry, store, durableOnceSaved: lessons.isLessonArtifact },
+      );
       if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
       const artifact = store.findArtifact(c.req.valid("param").id)!;
+      // A lesson's checks don't continue a chat: the learner reads on, and the lesson page updates.
+      const lesson = lessons.findLessonBySession(artifact.sessionId);
+      if (lesson) {
+        generator.changed(lesson.id);
+        return c.json(result.view as never, 201);
+      }
       // The durable claim in startContinuation makes retries and other tabs harmless.
       void turns.continueAfterAnswer(artifact.sessionId);
       // Cast for the same reason as messages: hono's JSON typing recurses too deeply on the view type.

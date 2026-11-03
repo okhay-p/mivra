@@ -1,12 +1,12 @@
 import { MAX_GOAL_CHARS, type CourseView, type KnownSource } from "@mivra/protocol";
 import { ChevronDown, GraduationCap } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { getCourse, startCourse } from "./api.js";
+import { startCourse } from "./api.js";
 
 export interface StartedCourse {
   session: { id: string; title: string; updatedAt: string; courseId: string | null };
@@ -60,22 +60,9 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
 
 const sourceLabel: Record<KnownSource, string> = { memory: "From memory", test: "From the test", guess: "Guessed" };
 
-/** The course's goal, where it stands, and its syllabus once written. `version` changes reload it. */
-export function CourseBar({ sessionId, version }: { sessionId: string; version: number }) {
-  const [course, setCourse] = useState<CourseView>();
+/** The course's goal, where it stands, and its syllabus once written. */
+export function CourseBar({ course, children }: { course: CourseView; children?: ReactNode }) {
   const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    let current = true;
-    void getCourse(sessionId).then((result) => {
-      if (current && result.ok) setCourse(result.value);
-    });
-    return () => {
-      current = false;
-    };
-  }, [sessionId, version]);
-
-  if (!course) return null;
   const syllabus = course.syllabus;
 
   return (
@@ -94,6 +81,7 @@ export function CourseBar({ sessionId, version }: { sessionId: string; version: 
             </Button>
           </CollapsibleTrigger>
         )}
+        {children && <div className={cn("flex shrink-0 gap-2", !syllabus && "ml-auto")}>{children}</div>}
       </div>
       {syllabus && (
         <CollapsibleContent>

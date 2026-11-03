@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
 import { and, asc, desc, eq, inArray, isNull, isNotNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { artifacts, attempts, courses, documentChunks, documents, memories, messages, runs, sessions, syllabusVersions, type RunStatus } from "../db/schema.js";
+import { artifacts, attempts, courses, documentChunks, documents, lessons, memories, messages, runs, sessions, syllabusVersions, type RunStatus } from "../db/schema.js";
 
 export type { RunStatus };
 
@@ -55,7 +55,7 @@ function firstText(message: UIMessage): string | undefined {
 }
 
 /**
- * All persistence for sessions, messages and runs. This is the only module that talks to Drizzle
+ * All persistence for sessions, messages and runs. With lesson-store.ts, the only code that talks to Drizzle
  * (ADR-007), so the storage engine and schema can change without touching the runtime or routes.
  */
 export function createSessionStore(db: Db, clock: () => Date = () => new Date()) {
@@ -74,12 +74,14 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       db.delete(memories).where(eq(memories.status, "pending")).run();
     },
 
-    /** Sessions, most recent first, with the course each one teaches, if any. */
+    /** Sessions, most recent first, with the course each one teaches, if any. A lesson's own session is hidden. */
     listSessions(): (SessionRow & { courseId: string | null })[] {
       return db
         .select({ session: sessions, courseId: courses.id })
         .from(sessions)
         .leftJoin(courses, eq(courses.sessionId, sessions.id))
+        .leftJoin(lessons, eq(lessons.sessionId, sessions.id))
+        .where(isNull(lessons.id))
         .orderBy(desc(sessions.updatedAt))
         .all()
         .map((row) => ({ ...row.session, courseId: row.courseId }));
@@ -97,6 +99,10 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       });
     },
 
+    findCourse(id: string): CourseRow | undefined {
+      return db.select().from(courses).where(eq(courses.id, id)).get();
+    },
+
     findCourseBySession(sessionId: string): CourseRow | undefined {
       return db.select().from(courses).where(eq(courses.sessionId, sessionId)).get();
     },
@@ -112,7 +118,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
      * Returns false if the course isn't interviewing (its syllabus already exists); later versions come
      * from Change and adaptive edits, not from this.
      */
-    writeFirstSyllabus(courseId: string, runId: string, input: { topics: Omit<SyllabusTopicRow, "id">[]; known: KnownConceptRow[] }): SyllabusRow | undefined {
+    writeFirstSyllabus(courseId: string, runId: string | null, input: { topics: Omit<SyllabusTopicRow, "id">[]; known: KnownConceptRow[] }): SyllabusRow | undefined {
       return db.transaction((tx) => {
         const course = tx.select().from(courses).where(eq(courses.id, courseId)).get();
         if (course?.status !== "interviewing") return undefined;
