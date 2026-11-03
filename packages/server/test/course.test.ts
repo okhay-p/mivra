@@ -17,7 +17,7 @@ const usage = {
   outputTokens: { total: 1, text: 1, reasoning: 0 },
 };
 
-type Step = { toolCall: { name: string; input: unknown } } | { text: string };
+type Step = { toolCall: { name: string; input: unknown } } | { text: string } | { error: string };
 
 /** Plays scripted steps, one per model call, and records each call's tools and instructions. */
 function scriptedModel(steps: Step[]) {
@@ -31,6 +31,7 @@ function scriptedModel(steps: Step[]) {
         prompt: JSON.stringify(options.prompt.filter((m) => m.role !== "system")),
       });
       const step = steps[call++] ?? { text: "ok" };
+      if ("error" in step) throw new Error(step.error);
       const chunks: object[] =
         "toolCall" in step
           ? [
@@ -207,6 +208,17 @@ describe("courses", () => {
     // Three replies: the question, the clarification, and the one that wrote the syllabus.
     expect(replies).toHaveLength(3);
     expect(await course(app, session.id)).toMatchObject({ status: "active", interviewMessageId: replies[2]!.id });
+  });
+
+  it("ends the interview at the last message before the syllabus when the run that wrote it failed", async () => {
+    const { app, db } = setup([syllabus, { error: "provider down" }]);
+    const { session } = await startCourse(app);
+    await turn(app, db, session.id, "Skip the questions");
+    const { createSessionStore } = await import("../src/store/session-store.js");
+    const stored = createSessionStore(db).loadMessages(session.id);
+    // The run failed after writing the syllabus, so it stored no reply.
+    expect(stored.map((m) => m.role)).toEqual(["user"]);
+    expect(await course(app, session.id)).toMatchObject({ status: "active", interviewMessageId: stored[0]!.id });
   });
 
   it("refuses a second first syllabus", async () => {

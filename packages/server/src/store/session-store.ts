@@ -140,15 +140,30 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       });
     },
 
-    /** The stored reply of the run that wrote the course's first syllabus: the end of its placement interview. */
+    /**
+     * The last message of a course's placement interview: the stored reply of the run that wrote the first
+     * syllabus, or, if that run stored no reply (it failed after writing it), the last message stored before
+     * the syllabus was written. Null only while there is no syllabus.
+     */
     interviewMessageId(courseId: string): string | null {
-      const row = db
-        .select({ messageId: runs.assistantMessageId })
+      const syllabus = db
+        .select({ runId: syllabusVersions.runId, createdAt: syllabusVersions.createdAt, sessionId: courses.sessionId })
         .from(syllabusVersions)
-        .innerJoin(runs, eq(runs.id, syllabusVersions.runId))
+        .innerJoin(courses, eq(courses.id, syllabusVersions.courseId))
         .where(and(eq(syllabusVersions.courseId, courseId), eq(syllabusVersions.version, 1)))
         .get();
-      return row?.messageId ?? null;
+      if (!syllabus) return null;
+      const reply = syllabus.runId
+        ? db.select({ id: runs.assistantMessageId }).from(runs).where(eq(runs.id, syllabus.runId)).get()?.id
+        : undefined;
+      if (reply) return reply;
+      const before = db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.sessionId, syllabus.sessionId), sql`${messages.createdAt} <= ${syllabus.createdAt.getTime()}`))
+        .orderBy(desc(messages.seq))
+        .get();
+      return before?.id ?? null;
     },
 
     /** Whether an automatic syllabus change was already made after a finished lesson. */
