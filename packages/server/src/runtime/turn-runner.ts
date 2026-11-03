@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   convertToModelMessages,
-  readUIMessageStream,
   createUIMessageStreamResponse,
   stepCountIs,
   streamText,
@@ -187,13 +186,40 @@ function continuationEvent(): UIMessage {
  * stream (SSE) response.
  */
 export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
-  const active = new Map<string, { controller: AbortController; messageId: string; continuation: boolean; liveMessage?: UIMessage }>();
+  type ActiveTurn = {
+    controller: AbortController;
+    stopId: string;
+    continuation: boolean;
+    chunks: UIMessageChunk[];
+    subscribers: Set<ReadableStreamDefaultController<UIMessageChunk>>;
+  };
+  const active = new Map<string, ActiveTurn>();
   // A Stop can overtake the chat POST. Remember its message id, with a fixed bound on stale ids.
   const stopped = new Set<string>();
   const runner = {
-    liveContinuation(sessionId: string) {
+    subscribeContinuation(sessionId: string) {
       const run = active.get(sessionId);
-      return run?.continuation ? run.liveMessage : undefined;
+      if (!run?.continuation) {
+        // A tab may have missed the entire run while hidden, including a failure before streaming.
+        const latest = store.latestRun(sessionId);
+        return new Response(null, {
+          status: 204,
+          headers: latest?.continuationOf && latest.status === "failed"
+            ? { "x-mivra-continuation-error": "The model request failed." }
+            : {},
+        });
+      }
+      let subscriber: ReadableStreamDefaultController<UIMessageChunk>;
+      const stream = new ReadableStream<UIMessageChunk>({
+        start(controller) {
+          subscriber = controller;
+          // Registration and replay are synchronous: no gap between buffered and live chunks.
+          for (const chunk of run.chunks) controller.enqueue(chunk);
+          run.subscribers.add(controller);
+        },
+        cancel() { run.subscribers.delete(subscriber); },
+      });
+      return createUIMessageStreamResponse({ stream, headers: { "x-mivra-continuation-stop-id": run.stopId } });
     },
     async continueAfterAnswer(sessionId: string) {
       try {
@@ -201,14 +227,23 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       } catch (error) {
         const run = store.latestRun(sessionId);
         if (run?.continuationOf && run.status === "running") {
+          const turn = active.get(sessionId);
           active.delete(sessionId);
+          if (turn?.continuation) {
+            for (const subscriber of turn.subscribers) {
+              subscriber.enqueue({ type: "error", errorText: publicErrorText(error) });
+              subscriber.close();
+            }
+            turn.subscribers.clear();
+            turn.chunks.length = 0;
+          }
           store.finishRun(run.id, sessionId, "failed", undefined, errorText(error));
         }
       }
     },
     stopTurn(sessionId: string, messageId: string) {
       const turn = active.get(sessionId);
-      if (turn?.messageId === messageId) return turn.controller.abort();
+      if (turn?.stopId === messageId) return turn.controller.abort();
       if (!store.findSession(sessionId)) return;
       stopped.add(JSON.stringify([sessionId, messageId]));
       if (stopped.size > 256) stopped.delete(stopped.values().next().value!);
@@ -249,11 +284,20 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       }
 
       const cancellation = new AbortController();
-      active.set(sessionId, { controller: cancellation, messageId: message.id, continuation });
-      if (stopped.delete(JSON.stringify([sessionId, message.id]))) cancellation.abort();
+      // Automatic turns share the originating learner message in storage, but Stop must target
+      // this run alone: a delayed Stop must never cancel the next automatically generated quiz.
+      const stopId = continuation ? runId : message.id;
+      const activeTurn: ActiveTurn = { controller: cancellation, stopId, continuation, chunks: [], subscribers: new Set() };
+      active.set(sessionId, activeTurn);
+      if (stopped.delete(JSON.stringify([sessionId, stopId]))) cancellation.abort();
       const signal = abortSignal ? AbortSignal.any([abortSignal, cancellation.signal]) : cancellation.signal;
       const cancelledBeforeStream = (): StartTurnResult => {
         active.delete(sessionId);
+        for (const subscriber of activeTurn.subscribers) {
+          subscriber.enqueue({ type: "abort" });
+          subscriber.close();
+        }
+        activeTurn.subscribers.clear();
         store.finishRun(runId, sessionId, "cancelled");
         store.bindDocuments(sessionId, message.id, readyDocumentIds);
         return { ok: true, response: createUIMessageStreamResponse({
@@ -282,6 +326,11 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         if (signal.aborted) return cancelledBeforeStream();
         active.delete(sessionId);
         store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
+        for (const subscriber of activeTurn.subscribers) {
+          subscriber.enqueue({ type: "error", errorText: "Couldn't start the reply." });
+          subscriber.close();
+        }
+        activeTurn.subscribers.clear();
         // Plugin or context code failed; its message isn't known to be safe to show.
         return { ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } };
       }
@@ -356,18 +405,27 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       // All rejection paths are above: a successful response accepts this user message.
       store.bindDocuments(sessionId, message.id, readyDocumentIds);
       if (continuation) {
-        // Consume independently of any tab. Clients observe only the redacted, public message.
+        // This pump owns the provider stream. Cancelling a subscriber only detaches that tab.
         void (async () => {
-          for await (const liveMessage of readUIMessageStream({ stream: clientStream, onError: () => {} })) {
-            const current = active.get(sessionId);
-            if (current?.continuation && current.messageId === message.id) current.liveMessage = structuredClone(liveMessage);
+          try {
+            for await (const chunk of clientStream) {
+              activeTurn.chunks.push(chunk);
+              for (const subscriber of activeTurn.subscribers) subscriber.enqueue(chunk);
+            }
+          } catch (error) {
+            if (store.latestRun(sessionId)?.id === runId && store.latestRun(sessionId)?.status === "running") {
+              active.delete(sessionId);
+              store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
+            }
+            for (const subscriber of activeTurn.subscribers) {
+              subscriber.enqueue({ type: "error", errorText: publicErrorText(error) });
+            }
+          } finally {
+            for (const subscriber of activeTurn.subscribers) subscriber.close();
+            activeTurn.subscribers.clear();
+            activeTurn.chunks.length = 0;
           }
-        })().catch(error => {
-          if (store.latestRun(sessionId)?.id === runId && store.latestRun(sessionId)?.status === "running") {
-            active.delete(sessionId);
-            store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
-          }
-        });
+        })();
         return { ok: true, response: new Response(null, { status: 204 }) };
       }
       const response = createUIMessageStreamResponse({ stream: clientStream });

@@ -37,6 +37,7 @@ const trace = {
 type Step =
   | { toolCall: { name: string; input: unknown } }
   | { text: string }
+  | { stream: ReadableStream<object> }
   /** Raw provider stream parts, ending the step with a tool-calls finish. */
   | { raw: object[] }
   /** Starts a text reply that never finishes, until the request is aborted. */
@@ -48,6 +49,7 @@ function scriptedModel(steps: Step[]) {
   return new MockLanguageModelV4({
     doStream: async ({ abortSignal }) => {
       const step = steps[call++] ?? { text: "ok" };
+      if ("stream" in step) return { stream: step.stream as never };
       if ("hang" in step) {
         const stream = new ReadableStream({
           start(c) {
@@ -742,4 +744,73 @@ describe("capability registry", () => {
     const definition = registry.artifactKind("multiple_choice")!;
     expect(() => registry.viewOf(definition, { id: "a", createdAt: new Date(0), spec: check })).toThrow();
   });
+});
+
+
+it("replays the full redacted continuation to a late subscriber and finishes with no subscriber", async () => {
+  for (const subscribe of [true, false]) {
+    let release!: () => void;
+    let prefixRead!: () => void;
+    const ready = new Promise<void>(resolve => { prefixRead = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let prefix = false;
+    const stream = new ReadableStream<object>({
+      async pull(controller) {
+        if (!prefix) {
+          prefix = true;
+          controller.enqueue({ type: "reasoning-start", id: "PRIVATE-ID", providerMetadata: { vendor: { secret: "PRIVATE-META" } } });
+          controller.enqueue({ type: "reasoning-delta", id: "PRIVATE-ID", delta: "Thinking about it." });
+          controller.enqueue({ type: "reasoning-end", id: "PRIVATE-ID" });
+          controller.enqueue({ type: "text-start", id: "t" });
+          controller.enqueue({ type: "text-delta", id: "t", delta: "Before subscribing. " });
+        } else {
+          prefixRead();
+          await gate;
+          controller.enqueue({ type: "text-delta", id: "t", delta: "After subscribing." });
+          controller.enqueue({ type: "text-end", id: "t" });
+          controller.enqueue({ type: "tool-call", toolCallId: "private-call", toolName: "ask_multiple_choice", input: JSON.stringify(check) });
+          controller.enqueue({ type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage });
+          controller.close();
+        }
+      },
+    });
+    const { app, db } = setup([
+      { toolCall: { name: "ask_multiple_choice", input: check } }, { text: "Try it." },
+      { stream }, { text: "Next question." },
+    ]);
+    const id = await newSession(app);
+    expect((await app.request(`/api/sessions/${id}/continuation`)).status).toBe(401);
+    expect((await app.request(`/api/sessions/${id}/continuation`, { headers: auth })).status).toBe(204);
+    await turn(app, db, id, "quiz");
+    const artifact = db.select().from(artifacts).get()!;
+    expect((await answer(app, artifact.id, { answer: { optionIndex: 1 } })).status).toBe(201);
+    await ready;
+    // Let the public stream drain the prefix while the provider is blocked at the gate.
+    await new Promise(resolve => setImmediate(resolve));
+    const response = subscribe ? await app.request(`/api/sessions/${id}/continuation`, { headers: auth }) : undefined;
+    if (response) {
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-mivra-continuation-stop-id")).toBeTruthy();
+    }
+    release();
+    if (response) {
+      const sse = await response.text();
+      for (const text of ["Thinking about it.", "Before subscribing.", "After subscribing.", "data-artifact", "Next question."]) expect(sse).toContain(text);
+      for (const secret of [...SECRETS, "PRIVATE-ID", "PRIVATE-META", "private-call", "tool-input", "providerMetadata"]) expect(sse).not.toContain(secret);
+    }
+    await vi.waitFor(() => expect(db.select().from(runs).all().map(r => r.status)).toEqual(["completed", "completed"]));
+    expect(await messagesJson(app, id)).toContain("Before subscribing. After subscribing.");
+    expect((await app.request(`/api/sessions/${id}/continuation`, { headers: auth })).status).toBe(204);
+    if (response) {
+      const stopId = response.headers.get("x-mivra-continuation-stop-id")!;
+      // A delayed Stop after completion must not poison the next continuation's cancellation.
+      expect((await app.request(`/api/sessions/${id}/stop`, {
+        method: "POST", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify({ messageId: stopId }),
+      })).status).toBe(204);
+      const nextCheck = db.select().from(artifacts).all().find(a => a.id !== artifact.id)!;
+      expect((await answer(app, nextCheck.id, { answer: { optionIndex: 1 } })).status).toBe(201);
+      await vi.waitFor(() => expect(db.select().from(runs).all().map(r => r.status)).toEqual(["completed", "completed", "completed"]));
+    }
+    db.$client.close();
+  }
 });
