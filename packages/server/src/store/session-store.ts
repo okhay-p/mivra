@@ -21,6 +21,9 @@ export class Conflict extends Error {}
 const DEFAULT_TITLE = "New session";
 /** Most memories one reply can write. */
 const MAX_MEMORIES_PER_RUN = 5;
+/** One initial continuation plus at most two navigation-triggered retries per quiz claim. */
+const MAX_CONTINUATION_ATTEMPTS = 3;
+const CONTINUATION_RETRY_COOLDOWN_MS = 30_000;
 
 const sameMemoryText = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
@@ -51,7 +54,7 @@ function firstText(message: UIMessage): string | undefined {
  * All persistence for sessions, messages and runs. This is the only module that talks to Drizzle
  * (ADR-007), so the storage engine and schema can change without touching the runtime or routes.
  */
-export function createSessionStore(db: Db) {
+export function createSessionStore(db: Db, clock: () => Date = () => new Date()) {
   type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
   const nextSeq = (tx: Tx, sessionId: string) =>
     (tx.select({ value: max(messages.seq) }).from(messages).where(eq(messages.sessionId, sessionId)).get()?.value ?? 0) + 1;
@@ -60,7 +63,7 @@ export function createSessionStore(db: Db) {
     /** Marks runs left running by a previous server process as failed. */
     recoverInterruptedRuns() {
       db.update(runs)
-        .set({ status: "failed", error: "The server stopped before the reply finished", endedAt: new Date() })
+        .set({ status: "failed", error: "The server stopped before the reply finished", endedAt: clock() })
         .where(eq(runs.status, "running"))
         .run();
       // Their replies never completed, so neither did anything they tried to remember.
@@ -152,10 +155,20 @@ export function createSessionStore(db: Db) {
         if (!source || source.status !== "completed" || checkKinds.length === 0) return;
         const checks = tx.select().from(artifacts).where(and(eq(artifacts.runId, source.id), inArray(artifacts.kind, checkKinds))).all();
         if (checks.length === 0 || checks.some(a => !tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, a.id)).get())) return;
+        const startedAt = clock();
+        if (retry) {
+          // Transferred claims clear continuationOf, but every attempt remains after its source
+          // in rowid order. No learner turn can intervene without superseding this claim.
+          const { count } = tx.select({ count: sql<number>`count(*)` }).from(runs).where(and(
+            eq(runs.sessionId, sessionId),
+            sql`rowid > (select rowid from runs where id = ${source.id})`,
+          )).get()!;
+          if (count >= MAX_CONTINUATION_ATTEMPTS || !retry.endedAt || startedAt.getTime() - retry.endedAt.getTime() < CONTINUATION_RETRY_COOLDOWN_MS) return;
+        }
         if (retry) tx.update(runs).set({ continuationOf: null }).where(eq(runs.id, retry.id)).run();
         if (tx.select({ id: runs.id }).from(runs).where(eq(runs.continuationOf, source.id)).get()) return;
         const row = { id: randomUUID(), sessionId, userMessageId: source.userMessageId,
-          continuationOf: source.id, status: "running" as const, startedAt: new Date() };
+          continuationOf: source.id, status: "running" as const, startedAt };
         tx.insert(runs).values(row).run();
         return row;
       });
@@ -167,7 +180,7 @@ export function createSessionStore(db: Db) {
      */
     finishRun(runId: string, sessionId: string, status: RunStatus, reply?: UIMessage, error?: string) {
       db.transaction((tx) => {
-        const now = new Date();
+        const now = clock();
         let assistantMessageId: string | undefined;
         if (status === "cancelled" && reply) {
           reply = { ...reply, parts: reply.parts.filter((part) => part.type === "text" || part.type === "reasoning")

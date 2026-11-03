@@ -201,7 +201,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       const previous = store.latestRun(sessionId);
       const failure: Record<string, string> = previous?.continuationOf && previous.status === "failed"
         ? { "x-mivra-continuation-error": "The model request failed." } : {};
-      // Session load/focus/visibility is the retry trigger. No retry loop runs in the background.
+      // Session load/focus/visibility triggers recovery; the store enforces its durable budget
+      // and cooldown atomically with the claim. No retry loop runs in the background.
       if (!active.has(sessionId) && previous?.continuationOf && previous.status === "failed") {
         await runner.continueAfterAnswer(sessionId);
       }

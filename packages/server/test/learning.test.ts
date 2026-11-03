@@ -815,11 +815,12 @@ it("replays the full redacted continuation to a late subscriber and finishes wit
   }
 });
 
-it("recovers an interrupted continuation once on concurrent subscription, retaining the failure", async () => {
+it("recovers interrupted continuations with a durable retry budget and cooldown, retaining failures", async () => {
   const { app, db } = setup([{ toolCall: { name: "ask_multiple_choice", input: check } }, { text: "Try it." }]);
   const id = await newSession(app);
   await turn(app, db, id, "quiz");
-  const store = createSessionStore(db);
+  let clock = new Date();
+  const store = createSessionStore(db, () => clock);
   const artifact = db.select().from(artifacts).get()!;
   store.createAttempt({ artifactId: artifact.id, sessionId: id, answer: { optionIndex: 1 }, grade: { correct: true, correctOptionIndex: 1, explanation: "Five." }, correct: true });
   const interrupted = store.startContinuation(id, ["multiple_choice"])!;
@@ -827,8 +828,15 @@ it("recovers an interrupted continuation once on concurrent subscription, retain
   // A new app over the same durable database performs startup recovery, without an old pump.
   const restarted = setup([{ text: "Recovered lesson." }], db);
   expect(store.latestRun(id)).toMatchObject({ id: interrupted.id, status: "failed" });
-  const responses = await Promise.all(Array.from({ length: 4 }, () =>
-    restarted.app.request(`/api/sessions/${id}/continuation`, { headers: auth })));
+  // Inject only the store clock: streaming and the SDK still use real scheduling.
+  const registry = createCapabilityRegistry([coreLearning]);
+  const recovered = createTurnRunner({ store, registry, model: () => restarted.model });
+  const subscribe = () => recovered.subscribeContinuation(id);
+  const duringCooldown = await Promise.all(Array.from({ length: 4 }, subscribe));
+  expect(duringCooldown.every(r => r.status === 204)).toBe(true);
+  expect(restarted.model.doStreamCalls).toHaveLength(0);
+  clock = new Date(store.latestRun(id)!.endedAt!.getTime() + 30_000);
+  const responses = await Promise.all(Array.from({ length: 4 }, subscribe));
   expect(responses.some(r => r.headers.get("x-mivra-continuation-error") === "The model request failed.")).toBe(true);
   await Promise.all(responses.map(r => r.text()));
   expect(db.select().from(runs).all().map(r => r.status)).toEqual(["completed", "failed", "completed"]);
@@ -840,6 +848,51 @@ it("recovers an interrupted continuation once on concurrent subscription, retain
   expect((await restarted.app.request(`/api/sessions/${id}/continuation`, { headers: auth })).status).toBe(204);
   expect(store.startContinuation(id, ["multiple_choice"])).toBeUndefined();
   expect(restarted.model.doStreamCalls).toHaveLength(1);
+  // A separate quiz keeps failing. Recreate the store/runner at each check to prove the
+  // budget survives restarts and the count does not depend on in-memory ownership.
+  const failingSession = store.createSession();
+  const quiz = store.startRun(failingSession, userMessage("quiz"));
+  const failedCheck = store.createArtifact({ sessionId: failingSession.id, runId: quiz, toolCallId: "fail-check", kind: "multiple_choice", version: 1, spec: check });
+  store.finishRun(quiz, failingSession.id, "completed");
+  store.createAttempt({ sessionId: failingSession.id, artifactId: failedCheck.id, answer: { optionIndex: 1 }, grade: { correct: true, correctOptionIndex: 1, explanation: "Five." }, correct: true });
+  let calls = 0;
+  const failingModel = new MockLanguageModelV4({
+    doStream: async () => {
+      calls++;
+      return { stream: simulateReadableStream({ chunks: [{ type: "error", error: new Error("provider unavailable") }] }) };
+    },
+  });
+  const freshRunner = () => createTurnRunner({
+    store: createSessionStore(db, () => clock), registry,
+    model: () => failingModel,
+  });
+  const initialRunner = freshRunner();
+  await initialRunner.continueAfterAnswer(failingSession.id);
+  await (await initialRunner.subscribeContinuation(failingSession.id)).text();
+  expect(calls).toBe(1);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const failure = store.latestRun(failingSession.id)!;
+    expect(failure.status).toBe("failed");
+    for (const elapsed of [0, 29_999]) {
+      clock = new Date(failure.endedAt!.getTime() + elapsed);
+      const checks = await Promise.all(Array.from({ length: 4 }, () => freshRunner().subscribeContinuation(failingSession.id)));
+      expect(checks.every(r => r.status === 204 && r.headers.has("x-mivra-continuation-error"))).toBe(true);
+      expect(calls).toBe(attempt);
+    }
+    clock = new Date(failure.endedAt!.getTime() + 30_000);
+    const retries = await Promise.all(Array.from({ length: 4 }, () => freshRunner().subscribeContinuation(failingSession.id)));
+    await Promise.all(retries.map(response => response.text()));
+    expect(calls).toBe(Math.min(attempt + 1, 3));
+  }
+  clock = new Date(clock.getTime() + 86_400_000);
+  await freshRunner().subscribeContinuation(failingSession.id);
+  expect(calls).toBe(3);
+  expect(db.select().from(runs).all().filter(r => r.sessionId === failingSession.id).map(r => r.status)).toEqual(["completed", "failed", "failed", "failed"]);
+  // An accepted learner turn supersedes the exhausted claim even if that turn fails.
+  const manual = store.startRun(failingSession, userMessage("continue please"));
+  store.finishRun(manual, failingSession.id, "failed");
+  await freshRunner().subscribeContinuation(failingSession.id);
+  expect(calls).toBe(3);
   // Cancellation is a terminal claim, even if the source quiz is still fully answered.
   const cancelledSession = store.createSession();
   const source = store.startRun(cancelledSession, userMessage("quiz"));
