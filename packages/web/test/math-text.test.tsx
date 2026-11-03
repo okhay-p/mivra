@@ -318,6 +318,9 @@ describe("MathText display fences in lists and quotes", () => {
     // Round 3: a macro defined in the formula can take its argument up to any text, dollars included.
     ["dollars in a \\def macro's argument", "$$\n\\def\\foo#1!{\\text{#1}}\\foo a$$ b!\n$$", { math: ["\\def\\foo#1!{\\text{#1}}\\foo a$$ b!"], unchanged: true }],
     ["dollars after a \\newcommand", "$$\n\\newcommand{\\x}{1} x$$ tail", { unchanged: true, error: true }],
+    // Round 4: KaTeX allows `@` in command names, and a conditional consumes the tokens after it, dollars included.
+    ["dollars a \\@ifnextchar reads", "$$\n\\@ifnextchar$$ {} x\n$$", { math: ["\\@ifnextchar$$ {} x"], unchanged: true }],
+    ["dollars a \\@ifnextchar on an earlier line reads", "$$\n\\@ifnextchar\n$$ {} x\n$$", { math: ["\\@ifnextchar\n$$ {} x"], unchanged: true }],
     ["a formula in a quote", "> $$\n> x$$ tail", { unchanged: true, error: true }],
     ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { unchanged: true, error: true }],
     ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { text: ["b"], unchanged: true, error: true }],
@@ -377,6 +380,15 @@ describe("MathText display fences in lists and quotes", () => {
 });
 
 describe("separating display fences in a long block", () => {
+  // Sol, round 4: the opener's regex backtracked on long runs of spaces (4.8 s for 1,000).
+  it("reads an opening line of spaces without backtracking", () => {
+    const text = "$$" + " ".repeat(50_000) + "$";
+    const started = performance.now();
+    expect(separateDisplayFences(text)).toBe(text);
+    expect(replyBlocks(text).map((b) => b.source).join("")).toBe(text);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   // Sol, round 3: re-reading the whole block at every candidate `$$` took over 9 s on the main thread.
   it("reads each line once, however many dollar runs the block holds", () => {
     const text = "$$\n\\text{\n" + "a$$\n".repeat(8000) + "}\n$$";

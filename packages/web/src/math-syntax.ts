@@ -209,7 +209,20 @@ export function splitBlocks(source: string): string[] {
 // or quote keeps the old bug, but code is never touched. Text moved off a closing `$$` line has any block start
 // it begins with escaped, so it stays the text it was. Plain text shows the reply as written, without the moves.
 
-const MATH_OPEN_WITH_TEXT = /^(\$\$+)[ \t]*([^$]*?)[ \t]*$/;
+/**
+ * A column-0 `$$` opener and any text after it on its line, trimmed of spaces and tabs; undefined if the line holds
+ * another dollar. A plain scan: the regex it replaced backtracked on long runs of spaces (Sol, round 4).
+ */
+function mathOpenWithText(line: string): { fence: string; rest: string } | undefined {
+  let end = 0;
+  while (line[end] === "$") end++;
+  if (end < 2 || line.indexOf("$", end) !== -1) return undefined;
+  let from = end;
+  let to = line.length;
+  while (from < to && (line[from] === " " || line[from] === "\t")) from++;
+  while (to > from && (line[to - 1] === " " || line[to - 1] === "\t")) to--;
+  return { fence: line.slice(0, end), rest: line.slice(from, to) };
+}
 const CONTAINER_START = /^ {0,3}(?:>|(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))/;
 // Lines that end a paragraph rather than continuing it lazily.
 const INTERRUPTS = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$)/;
@@ -292,9 +305,9 @@ export function fenceLines(source: string): string[] {
     } else if (FENCE_OPEN.test(text)) {
       code = opensBlock(text);
     } else {
-      const open = MATH_OPEN_WITH_TEXT.exec(text);
+      const open = mathOpenWithText(text);
       if (open) {
-        const [, fence, rest] = open as unknown as [string, string, string];
+        const { fence, rest } = open;
         math = fence.length;
         tex = rest ? readTex(PLAIN, rest) : PLAIN;
         if (rest) out[i] = fence + newline + rest + ending;
@@ -326,7 +339,9 @@ const PLAIN: TexState = { depth: 0, uncertain: false };
 
 // Commands after which literal text, and so dollars, can run to a delimiter this scan can't find: `\verb` takes any
 // delimiter, and a macro defined with `\def` and its relatives can take an argument up to any text at all.
-const UNCERTAIN_COMMANDS = new Set(["verb", "def", "gdef", "edef", "xdef", "let", "futurelet", "newcommand", "renewcommand", "providecommand", "catcode", "csname"]);
+// Internal commands (any name with `@`, such as `\@ifnextchar`), conditionals (`\if…`) and expansion control
+// consume the tokens after them, dollars included, so they're uncertain too.
+const UNCERTAIN_COMMANDS = new Set(["verb", "def", "gdef", "edef", "xdef", "let", "futurelet", "newcommand", "renewcommand", "providecommand", "catcode", "csname", "expandafter", "noexpand"]);
 
 /** Reads more of a display block's TeX. A `%` comment can hide the dollars and text after it, so it is uncertain too. */
 function readTex(state: TexState, text: string): TexState {
@@ -336,8 +351,10 @@ function readTex(state: TexState, text: string): TexState {
     const c = text[i];
     if (c === "\\") {
       let end = i + 1;
-      while (end < text.length && /[a-zA-Z]/.test(text[end]!)) end++;
-      if (UNCERTAIN_COMMANDS.has(text.slice(i + 1, end))) return { depth, uncertain: true };
+      // KaTeX lets `@` into command names (`\@ifnextchar`).
+      while (end < text.length && /[a-zA-Z@]/.test(text[end]!)) end++;
+      const name = text.slice(i + 1, end);
+      if (UNCERTAIN_COMMANDS.has(name) || name.includes("@") || name.startsWith("if")) return { depth, uncertain: true };
       // A control word, or the one character a backslash escapes.
       i = end > i + 1 ? end - 1 : i + 1;
     } else if (c === "%") return { depth, uncertain: true };
