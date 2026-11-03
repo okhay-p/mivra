@@ -190,6 +190,10 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       return db.transaction((tx) => {
         const row = tx.select().from(syllabusVersions).where(eq(syllabusVersions.courseId, courseId)).orderBy(desc(syllabusVersions.version)).get();
         if (!row) return { ok: false, reason: "The course has no syllabus yet." };
+        // A course that is complete (perhaps by a finish racing this change) keeps its syllabus.
+        if (tx.select({ status: courses.status }).from(courses).where(eq(courses.id, courseId)).get()?.status !== "active") {
+          return { ok: false, reason: "The course is complete, so its syllabus can't change." };
+        }
         if (change.source === "adaptive") {
           if (!change.triggerLessonId) return { ok: false, reason: "An automatic change needs the lesson that prompted it." };
           const earlier = tx

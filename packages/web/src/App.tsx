@@ -304,6 +304,8 @@ function CourseSession(props: SessionProps) {
   };
 
   const lessonId = selected ?? lessons?.currentLessonId ?? undefined;
+  // The lesson the learner is on: the first unfinished one, if any.
+  const current = lessons?.topics.find((t) => t.lesson && t.lesson.id === lessons.currentLessonId && t.lesson.status !== "finished");
   // Ctrl+K (or ⌘K) opens and closes the tutor beside the lesson.
   useEffect(() => {
     if (!lessonId) return;
@@ -333,6 +335,13 @@ function CourseSession(props: SessionProps) {
     setOpenLesson(result.value.lesson);
     return undefined;
   };
+
+  // Generation can change the syllabus while the learner reads (ADR-011); the lesson view says so.
+  const shownSyllabus = course?.syllabus?.version;
+  const lessonSyllabus = openLesson?.syllabusVersion;
+  useEffect(() => {
+    if (lessonSyllabus && shownSyllabus && lessonSyllabus !== shownSyllabus) void refresh();
+  }, [lessonSyllabus, shownSyllabus, refresh]);
 
   const undo = async () => {
     if (!course?.syllabus) return undefined;
@@ -382,7 +391,38 @@ function CourseSession(props: SessionProps) {
           </aside>
         )}
         <div className="min-w-0 flex-1 overflow-y-auto" data-testid="lesson-scroll">
+          {lessons && (
+            <details className="border-b px-4 py-2 md:hidden">
+              <summary className="cursor-pointer text-sm font-medium">Lessons</summary>
+              <div className="pt-2">
+                <TopicList
+                  lessons={lessons}
+                  selectedId={lessonId}
+                  onSelect={(id) => {
+                    setFocusSection(undefined);
+                    setSelected(id);
+                  }}
+                />
+              </div>
+            </details>
+          )}
+          {current && lessonId !== current.lesson!.id && (
+            <div className="bg-muted mx-auto mt-4 flex max-w-3xl flex-wrap items-center gap-2 rounded-lg px-4 py-2 text-sm" role="status">
+              <span>You're looking at an earlier lesson.</span>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  setFocusSection(undefined);
+                  setSelected(current.lesson!.id);
+                }}
+              >
+                Back to lesson {lessons!.topics.indexOf(current) + 1}: {current.title}
+              </Button>
+            </div>
+          )}
           <LessonPage
+            courseComplete={course.status === "complete"}
             key={lessonId}
             lessonId={lessonId}
             nextTopic={next && { id: next.topicId, title: next.title }}

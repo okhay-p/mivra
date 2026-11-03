@@ -23,6 +23,7 @@ const base: LessonView = {
   },
   sections: [{ id: "s1", title: "Intro", kind: "prose", markdown: "A **limit** is where $f$ heads.", revisits: [] }],
   checks: { total: 0, answered: 0 },
+  syllabusVersion: 1,
   changedSectionIds: [],
   changeReason: null,
   canFinish: false,
@@ -80,7 +81,14 @@ describe("LessonPage", () => {
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Finish lesson" })));
     expect(onFinished).toHaveBeenCalled();
     expect(await screen.findByText("Finished. This lesson won't change.")).toBeTruthy();
-    expect(screen.getByText("You've reached the end of the syllabus.")).toBeTruthy();
+    // Not the end of the course while another lesson is still unfinished.
+    expect(screen.queryByText("You've reached the end of the syllabus.")).toBeNull();
+  });
+
+  it("announces the end of the syllabus once the course is complete", async () => {
+    serve([{ ...ready, status: "finished", checks: { total: 1, answered: 1 } }]);
+    render(<LessonPage lessonId="l1" nextTopic={undefined} courseComplete onFinished={() => {}} onStartNext={async () => {}} />);
+    expect(await screen.findByText("You've reached the end of the syllabus.")).toBeTruthy();
   });
 
   it("offers to carry on when generation stopped part-way", async () => {

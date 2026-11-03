@@ -10,7 +10,7 @@ import { coreMemory } from "./plugins/core-memory.js";
 import { presentMessages } from "./runtime/artifacts.js";
 import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
-import { courseLessons, createLessonGenerator, lessonRevision, lessonView } from "./runtime/lessons.js";
+import { courseLessons, createLessonGenerator, lessonRevision, lessonView, reconcileCompletion } from "./runtime/lessons.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
@@ -484,9 +484,7 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       if (!lessons.findLesson(id)) return c.json({ error: "Lesson not found" }, 404);
       if (!lessons.finishLesson(id, registry.checkKinds())) return c.json({ error: "Answer every check in the finished lesson first" }, 409);
       // Reaching the end of the syllabus completes the course (ADR-011).
-      const courseId = lessons.findLesson(id)!.courseId;
-      const plan = courseLessons(courseId, { store, lessons });
-      if (plan.nextTopicId === null && plan.topics.every((t) => t.lesson?.status === "finished")) store.completeCourse(courseId);
+      reconcileCompletion(lessons.findLesson(id)!.courseId, { store, lessons });
       generator.changed(id);
       return c.json(lessonJson(id)! as never, 200);
     })
@@ -504,6 +502,7 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       const startedTopicIds = lessons.listLessons(course.id).map((l) => l.topicId);
       const undone = store.undoSyllabusChange(course.id, c.req.valid("json").version, startedTopicIds);
       if (!undone.ok) return c.json({ error: undone.reason }, 409);
+      reconcileCompletion(course.id, { store, lessons });
       return c.json(toCourseJson(store.findCourse(course.id)!, store, lessons), 200);
     })
     .openapi(addToLesson, (c) => {

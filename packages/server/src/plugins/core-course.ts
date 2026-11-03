@@ -12,6 +12,7 @@ import {
 } from "@mivra/protocol";
 import { tool } from "ai";
 import type { Plugin, TurnContext } from "../runtime/capabilities.js";
+import { reconcileCompletion } from "../runtime/lessons.js";
 
 const interviewing = ({ sessionId, store }: TurnContext) => store.findCourseBySession(sessionId)?.status === "interviewing";
 const courseActive = ({ sessionId, store }: TurnContext) => store.findCourseBySession(sessionId)?.status === "active";
@@ -133,6 +134,7 @@ export const coreCourse: Plugin = {
             if (!course) return { status: "rejected", reason: "This session isn't a course." };
             const startedTopicIds = (lessons?.listLessons(course.id) ?? []).map((l) => l.topicId);
             const changed = store.changeSyllabus(course.id, { source: "tutor", reason, runId, startedTopicIds, operations });
+            if (changed.ok && lessons) reconcileCompletion(course.id, { store, lessons });
             return changed.ok ? { status: "changed", version: changed.version } : { status: "rejected", reason: changed.reason };
           },
         }),

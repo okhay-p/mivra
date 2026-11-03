@@ -112,12 +112,19 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
       });
     },
 
-    /** Appends a section to the version being generated. Refused once the outline is full or the lesson isn't generating. */
-    appendSection(lessonId: string, section: Pick<LessonSectionRow, "kind" | "title" | "markdown" | "artifactId"> & { revisits?: string[] }): LessonSectionRow | undefined {
+    /**
+     * Appends a section to the version being generated, as outline slot `index`. Refused unless that is the
+     * next empty slot and the lesson is still generating.
+     */
+    appendSection(
+      lessonId: string,
+      section: Pick<LessonSectionRow, "kind" | "title" | "markdown" | "artifactId"> & { revisits?: string[] },
+      index: number,
+    ): LessonSectionRow | undefined {
       return db.transaction((tx) => {
         const lesson = tx.select().from(lessons).where(eq(lessons.id, lessonId)).get();
         const version = latestVersion(lessonId);
-        if (lesson?.status !== "generating" || !version || version.sectionIds.length >= version.outline.sections.length) return undefined;
+        if (lesson?.status !== "generating" || !version || version.sectionIds.length !== index || index >= version.outline.sections.length) return undefined;
         const row = { id: randomUUID(), lessonId, ...section, revisits: section.revisits ?? [], createdAt: clock() };
         tx.insert(lessonSections).values(row).run();
         tx.update(lessonVersions).set({ sectionIds: [...version.sectionIds, row.id] }).where(eq(lessonVersions.id, version.id)).run();

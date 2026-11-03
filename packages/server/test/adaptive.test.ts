@@ -150,6 +150,31 @@ describe("automatic syllabus changes", () => {
     return { ...t, topics, first };
   }
 
+  it("shows generation the topic ids and which topics are future, so it can split or move them", async () => {
+    const t = await struggled();
+    t.steps.push(outline("Derivatives", ["prose", "multiple_choice"]), prose("x"), mc("derivative"), { text: "" });
+    await t.ready(await t.start(t.topics[1]!.id));
+    const system = t.calls.at(-1)!.system.replaceAll("\\", "");
+    expect(system).toContain(`"topicId":"${t.topics[2]!.id}"`);
+    expect(system).toMatch(new RegExp(`"topicId":"${t.topics[2]!.id}"[^}]*"status":"future"`));
+    expect(system).toMatch(new RegExp(`"topicId":"${t.topics[0]!.id}"[^}]*"status":"started"`));
+  });
+
+  it("refreshes the open lesson when generation changes the plan", async () => {
+    const t = await struggled();
+    t.steps.push(
+      { toolCall: { name: "adapt_syllabus", input: { reason: "Refresher", operation: { op: "insert", afterTopicId: null, title: "Refresher", summary: "s", concepts: ["limit"] } } } },
+      outline("Derivatives", ["prose", "multiple_choice"]),
+      prose("x"),
+      mc("derivative"),
+      { text: "" },
+    );
+    const id = await t.start(t.topics[1]!.id);
+    await t.ready(id);
+    const view = (await (await t.app.request(`/api/lessons/${id}`, { headers: auth })).json()) as { lesson: { syllabusVersion: number } };
+    expect(view.lesson.syllabusVersion).toBe(2);
+  });
+
   it("changes future topics once per finished lesson, with its reason, and the learner can undo it", async () => {
     const t = await struggled();
     const refresher = { op: "insert", afterTopicId: null, title: "Limits refresher", summary: "Again, slowly.", concepts: ["limit"] };
@@ -233,6 +258,26 @@ describe("automatic syllabus changes", () => {
 });
 
 describe("course completion", () => {
+  it("completes the course when a syllabus change removes the last unfinished topic", async () => {
+    const t = await setup(["Limits", "Derivatives"]);
+    t.steps.push(...lessonSteps("Limits"));
+    const topics = (await t.courseJson()).syllabus.topics;
+    const first = await t.start(topics[0]!.id);
+    await t.ready(first);
+    await t.finish(first, 0);
+    t.steps.push({ toolCall: { name: "change_syllabus", input: { reason: "Skip derivatives", operations: [{ op: "remove", topicId: topics[1]!.id }] } } }, { text: "Removed." });
+    const res = await t.app.request(`/api/sessions/${t.course.sessionId}/chat`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ message: { id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text: "drop derivatives" }] } }),
+    });
+    expect(res.status).toBe(200);
+    await res.text();
+    await vi.waitFor(async () => expect((await t.courseJson()).status).toBe("complete"), { timeout: 15_000 });
+    // A complete course's syllabus no longer changes.
+    expect(t.store.changeSyllabus(t.course.id, { source: "tutor", reason: "x", runId: null, startedTopicIds: [], operations: [{ op: "insert", afterTopicId: null, title: "More", summary: "s", reason: "r", concepts: ["x"] }] })).toMatchObject({ ok: false });
+  });
+
   it("completes the course when the learner finishes the last topic", async () => {
     const t = await setup(["Limits", "Derivatives"]);
     t.steps.push(...lessonSteps("Limits"), ...lessonSteps("Derivatives"));

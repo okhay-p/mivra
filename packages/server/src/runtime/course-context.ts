@@ -1,6 +1,7 @@
 import type { LessonStore } from "../store/lesson-store.js";
 import type { SessionStore } from "../store/session-store.js";
 import type { CapabilityRegistry } from "./capabilities.js";
+import { artifactView } from "./artifacts.js";
 import { dataRows } from "./learner-context.js";
 
 /** How much of each prose section the tutor sees; enough to place an edit, not the whole lesson. */
@@ -59,12 +60,15 @@ export function courseContext(
   if (lesson && version) {
     const sections = open.lessons.sections(version.sectionIds).map((section) => {
       if (section.kind === "prose") return { sectionId: section.id, title: section.title, kind: "prose", excerpt: (section.markdown ?? "").slice(0, SECTION_EXCERPT_CHARS) };
-      const artifact = section.artifactId ? store.findArtifact(section.artifactId) : undefined;
-      return { sectionId: section.id, title: section.title, kind: artifact?.kind ?? "card" };
+      // The public view, as the learner sees it: a check's answer key appears only once it is answered.
+      const view = section.artifactId ? artifactView(section.artifactId, open.registry, store) : undefined;
+      return view
+        ? { sectionId: section.id, title: section.title, kind: view.kind, card: { spec: view.spec, ...("latestAttempt" in view && view.latestAttempt ? { learnerAnswer: view.latestAttempt } : {}) } }
+        : { sectionId: section.id, title: section.title, kind: "card" };
     });
     parts.push(
-      `The learner has lesson ${lesson.position + 1} open, "${version.outline.title}" (version ${version.version}, ${lesson.status === "finished" ? "finished, so it can't change" : lesson.status}):`,
-      `<open_lesson>\n${dataRows(sections)}\n</open_lesson>`,
+      `The learner has this lesson open (version ${version.version}, ${lesson.status === "finished" ? "finished, so it can't change" : lesson.status}), then its sections:`,
+      `<open_lesson>\n${dataRows([{ lesson: lesson.position + 1, title: version.outline.title }, ...sections])}\n</open_lesson>`,
     );
   }
   return parts.join("\n");

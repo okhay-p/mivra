@@ -15,7 +15,12 @@ const auth = { authorization: `Bearer ${TOKEN}` };
 const json = { ...auth, "content-type": "application/json" };
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
 
-type Step = { toolCall: { name: string; input: unknown } } | { text: string } | { error: string };
+type Step =
+  | { toolCall: { name: string; input: unknown } }
+  /** Several tool calls in one step, which the SDK runs at once. */
+  | { toolCalls: { name: string; input: unknown }[] }
+  | { text: string }
+  | { error: string };
 
 function scriptedModel(steps: Step[]) {
   let call = 0;
@@ -26,7 +31,12 @@ function scriptedModel(steps: Step[]) {
       const step = steps[call++] ?? { text: "" };
       if ("error" in step) throw new Error(step.error);
       const chunks: object[] =
-        "toolCall" in step
+        "toolCalls" in step
+          ? [
+              ...step.toolCalls.map((c, i) => ({ type: "tool-call", toolCallId: `call_${call}_${i}`, toolName: c.name, input: JSON.stringify(c.input) })),
+              { type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage },
+            ]
+          : "toolCall" in step
           ? [
               { type: "tool-call", toolCallId: `call_${call}`, toolName: step.toolCall.name, input: JSON.stringify(step.toolCall.input) },
               { type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage },
@@ -156,6 +166,28 @@ describe("lessons", () => {
     const { lesson } = (await (await start(app, course.id, topics[0]!.id)).json()) as LessonJson;
     const done = await until(app, lesson.id, "ready");
     expect(done.lesson.sections.map((s) => s.title)).toEqual(["Intro", "Check"]);
+  });
+
+  it("fills each outline slot once when the model writes several sections in one step", async () => {
+    const outlined = outline([
+      { title: "First check", kind: "multiple_choice" },
+      { title: "Middle", kind: "prose" },
+      { title: "Last check", kind: "multiple_choice" },
+    ]);
+    const { app, course, topics } = await setup([
+      outlined,
+      // In parallel: two checks then the prose. The second check doesn't fit slot 2 and is refused.
+      { toolCalls: [check.toolCall, check.toolCall, prose("Between them.").toolCall] },
+      check,
+      { text: "" },
+    ]);
+    const { lesson } = (await (await start(app, course.id, topics[0]!.id)).json()) as LessonJson;
+    const done = await until(app, lesson.id, "ready");
+    expect(done.lesson.sections.map((s) => [s.title, s.kind])).toEqual([
+      ["First check", "artifact"],
+      ["Middle", "prose"],
+      ["Last check", "artifact"],
+    ]);
   });
 
   it("has its own step budget, beyond a chat turn's five steps", async () => {

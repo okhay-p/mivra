@@ -86,6 +86,8 @@ export const LessonView = z
       ]),
     ),
     checks: z.object({ total: z.number().int().nonnegative(), answered: z.number().int().nonnegative() }).strict(),
+    /** The course's current syllabus version, so a page can notice a change made while it was open. */
+    syllabusVersion: z.number().int().positive().nullable(),
     /** Sections the latest version added or changed, highlighted for the learner, and why. */
     changedSectionIds: z.array(z.string()),
     changeReason: z.string().nullable(),

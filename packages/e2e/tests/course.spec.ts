@@ -94,5 +94,12 @@ test("a course starts from the first screen, runs the placement interview and wr
 
   // The link back opens the earlier lesson at that section.
   await next.getByRole("button", { name: "What a limit is: The idea" }).click();
-  await expect(page.getByRole("article", { name: "What a limit is" }).getByRole("region", { name: "The idea", exact: true })).toBeFocused();
+  const earlier = page.getByRole("article", { name: "What a limit is" });
+  await expect(earlier.getByRole("region", { name: "The idea", exact: true })).toBeFocused();
+  // An earlier lesson isn't the end of the course, and there's always a way back (also on a phone).
+  await expect(earlier.getByText("You've reached the end of the syllabus.")).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.getByRole("button", { name: "Back to lesson 2: Chain rule" }).click();
+  await expect(page.getByRole("article", { name: "The chain rule" })).toBeVisible();
+  await expect(page.getByText("You're looking at an earlier lesson.")).toHaveCount(0);
 });

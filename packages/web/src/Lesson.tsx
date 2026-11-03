@@ -118,8 +118,11 @@ export function LessonPage({
   onLoaded,
   onOpenSection,
   focusSectionId,
+  courseComplete = false,
 }: {
   lessonId: string;
+  /** Whether the learner has reached the end of the syllabus. */
+  courseComplete?: boolean;
   /** Opens an earlier lesson at one of its sections, from a link back. */
   onOpenSection?: (lessonId: string, sectionId: string) => void;
   /** Scrolls to this section once the lesson has loaded. */
@@ -295,7 +298,7 @@ export function LessonPage({
               </Button>
             </>
           ) : !nextTopic ? (
-            <p className="font-medium">You've reached the end of the syllabus.</p>
+            courseComplete ? <p className="font-medium">You've reached the end of the syllabus.</p> : null
           ) : (
             <Button
               className="self-start"
