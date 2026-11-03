@@ -88,6 +88,9 @@ describe("CourseBar", () => {
     createdAt: placement.createdAt,
     syllabus: {
       version: 1,
+      source: "interview",
+      reason: null,
+      changedTopicIds: [],
       createdAt: placement.createdAt,
       topics: [
         { id: "t1", title: "Limits", summary: "What a limit is.", reason: "You weren't sure.", requestedByLearner: false, concepts: ["limit"] },

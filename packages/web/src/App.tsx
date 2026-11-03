@@ -2,14 +2,14 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
-import type { ArtifactView, CourseLessonsView, CourseView } from "@mivra/protocol";
-import { Brain, GraduationCap, MessageSquare, MessagesSquare, Plus } from "lucide-react";
+import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
+import { Brain, GraduationCap, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
+import { addToLesson, api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
-import { LessonPage, TopicList } from "./Lesson.js";
+import { LessonPage, TopicList, type LessonSection } from "./Lesson.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
@@ -253,6 +253,13 @@ interface SessionProps {
   onReply: () => void;
   /** Called whenever the chat settles after a reply, e.g. to pick up a syllabus written in it. */
   onSettled?: () => void;
+  /** The lesson open beside the chat, sent with each message so the tutor knows what the learner sees. */
+  lessonId?: string;
+  /** Text to put in the message box, sent at once if `send`. Applied once; `onPromptUsed` clears it. */
+  prompt?: { text: string; send: boolean; nonce: number };
+  onPromptUsed?: () => void;
+  /** Offers "Add to lesson" on the tutor's replies. */
+  onAddToLesson?: (messageId: string) => Promise<string | undefined>;
 }
 
 function SessionView({ course, ...props }: SessionProps & { course: boolean }) {
@@ -270,6 +277,10 @@ function CourseSession(props: SessionProps) {
   const [selected, setSelected] = useState<string>();
   const [tutorOpen, setTutorOpen] = useState(false);
   const [error, setError] = useState<string>();
+  const [prompt, setPrompt] = useState<SessionProps["prompt"]>();
+  const [openLesson, setOpenLesson] = useState<LessonView>();
+  // The section the learner last asked about, where Add to lesson puts the answer.
+  const explained = useRef<LessonSection | undefined>(undefined);
 
   const refresh = useCallback(async () => {
     const found = await getCourse(sessionId);
@@ -291,9 +302,39 @@ function CourseSession(props: SessionProps) {
     await refresh();
   };
 
+  const lessonId = selected ?? lessons?.currentLessonId ?? undefined;
+  // Ctrl+K (or ⌘K) opens and closes the tutor beside the lesson.
+  useEffect(() => {
+    if (!lessonId) return;
+    const toggle = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setTutorOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", toggle);
+    return () => window.removeEventListener("keydown", toggle);
+  }, [lessonId]);
+
+  const ask = (text: string, send: boolean) => {
+    setPrompt((p) => ({ text, send, nonce: (p?.nonce ?? 0) + 1 }));
+    setTutorOpen(true);
+  };
+  const addAnswer = async (messageId: string) => {
+    if (!lessonId) return "No lesson is open.";
+    const after = explained.current ?? openLesson?.sections.at(-1);
+    const result = await addToLesson(lessonId, {
+      messageId,
+      afterSectionId: after?.id ?? null,
+      title: explained.current ? `More on ${explained.current.title}`.slice(0, 120) : "From the tutor",
+    });
+    if (!result.ok) return result.error;
+    setOpenLesson(result.value.lesson);
+    return undefined;
+  };
+
   if (error) return <Notice error>{error}</Notice>;
   if (!course) return null;
-  const lessonId = selected ?? lessons?.currentLessonId ?? undefined;
   const next = lessons?.topics.find((t) => t.topicId === lessons.nextTopicId);
 
   if (!lessonId) {
@@ -331,6 +372,15 @@ function CourseSession(props: SessionProps) {
             nextTopic={next && { id: next.topicId, title: next.title }}
             onFinished={() => void refresh()}
             onStartNext={start}
+            onLoaded={setOpenLesson}
+            onExplain={(section) => {
+              explained.current = section;
+              ask(`Explain "${section.title}"`, true);
+            }}
+            onChange={(section) => {
+              explained.current = undefined;
+              ask(`Change "${section.title}": `, false);
+            }}
           />
         </div>
       </div>
@@ -338,9 +388,18 @@ function CourseSession(props: SessionProps) {
         <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
           <SheetHeader className="border-b">
             <SheetTitle className="font-heading">Tutor</SheetTitle>
-            <SheetDescription>Ask about the course. The lesson stays as it is.</SheetDescription>
+            <SheetDescription>
+              Ask anything and the lesson stays as it is, or ask for a change. <kbd className="text-xs">Ctrl K</kbd> opens and closes this.
+            </SheetDescription>
           </SheetHeader>
-          <SessionLoader {...props} onSettled={refresh} />
+          <SessionLoader
+            {...props}
+            onSettled={refresh}
+            lessonId={lessonId}
+            prompt={prompt}
+            onPromptUsed={() => setPrompt(undefined)}
+            onAddToLesson={openLesson?.status === "ready" ? addAnswer : undefined}
+          />
         </SheetContent>
       </Sheet>
     </div>
@@ -366,7 +425,13 @@ function Chat({
   onFirstMessageSent,
   onReply,
   onSettled,
+  lessonId,
+  prompt,
+  onPromptUsed,
+  onAddToLesson,
 }: SessionProps & { initialMessages: UIMessage[] }) {
+  const lessonRef = useRef(lessonId);
+  lessonRef.current = lessonId;
   const [input, setInput] = useState("");
   const documents = useDocuments(sessionId);
   const documentsRef = useRef(documents);
@@ -397,7 +462,9 @@ function Chat({
       headers: authHeaders,
       prepareReconnectToStreamRequest: () => ({ api: `/api/sessions/${sessionId}/continuation` }),
       // Only files ready when Send is pressed travel with this message; extraction may finish later.
-      prepareSendMessagesRequest: ({ messages, body }) => ({ body: { ...body, message: messages.at(-1) } }),
+      prepareSendMessagesRequest: ({ messages, body }) => ({
+        body: { ...body, message: messages.at(-1), ...(lessonRef.current ? { lessonId: lessonRef.current } : {}) },
+      }),
       fetch: async (url, options) => {
         const expected = generation.current;
         const response = await fetch(url, options);
@@ -435,6 +502,20 @@ function Chat({
       onReply();
     },
   });
+
+  // A prompt from the lesson page: Explain sends at once, Change waits for the learner to finish it.
+  const appliedPrompt = useRef(0);
+  useEffect(() => {
+    if (!prompt || prompt.nonce === appliedPrompt.current) return;
+    appliedPrompt.current = prompt.nonce;
+    onPromptUsed?.();
+    if (prompt.send && !chatState.current.busy) {
+      void sendMessage({ text: prompt.text }, { body: { documentIds: [] } });
+    } else {
+      setInput(prompt.text);
+      requestAnimationFrame(() => messageInput.current?.focus());
+    }
+  }, [prompt, sendMessage, onPromptUsed]);
 
   const firstSent = useRef(false);
   useEffect(() => {
@@ -639,6 +720,9 @@ function Chat({
                 }
                 return null;
               })}
+              {onAddToLesson && m.role === "assistant" && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (
+                <AddToLessonButton onAdd={() => onAddToLesson(m.id)} />
+              )}
             </div>
           ))}
           {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
@@ -683,6 +767,32 @@ function Chat({
           )}
         </div>
       </form>
+    </div>
+  );
+}
+
+/** Keeps one tutor answer as a section of the open lesson. */
+function AddToLessonButton({ onAdd }: { onAdd: () => Promise<string | undefined> }) {
+  const [state, setState] = useState<"idle" | "adding" | "added">("idle");
+  const [error, setError] = useState<string>();
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        variant="outline"
+        size="xs"
+        className="self-start"
+        disabled={state !== "idle"}
+        onClick={async () => {
+          setState("adding");
+          setError(undefined);
+          const failure = await onAdd();
+          setError(failure);
+          setState(failure ? "idle" : "added");
+        }}
+      >
+        <SquarePlus aria-hidden /> {state === "added" ? "Added to lesson" : "Add to lesson"}
+      </Button>
+      {error && <span className="text-destructive text-xs">{error}</span>}
     </div>
   );
 }

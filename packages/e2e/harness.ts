@@ -564,6 +564,14 @@ function nextStep(prompt: PromptMessage[]): Step {
     return { text: `Lesson continued after ${result ?? "unknown"}.` };
   }
   const text = JSON.stringify(prompt[lastUser]?.content);
+  // The tutor drawer (ADR-011): Explain answers, and Change edits the open lesson by its section id.
+  if (text.includes('Explain \\"The idea\\"')) return { text: "Here is more on the idea." };
+  if (text.includes("changelesson")) {
+    if (prompt.slice(lastUser).some((m) => m.role === "tool")) return { text: "I simplified it." };
+    const system = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");
+    const sectionId = /"sectionId":"([^"]+)","title":"The idea"/.exec(system)?.[1] ?? "missing";
+    return { tool: "change_lesson", input: { reason: "Simpler", operations: [{ op: "rewrite", sectionId, markdown: "Simpler: a limit is where f heads." }] } };
+  }
   if (text.includes("fail")) throw new Error("PROVIDER-SECRET-DETAIL");
   const toolResults = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
   if (text.includes("cancelthinking")) return { controlled: "cancelthinking" };

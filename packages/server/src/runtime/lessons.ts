@@ -69,6 +69,8 @@ export function lessonView(lesson: LessonRow, { store, lessons, registry }: Omit
     outline: version ? { title: version.outline.title, sections: version.outline.sections.map(({ title, kind }) => ({ title, kind: kind as LessonSectionKind })) } : null,
     sections,
     checks,
+    changedSectionIds: version?.changedSectionIds ?? [],
+    changeReason: version?.reason ?? null,
     canFinish: lesson.status === "ready" && complete && checks.answered >= checks.total,
     error: lesson.status === "failed" ? "The lesson stopped before it was finished." : null,
     createdAt: lesson.createdAt.toISOString(),

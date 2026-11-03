@@ -137,6 +137,9 @@ export type SyllabusTopic = z.infer<typeof SyllabusTopic>;
 export const SyllabusView = z
   .object({
     version: z.number().int().positive(),
+    source: z.enum(["interview", "tutor", "adaptive"]),
+    reason: z.string().nullable(),
+    changedTopicIds: z.array(z.string()),
     topics: z.array(SyllabusTopic),
     known: SyllabusInput.shape.known,
     createdAt: z.string().datetime(),

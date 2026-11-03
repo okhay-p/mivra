@@ -86,13 +86,24 @@ export function CourseBar({ course, children }: { course: CourseView; children?:
       {syllabus && (
         <CollapsibleContent>
           <div className="mx-auto flex max-h-[50svh] max-w-3xl flex-col gap-4 overflow-y-auto px-4 pb-4">
+            {syllabus.reason && syllabus.version > 1 && (
+              <p className="text-muted-foreground" role="status">
+                Version {syllabus.version}
+                {syllabus.source === "adaptive" ? " (changed by Mivra)" : ""}: {syllabus.reason}
+              </p>
+            )}
             <ol className="flex flex-col gap-3" aria-label="Syllabus topics">
               {syllabus.topics.map((topic, i) => (
-                <li key={topic.id} className="flex gap-3">
+                <li key={topic.id} className={cn("flex gap-3", syllabus.changedTopicIds.includes(topic.id) && "bg-muted -mx-2 rounded-md px-2 py-1")}>
                   <span className="text-muted-foreground w-5 shrink-0 text-right tabular-nums">{i + 1}.</span>
                   <div className="min-w-0">
                     <p className="font-medium">
                       {topic.title}
+                      {syllabus.changedTopicIds.includes(topic.id) && (
+                        <Badge variant="secondary" className="ml-2 align-middle">
+                          Changed in v{syllabus.version}
+                        </Badge>
+                      )}
                       {topic.requestedByLearner && (
                         <Badge variant="secondary" className="ml-2 align-middle">
                           You asked for this

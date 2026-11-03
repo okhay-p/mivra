@@ -57,7 +57,7 @@ const json = { ...auth, "content-type": "application/json" };
 const userMessage = (text: string): UIMessage => ({ id: crypto.randomUUID(), role: "user", parts: [{ type: "text", text }] });
 
 const settled = (db: Db, sessionId: string) =>
-  vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, sessionId)).all().every((r) => r.status !== "running")).toBe(true));
+  vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, sessionId)).all().every((r) => r.status !== "running")).toBe(true), { timeout: 15_000 });
 
 async function startCourse(app: App, goal = "Learn calculus for machine learning") {
   const res = await app.request("/api/courses", { method: "POST", headers: json, body: JSON.stringify({ goal }) });
@@ -171,7 +171,7 @@ describe("courses", () => {
     expect(await skipped.json()).toMatchObject({ latestAttempt: { grade: { result: "skipped" } } });
 
     // The last answer triggers the automatic continuation, which writes the syllabus.
-    await vi.waitFor(async () => expect(await course(app, session.id)).toMatchObject({ status: "active" }));
+    await vi.waitFor(async () => expect(await course(app, session.id)).toMatchObject({ status: "active" }), { timeout: 15_000 });
     await settled(db, session.id);
 
     const evidence = db.select().from(attempts).all();

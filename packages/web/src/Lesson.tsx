@@ -1,7 +1,8 @@
 import type { ArtifactView, CourseLessonsView, LessonView } from "@mivra/protocol";
-import { Check, CircleDashed, Loader2 } from "lucide-react";
+import { Check, CircleDashed, HelpCircle, Loader2, Pencil } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -105,13 +106,24 @@ export function TopicList({
  * One lesson as a page: its sections in order, placeholders for those still being written, and the
  * way on once every check is answered.
  */
+export type LessonSection = LessonView["sections"][number];
+
 export function LessonPage({
   lessonId,
   nextTopic,
   onFinished,
   onStartNext,
+  onExplain,
+  onChange,
+  onLoaded,
 }: {
   lessonId: string;
+  /** Ask the tutor about a section; the lesson stays as it is. */
+  onExplain?: (section: LessonSection) => void;
+  /** Ask the tutor to change a section, which makes a new version. */
+  onChange?: (section: LessonSection) => void;
+  /** The lesson as last loaded, for the tutor drawer. */
+  onLoaded?: (lesson: LessonView) => void;
   /** The topic after this one, if it has no lesson yet. */
   nextTopic: { id: string; title: string } | undefined;
   onFinished: () => void;
@@ -121,12 +133,19 @@ export function LessonPage({
   const [updatedViews, setUpdatedViews] = useState<Record<string, ArtifactView>>({});
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
+  const loaded = useRef(onLoaded);
+  loaded.current = onLoaded;
+  useEffect(() => {
+    if (lesson) loaded.current?.(lesson);
+  }, [lesson]);
 
   if (!lesson) {
     return error ? <p className="text-destructive m-auto p-6">{error}</p> : <p className="text-muted-foreground m-auto p-6">Loading the lesson…</p>;
   }
 
   const generating = lesson.status === "generating";
+  const changeable = lesson.status === "ready";
+  const changed = new Set(lesson.changedSectionIds);
   const pending = lesson.outline ? lesson.outline.sections.slice(lesson.sections.length) : [];
   const run = async (action: () => Promise<{ ok: true; value: { lesson: LessonView; revision: string } } | { ok: false; error: string }>) => {
     setBusy(true);
@@ -146,6 +165,11 @@ export function LessonPage({
           {lesson.outline?.title ?? lesson.topicTitle}
         </h2>
         {lesson.status === "finished" && <p className="text-muted-foreground text-sm">Finished. This lesson won't change.</p>}
+        {lesson.changeReason && lesson.version && lesson.version > 1 && (
+          <p className="text-muted-foreground text-sm" role="status">
+            Version {lesson.version}: {lesson.changeReason}
+          </p>
+        )}
       </header>
 
       {!lesson.outline && generating && (
@@ -155,8 +179,30 @@ export function LessonPage({
       )}
 
       {lesson.sections.map((section) => (
-        <section key={section.id} aria-label={section.title} className="flex min-w-0 flex-col gap-2">
-          <h3 className="font-heading text-lg font-medium">{section.title}</h3>
+        <section
+          key={section.id}
+          aria-label={section.title}
+          data-changed={changed.has(section.id) || undefined}
+          className={cn("group flex min-w-0 flex-col gap-2", changed.has(section.id) && "bg-muted/60 -mx-3 rounded-lg px-3 py-2")}
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-heading text-lg font-medium">{section.title}</h3>
+            {changed.has(section.id) && <Badge variant="secondary">Changed in v{lesson.version}</Badge>}
+            {(onExplain || (onChange && changeable)) && (
+              <div className="ml-auto flex gap-1">
+                {onExplain && (
+                  <Button variant="ghost" size="xs" onClick={() => onExplain(section)} aria-label={`Explain: ${section.title}`}>
+                    <HelpCircle aria-hidden /> Explain
+                  </Button>
+                )}
+                {onChange && changeable && (
+                  <Button variant="ghost" size="xs" onClick={() => onChange(section)} aria-label={`Change: ${section.title}`}>
+                    <Pencil aria-hidden /> Change
+                  </Button>
+                )}
+              </div>
+            )}
+          </div>
           {section.kind === "prose" ? (
             <MathText text={section.markdown} />
           ) : (

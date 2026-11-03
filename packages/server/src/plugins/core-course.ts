@@ -1,4 +1,7 @@
 import {
+  ChangeLessonInput,
+  ChangeSyllabusInput,
+  LessonSectionKind,
   PlacementAnswer,
   PlacementQuestionSpec,
   SyllabusInput,
@@ -11,6 +14,10 @@ import { tool } from "ai";
 import type { Plugin, TurnContext } from "../runtime/capabilities.js";
 
 const interviewing = ({ sessionId, store }: TurnContext) => store.findCourseBySession(sessionId)?.status === "interviewing";
+const courseActive = ({ sessionId, store }: TurnContext) => store.findCourseBySession(sessionId)?.status === "active";
+/** The open lesson can change only while it is written and not finished. */
+const openLessonChangeable = (ctx: TurnContext) =>
+  courseActive(ctx) && Boolean(ctx.lessonId) && ctx.lessons?.findLesson(ctx.lessonId!)?.status === "ready";
 
 /**
  * Courses (ADR-011), stage 1: the placement interview's question kind and the tool that writes the
@@ -80,6 +87,56 @@ export const coreCourse: Plugin = {
           },
         }),
       { availableIn: interviewing },
+    );
+
+    api.registerTool(
+      "change_lesson",
+      ({ sessionId, runId, store, lessons, lessonId }) =>
+        tool({
+          description:
+            "Change the lesson the learner has open, because they asked you to. Makes a new version of the lesson and highlights what changed. Refer to sections by their sectionId from <open_lesson>. Only for explicit change requests; for questions, just answer.",
+          inputSchema: ChangeLessonInput,
+          execute: async ({ reason, operations }) => {
+            if (!lessons || !lessonId) return { status: "rejected", reason: "No lesson is open." };
+            const resolved = [];
+            for (const op of operations) {
+              if (op.op !== "insert_artifact") {
+                resolved.push(op);
+                continue;
+              }
+              const artifact = store.findArtifact(op.artifactId);
+              // Only a card from this reply: anything else could be another session's, or a check already answered elsewhere.
+              if (!artifact || artifact.sessionId !== sessionId || artifact.runId !== runId) {
+                return { status: "rejected", reason: `artifactId ${op.artifactId} isn't a card you created in this reply.` };
+              }
+              const kind = LessonSectionKind.safeParse(artifact.kind);
+              if (!kind.success || kind.data === "prose") return { status: "rejected", reason: "That kind of card can't be a lesson section." };
+              if (lessons.isLessonArtifact(op.artifactId)) return { status: "rejected", reason: "That card is already in a lesson." };
+              resolved.push({ ...op, kind: kind.data });
+            }
+            const changed = lessons.changeLesson(lessonId, reason, resolved);
+            return changed.ok ? { status: "changed", version: changed.version } : { status: "rejected", reason: changed.reason };
+          },
+        }),
+      { availableIn: openLessonChangeable },
+    );
+
+    api.registerTool(
+      "change_syllabus",
+      ({ sessionId, runId, store, lessons }) =>
+        tool({
+          description:
+            "Change the course's future topics, because the learner asked you to: insert, edit, remove or reorder topics that have no lesson yet. Makes a new syllabus version and highlights what changed. Refer to topics by topicId from <course_syllabus>.",
+          inputSchema: ChangeSyllabusInput,
+          execute: async ({ reason, operations }) => {
+            const course = store.findCourseBySession(sessionId);
+            if (!course) return { status: "rejected", reason: "This session isn't a course." };
+            const startedTopicIds = (lessons?.listLessons(course.id) ?? []).map((l) => l.topicId);
+            const changed = store.changeSyllabus(course.id, { source: "tutor", reason, runId, startedTopicIds, operations });
+            return changed.ok ? { status: "changed", version: changed.version } : { status: "rejected", reason: changed.reason };
+          },
+        }),
+      { availableIn: courseActive },
     );
   },
 };

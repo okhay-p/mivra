@@ -211,6 +211,12 @@ export const syllabusVersions = sqliteTable(
     version: integer("version").notNull(),
     topics: text("topics", { mode: "json" }).notNull(),
     known: text("known", { mode: "json" }).notNull(),
+    /** Who made this version: the interview, the tutor on request (Change), or adaptive generation (ADR-011). */
+    source: text("source", { enum: ["interview", "tutor", "adaptive"] }).notNull().default("interview"),
+    /** Why it changed, shown to the learner. Null for the first version. */
+    reason: text("reason"),
+    /** Ids of the topics this version added or changed, for highlighting. */
+    changedTopicIds: text("changed_topic_ids", { mode: "json" }).notNull().default(sql`'[]'`),
     runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
@@ -276,6 +282,10 @@ export const lessonVersions = sqliteTable(
     version: integer("version").notNull(),
     outline: text("outline", { mode: "json" }).notNull(),
     sectionIds: text("section_ids", { mode: "json" }).notNull(),
+    /** Ids of the sections this version added or changed, for highlighting. Empty for version 1. */
+    changedSectionIds: text("changed_section_ids", { mode: "json" }).notNull().default(sql`'[]'`),
+    /** Why the tutor changed it. Null for version 1. */
+    reason: text("reason"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [uniqueIndex("lesson_versions_lesson_version_idx").on(t.lessonId, t.version)],

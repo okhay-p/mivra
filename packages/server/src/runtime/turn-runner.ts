@@ -14,6 +14,7 @@ import {
   type UIMessageChunk,
   type UIMessageStreamOutcome,
 } from "ai";
+import type { LessonStore } from "../store/lesson-store.js";
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
@@ -82,13 +83,13 @@ async function replayMessages(conversation: UIMessage[]): Promise<ModelMessage[]
  */
 export type AssembleContext = (
   conversation: UIMessage[],
-  context: { sessionId: string },
+  context: { sessionId: string; lessonId?: string },
 ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
 
 /** The whole transcript, plus the learner's record across sessions and the session's documents. Summaries will plug in here. */
 const defaultAssembleContext =
-  (store: SessionStore, registry: CapabilityRegistry): AssembleContext =>
-  async (conversation, { sessionId }) => {
+  (store: SessionStore, registry: CapabilityRegistry, lessons?: LessonStore): AssembleContext =>
+  async (conversation, { sessionId, lessonId }) => {
     const documents = documentContext(store, sessionId, latestLearnerText(conversation.filter(m => m.id !== "mivra-continuation-event")));
     return {
       messages: withDocumentExcerpts(
@@ -97,7 +98,7 @@ const defaultAssembleContext =
       ),
       instructions: [
         learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
-        courseContext(store, sessionId),
+        courseContext(store, sessionId, lessons && lessonId ? { lessons, lessonId, registry } : undefined),
         documents?.rules,
       ]
         .filter(Boolean)
@@ -109,6 +110,7 @@ export interface TurnRunnerDeps {
   store: SessionStore;
   registry: CapabilityRegistry;
   model: () => LanguageModel;
+  lessons?: LessonStore;
   assembleContext?: AssembleContext;
 }
 
@@ -127,6 +129,8 @@ export interface StartTurnInput {
   message: unknown;
   /** Documents ready when Send was pressed; omitted by older clients. */
   documentIds?: string[];
+  /** The lesson open in a course session when Send was pressed. Ignored unless it belongs to the session's course. */
+  lessonId?: string;
   /** Internal server trigger, never a learner message. */
   continuation?: boolean;
   /** Aborts the model call, e.g. when the client disconnects. */
@@ -191,7 +195,7 @@ function continuationEvent(): UIMessage {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, lessons, assembleContext = defaultAssembleContext(store, registry, lessons) }: TurnRunnerDeps) {
   type ActiveTurn = {
     controller: AbortController;
     stopId: string;
@@ -249,9 +253,12 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       stopped.add(JSON.stringify([sessionId, messageId]));
       if (stopped.size > 256) stopped.delete(stopped.values().next().value!);
     },
-    async startTurn({ sessionId, message: input, documentIds, abortSignal, continuation = false }: StartTurnInput): Promise<StartTurnResult> {
+    async startTurn({ sessionId, message: input, documentIds, lessonId: requestedLesson, abortSignal, continuation = false }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
       if (!session) return { ok: false, error: { kind: "not_found", message: "Session not found" } };
+      // A lesson only counts as context for its own course's session.
+      const course = store.findCourseBySession(sessionId);
+      const lessonId = requestedLesson && course && lessons?.findLesson(requestedLesson)?.courseId === course.id ? requestedLesson : undefined;
 
       const readyDocumentIds = continuation ? [] : documentIds ?? store.listDocuments(sessionId).filter(d => d.messageId === null).map(d => d.id);
 
@@ -312,14 +319,14 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       let assembled: Awaited<ReturnType<AssembleContext>>;
       try {
         // Plugin code runs here, so any failure must still release the run.
-        turnTools = registry.toolsFor({ sessionId, runId, store });
+        turnTools = registry.toolsFor({ sessionId, runId, store, lessons, lessonId });
         const gradedConversation = withAttemptResults(conversation, registry, store);
         // A model-only session event separates automatic assistant turns and closes the prompt.
         // It is never persisted or presented as a learner bubble. Tool call/result pairs remain intact.
         const context = gradedConversation.flatMap((m, index) =>
           m.role === "assistant" && gradedConversation[index - 1]?.role === "assistant" ? [continuationEvent(), m] : [m]);
         if (continuation) context.push(continuationEvent());
-        assembled = await assembleContext(context, { sessionId });
+        assembled = await assembleContext(context, { sessionId, lessonId });
       } catch (error) {
         if (signal.aborted) return cancelledBeforeStream();
         active.delete(sessionId);

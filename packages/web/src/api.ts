@@ -144,3 +144,7 @@ export const getLesson = (id: string, after?: string, signal?: AbortSignal) =>
 export const finishLesson = (id: string) => request(() => api.lessons[":id"].finish.$post({ param: { id } }), readLesson);
 
 export const retryLesson = (id: string) => request(() => api.lessons[":id"].retry.$post({ param: { id } }), readLesson);
+
+/** Keeps one of the tutor's answers as a new section of the lesson (a Change). */
+export const addToLesson = (lessonId: string, body: { messageId: string; afterSectionId: string | null; title: string }) =>
+  request(() => api.lessons[":id"].sections.$post({ param: { id: lessonId }, json: body }), readLesson);

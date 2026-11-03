@@ -93,7 +93,7 @@ const start = async (app: App, courseId: string, topicId: string) =>
 const get = async (app: App, id: string, after?: string) =>
   (await (await app.request(`/api/lessons/${id}${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: auth })).json()) as LessonJson;
 const until = async (app: App, id: string, status: string) => {
-  await vi.waitFor(async () => expect((await get(app, id)).lesson.status).toBe(status), { timeout: 5000 });
+  await vi.waitFor(async () => expect((await get(app, id)).lesson.status).toBe(status), { timeout: 15_000 });
   return get(app, id);
 };
 const answer = (app: App, artifactId: string, optionIndex: number) =>

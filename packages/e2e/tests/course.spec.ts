@@ -39,14 +39,42 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(check).toBeVisible();
   await expect(lesson.getByRole("button", { name: "Finish lesson" })).toBeDisabled();
 
+  // Ctrl+K opens the tutor; the interview is still in it.
+  await page.keyboard.press("Control+k");
+  const tutor = page.getByRole("dialog", { name: "Tutor" });
+  await expect(tutor.getByText("Your syllabus is ready.")).toBeVisible();
+  await page.keyboard.press("Control+k");
+  await expect(tutor).toBeHidden();
+
+  // Explain answers in the drawer and leaves the lesson as it is; Add to lesson keeps the answer.
+  await lesson.getByRole("button", { name: "Explain: The idea" }).click();
+  await expect(tutor.locator('[data-message-role="user"]').last()).toHaveText('Explain "The idea"');
+  await expect(tutor.getByText("Here is more on the idea.")).toBeVisible();
+  await expect(lesson.getByRole("region", { name: /^More on/ })).toHaveCount(0);
+  await tutor.getByRole("button", { name: "Add to lesson" }).last().click();
+  await expect(tutor.getByRole("button", { name: "Added to lesson" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  const added = lesson.getByRole("region", { name: "More on The idea" });
+  await expect(added).toContainText("Here is more on the idea.");
+  await expect(added).toHaveAttribute("data-changed", "true");
+  await expect(lesson.getByText("Version 2: Added the tutor's answer")).toBeVisible();
+
+  // Change fills in the request for the learner to finish; the tutor makes a new version.
+  await lesson.getByRole("button", { name: "Change: The idea" }).click();
+  const box = tutor.getByRole("textbox", { name: "Message" });
+  await expect(box).toHaveValue('Change "The idea": ');
+  await box.fill('Change "The idea": changelesson simpler please');
+  await tutor.getByRole("button", { name: "Send" }).click();
+  await expect(tutor.getByText("I simplified it.")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(lesson.getByRole("region", { name: "The idea" })).toContainText("Simpler: a limit is where f heads.");
+  await expect(lesson.getByText("Version 3: Simpler")).toBeVisible();
+
   // A wrong answer still finishes the lesson: scores never block moving on.
   await check.getByRole("button", { name: /^1/ }).click();
   await expect(check.getByText("Not quite.")).toBeVisible();
   await lesson.getByRole("button", { name: "Finish lesson" }).click();
   await expect(lesson.getByText("Finished. This lesson won't change.")).toBeVisible();
   await expect(lesson.getByRole("button", { name: "Next lesson: Chain rule" })).toBeVisible();
-
-  // The tutor's chat is in a drawer, with the interview still in it.
-  await course.getByRole("button", { name: "Tutor" }).click();
-  await expect(page.getByRole("dialog", { name: "Tutor" }).getByText("Your syllabus is ready.")).toBeVisible();
+  await expect(lesson.getByRole("button", { name: /^Change/ })).toHaveCount(0);
 });

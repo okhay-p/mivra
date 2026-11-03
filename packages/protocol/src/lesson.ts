@@ -72,6 +72,9 @@ export const LessonView = z
       ]),
     ),
     checks: z.object({ total: z.number().int().nonnegative(), answered: z.number().int().nonnegative() }).strict(),
+    /** Sections the latest version added or changed, highlighted for the learner, and why. */
+    changedSectionIds: z.array(z.string()),
+    changeReason: z.string().nullable(),
     /** Whether the learner can finish it now: fully written and every check answered. */
     canFinish: z.boolean(),
     error: z.string().nullable(),
@@ -100,3 +103,71 @@ export const CourseLessonsView = z
   })
   .strict();
 export type CourseLessonsView = z.infer<typeof CourseLessonsView>;
+
+const SectionTitle = z.string().trim().min(1).max(120);
+const SectionMarkdown = z.string().trim().min(1).max(6000);
+const Reason = z.string().trim().min(1).max(300);
+
+/**
+ * Input of change_lesson: the tutor's edit of the current lesson, on the learner's request (ADR-011).
+ * One call makes one new version; the sections it adds or rewrites are highlighted.
+ */
+export const ChangeLessonInput = z
+  .object({
+    reason: Reason.describe('What the learner asked for, in a few words, e.g. "Simpler intro with an example".'),
+    operations: z
+      .array(
+        z.discriminatedUnion("op", [
+          z.object({ op: z.literal("rewrite"), sectionId: z.string().min(1), markdown: SectionMarkdown, title: SectionTitle.optional() }).strict()
+            .describe("Replace a prose section's text (and optionally its title)."),
+          z.object({ op: z.literal("insert"), afterSectionId: z.string().min(1).nullable(), title: SectionTitle, markdown: SectionMarkdown }).strict()
+            .describe("Add a prose section after the given section, or first if null."),
+          z.object({ op: z.literal("insert_artifact"), afterSectionId: z.string().min(1).nullable(), title: SectionTitle, artifactId: z.string().min(1) }).strict()
+            .describe("Add a card you created earlier in this reply (its artifactId) as a section."),
+          z.object({ op: z.literal("remove"), sectionId: z.string().min(1) }).strict(),
+          z.object({ op: z.literal("move"), sectionId: z.string().min(1), afterSectionId: z.string().min(1).nullable() }).strict(),
+        ]),
+      )
+      .min(1)
+      .max(10),
+  })
+  .strict();
+export type ChangeLessonInput = z.infer<typeof ChangeLessonInput>;
+
+/** Input of change_syllabus: the tutor's edit of the course's future topics, on the learner's request. */
+export const ChangeSyllabusInput = z
+  .object({
+    reason: Reason.describe('What the learner asked for, e.g. "Add a topic on vectors before gradients".'),
+    operations: z
+      .array(
+        z.discriminatedUnion("op", [
+          z
+            .object({
+              op: z.literal("insert"),
+              afterTopicId: z.string().min(1).nullable().describe("Insert after this topic; null to insert before the first future topic."),
+              title: SectionTitle,
+              summary: z.string().trim().min(1).max(400),
+              reason: Reason,
+              concepts: z.array(z.string().trim().min(1).max(80)).min(1).max(8),
+            })
+            .strict(),
+          z.object({ op: z.literal("edit"), topicId: z.string().min(1), title: SectionTitle.optional(), summary: z.string().trim().min(1).max(400).optional() }).strict(),
+          z.object({ op: z.literal("remove"), topicId: z.string().min(1) }).strict(),
+          z.object({ op: z.literal("move"), topicId: z.string().min(1), afterTopicId: z.string().min(1).nullable() }).strict(),
+        ]),
+      )
+      .min(1)
+      .max(10),
+  })
+  .strict();
+export type ChangeSyllabusInput = z.infer<typeof ChangeSyllabusInput>;
+
+/** Body of POST /lessons/{id}/sections: keep a tutor's Explain answer as a new section. */
+export const AddToLesson = z
+  .object({
+    messageId: z.string().min(1).max(128),
+    afterSectionId: z.string().min(1).max(128).nullable(),
+    title: SectionTitle,
+  })
+  .strict();
+export type AddToLesson = z.infer<typeof AddToLesson>;

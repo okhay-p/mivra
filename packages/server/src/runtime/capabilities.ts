@@ -1,6 +1,7 @@
 import { ArtifactView } from "@mivra/protocol";
 import { tool, type Tool, type ToolSet } from "ai";
 import type { ZodType } from "zod";
+import type { LessonStore } from "../store/lesson-store.js";
 import type { AttemptRow, SessionStore } from "../store/session-store.js";
 
 /** What a tool needs to know about the turn it runs in. */
@@ -8,6 +9,9 @@ export interface TurnContext {
   sessionId: string;
   runId: string;
   store: SessionStore;
+  lessons?: LessonStore;
+  /** The lesson the learner had open when they sent this turn, in a course session. */
+  lessonId?: string;
 }
 
 /** A gradable artifact kind (a check). Grading is deterministic (ADR-006). */

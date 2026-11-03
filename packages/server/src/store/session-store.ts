@@ -16,6 +16,13 @@ export type CourseRow = typeof courses.$inferSelect;
 export type SyllabusRow = typeof syllabusVersions.$inferSelect;
 export type SyllabusTopicRow = { id: string; title: string; summary: string; reason: string; requestedByLearner: boolean; concepts: string[] };
 export type KnownConceptRow = { concept: string; source: "memory" | "test" | "guess"; note: string };
+export type SyllabusVersion = Omit<SyllabusRow, "topics" | "known" | "changedTopicIds"> & { topics: SyllabusTopicRow[]; known: KnownConceptRow[]; changedTopicIds: string[] };
+/** One edit of a syllabus's future topics. */
+export type SyllabusOperation =
+  | { op: "insert"; afterTopicId: string | null; title: string; summary: string; reason: string; concepts: string[] }
+  | { op: "edit"; topicId: string; title?: string; summary?: string }
+  | { op: "remove"; topicId: string }
+  | { op: "move"; topicId: string; afterTopicId: string | null };
 /** A chunk of a document's text with what's needed to cite it. `documentOrder` is the document's rowid, so its upload order. */
 export type DocumentExcerpt = { documentId: string; filename: string; kind: DocumentRow["kind"]; page: number; seq: number; text: string; documentOrder: number };
 
@@ -108,9 +115,87 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     },
 
     /** The course's newest syllabus version, if one has been written. */
-    latestSyllabus(courseId: string): (Omit<SyllabusRow, "topics" | "known"> & { topics: SyllabusTopicRow[]; known: KnownConceptRow[] }) | undefined {
+    latestSyllabus(courseId: string): SyllabusVersion | undefined {
       const row = db.select().from(syllabusVersions).where(eq(syllabusVersions.courseId, courseId)).orderBy(desc(syllabusVersions.version)).get();
-      return row && { ...row, topics: row.topics as SyllabusTopicRow[], known: row.known as KnownConceptRow[] };
+      return row && { ...row, topics: row.topics as SyllabusTopicRow[], known: row.known as KnownConceptRow[], changedTopicIds: row.changedTopicIds as string[] };
+    },
+
+    /**
+     * Changes a course's future topics as a new syllabus version (ADR-011). `startedTopicIds` are topics
+     * that already have a lesson: they stay where they are, and nothing may be inserted before them.
+     * All operations apply, or none.
+     */
+    changeSyllabus(
+      courseId: string,
+      change: { source: "tutor" | "adaptive"; reason: string; runId: string | null; startedTopicIds: string[]; operations: SyllabusOperation[] },
+    ): { ok: true; version: number; changedTopicIds: string[] } | { ok: false; reason: string } {
+      return db.transaction((tx) => {
+        const row = tx.select().from(syllabusVersions).where(eq(syllabusVersions.courseId, courseId)).orderBy(desc(syllabusVersions.version)).get();
+        if (!row) return { ok: false, reason: "The course has no syllabus yet." };
+        const started = new Set(change.startedTopicIds);
+        let topics = [...(row.topics as SyllabusTopicRow[])];
+        const changed = new Set<string>();
+        const firstFuture = () => topics.findIndex((t) => !started.has(t.id));
+        const future = (id: string) => {
+          const i = topics.findIndex((t) => t.id === id);
+          if (i < 0) return { error: `Unknown topicId ${id}` };
+          if (started.has(id)) return { error: "Only future topics can change: this one already has a lesson." };
+          return { index: i };
+        };
+        const insertionPoint = (afterTopicId: string | null) => {
+          const lastStarted = topics.reduce((last, t, i) => (started.has(t.id) ? i : last), -1);
+          if (afterTopicId === null) return { at: lastStarted + 1 };
+          const i = topics.findIndex((t) => t.id === afterTopicId);
+          if (i < 0) return { error: `Unknown afterTopicId ${afterTopicId}` };
+          if (i < lastStarted) return { error: "New topics can only go after the lessons already started." };
+          return { at: i + 1 };
+        };
+        for (const op of change.operations) {
+          if (op.op === "insert") {
+            const point = insertionPoint(op.afterTopicId);
+            if ("error" in point) return { ok: false, reason: point.error! };
+            const topic = { id: randomUUID(), title: op.title, summary: op.summary, reason: op.reason, requestedByLearner: change.source === "tutor", concepts: op.concepts };
+            topics.splice(point.at, 0, topic);
+            changed.add(topic.id);
+            continue;
+          }
+          const found = future(op.topicId);
+          if ("error" in found) return { ok: false, reason: found.error! };
+          if (op.op === "remove") {
+            if (change.source === "adaptive" && topics[found.index]!.requestedByLearner) {
+              return { ok: false, reason: "A topic the learner asked for is never removed automatically." };
+            }
+            topics.splice(found.index, 1);
+          } else if (op.op === "edit") {
+            const topic = topics[found.index]!;
+            topics[found.index] = { ...topic, ...(op.title ? { title: op.title } : {}), ...(op.summary ? { summary: op.summary } : {}) };
+            changed.add(topic.id);
+          } else {
+            const [topic] = topics.splice(found.index, 1);
+            const point = insertionPoint(op.afterTopicId);
+            if ("error" in point) return { ok: false, reason: point.error! };
+            topics.splice(point.at, 0, topic!);
+            changed.add(topic!.id);
+          }
+        }
+        if (firstFuture() >= 0 && topics.slice(0, firstFuture()).some((t) => !started.has(t.id))) {
+          return { ok: false, reason: "Started topics must stay first." };
+        }
+        const titles = new Set<string>();
+        for (const t of topics) {
+          const key = t.title.trim().toLowerCase();
+          if (titles.has(key)) return { ok: false, reason: `Two topics would be called "${t.title}".` };
+          titles.add(key);
+        }
+        if (topics.length === 0) return { ok: false, reason: "A syllabus needs at least one topic." };
+        const version = row.version + 1;
+        const changedTopicIds = topics.map((t) => t.id).filter((id) => changed.has(id));
+        tx.insert(syllabusVersions)
+          .values({ id: randomUUID(), courseId, version, topics, known: row.known, source: change.source, reason: change.reason, changedTopicIds, runId: change.runId, createdAt: clock() })
+          .run();
+        tx.update(courses).set({ updatedAt: clock() }).where(eq(courses.id, courseId)).run();
+        return { ok: true, version, changedTopicIds };
+      });
     },
 
     /**
@@ -129,6 +214,9 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
           version: 1,
           topics: input.topics.map((topic) => ({ id: randomUUID(), ...topic })),
           known: input.known,
+          source: "interview" as const,
+          reason: null,
+          changedTopicIds: [],
           runId,
           createdAt: now,
         };

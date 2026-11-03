@@ -23,6 +23,8 @@ const base: LessonView = {
   },
   sections: [{ id: "s1", title: "Intro", kind: "prose", markdown: "A **limit** is where $f$ heads." }],
   checks: { total: 0, answered: 0 },
+  changedSectionIds: [],
+  changeReason: null,
   canFinish: false,
   error: null,
   createdAt: "2026-11-03T00:00:00.000Z",
@@ -86,6 +88,36 @@ describe("LessonPage", () => {
     render(<LessonPage lessonId="l1" nextTopic={undefined} onFinished={() => {}} onStartNext={async () => {}} />);
     expect(await screen.findByText("The lesson stopped before it was finished.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Continue writing" })).toBeTruthy();
+  });
+});
+
+describe("LessonPage actions", () => {
+  it("offers Explain and Change on each section of a lesson that can change", async () => {
+    serve([ready]);
+    const onExplain = vi.fn();
+    const onChange = vi.fn();
+    render(<LessonPage lessonId="l1" nextTopic={undefined} onFinished={() => {}} onStartNext={async () => {}} onExplain={onExplain} onChange={onChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Explain: Intro" }));
+    expect(onExplain).toHaveBeenCalledWith(expect.objectContaining({ id: "s1", title: "Intro" }));
+    fireEvent.click(screen.getByRole("button", { name: "Change: Check" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ id: "s2" }));
+  });
+
+  it("offers no Change on a finished lesson, only Explain", async () => {
+    serve([{ ...ready, status: "finished", checks: { total: 1, answered: 1 } }]);
+    render(<LessonPage lessonId="l1" nextTopic={undefined} onFinished={() => {}} onStartNext={async () => {}} onExplain={() => {}} onChange={() => {}} />);
+    expect(await screen.findByRole("button", { name: "Explain: Intro" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Change/ })).toBeNull();
+  });
+
+  it("highlights the sections a new version changed, with the reason", async () => {
+    serve([{ ...ready, version: 2, changedSectionIds: ["s1"], changeReason: "Simpler intro" }]);
+    render(<LessonPage lessonId="l1" nextTopic={undefined} onFinished={() => {}} onStartNext={async () => {}} />);
+    const intro = await screen.findByRole("region", { name: "Intro" });
+    expect(intro.dataset.changed).toBe("true");
+    expect(intro.textContent).toContain("Changed in v2");
+    expect(screen.getByRole("region", { name: "Check" }).dataset.changed).toBeUndefined();
+    expect(screen.getByText("Version 2: Simpler intro")).toBeTruthy();
   });
 });
 

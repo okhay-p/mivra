@@ -1,6 +1,6 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { LanguageModel } from "ai";
-import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
+import { AddToLesson, ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
 import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
 import type { Extract } from "./documents/extract-in-child.js";
@@ -160,6 +160,20 @@ const retryLesson = createRoute({
   responses: { 202: lessonResponse("The lesson, generating again"), 404: errorResponse("Unknown lesson"), 409: errorResponse("The lesson didn't fail") },
 });
 
+const addToLesson = createRoute({
+  method: "post",
+  path: "/lessons/{id}/sections",
+  description:
+    "Add to lesson: keep one of the tutor's answers as a new prose section of the lesson (ADR-011). Counts as a Change: it makes a new version and the section is highlighted. A finished lesson can't change.",
+  request: { params: LessonParams, body: { content: { "application/json": { schema: AddToLesson } } } },
+  responses: {
+    201: lessonResponse("The lesson's new version"),
+    400: errorResponse("Not one of the tutor's replies in this course, or it has no text"),
+    404: errorResponse("Unknown lesson or section"),
+    409: errorResponse("The lesson is finished or still being written"),
+  },
+});
+
 /** How long a client waiting on a lesson is held before it asks again. */
 const LESSON_WAIT_MS = 20_000;
 
@@ -199,7 +213,13 @@ const chat = createRoute({
     "Append a user message and stream the assistant reply as an AI SDK UI message stream (Server-Sent Events). The server owns history; send only the new message. Message ids are single-use, so a retried request with the same id is rejected rather than generating twice.",
   request: {
     params: SessionParams,
-    body: { content: { "application/json": { schema: z.object({ message: Message, documentIds: z.array(z.string()).max(20).optional() }) } } },
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({ message: Message, documentIds: z.array(z.string()).max(20).optional(), lessonId: z.string().max(128).optional() }),
+        },
+      },
+    },
   },
   responses: {
     200: { description: "UI message stream", content: { "text/event-stream": { schema: z.string() } } },
@@ -334,7 +354,15 @@ function toCourseJson(row: CourseRow, store: SessionStore): CourseView {
     goal: row.goal,
     status: row.status,
     syllabus: syllabus
-      ? { version: syllabus.version, topics: syllabus.topics, known: syllabus.known, createdAt: syllabus.createdAt.toISOString() }
+      ? {
+          version: syllabus.version,
+          source: syllabus.source,
+          reason: syllabus.reason,
+          changedTopicIds: syllabus.changedTopicIds,
+          topics: syllabus.topics,
+          known: syllabus.known,
+          createdAt: syllabus.createdAt.toISOString(),
+        }
       : null,
     createdAt: row.createdAt.toISOString(),
   };
@@ -375,8 +403,9 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
   const lessons = createLessonStore(db);
   lessons.recoverInterrupted();
   const registry = createCapabilityRegistry(plugins);
-  const turns = createTurnRunner({ store, registry, model });
+  const turns = createTurnRunner({ store, registry, model, lessons });
   const generator = createLessonGenerator({ store, lessons, registry, model });
+  lessons.onChange(generator.changed);
   const lessonJson = (id: string) => {
     const row = lessons.findLesson(id);
     if (!row) return undefined;
@@ -451,6 +480,22 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       generator.changed(id);
       return c.json(lessonJson(id)! as never, 202);
     })
+    .openapi(addToLesson, (c) => {
+      const { id } = c.req.valid("param");
+      const { messageId, afterSectionId, title } = c.req.valid("json");
+      const lesson = lessons.findLesson(id);
+      if (!lesson) return c.json({ error: "Lesson not found" }, 404);
+      const course = store.findCourse(lesson.courseId)!;
+      const reply = store.loadMessages(course.sessionId).find((m) => m.id === messageId && m.role === "assistant");
+      const markdown = reply?.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n\n").trim();
+      if (!markdown) return c.json({ error: "That isn't one of the tutor's answers in this course" }, 400);
+      const changed = lessons.changeLesson(id, "Added the tutor's answer", [{ op: "insert", afterSectionId, title, markdown: markdown.slice(0, 6000) }]);
+      if (!changed.ok) {
+        return changed.reason.startsWith("Unknown") ? c.json({ error: "Section not found" }, 404) : c.json({ error: changed.reason }, 409);
+      }
+      generator.changed(id);
+      return c.json(lessonJson(id)! as never, 201);
+    })
     .openapi(listMessages, (c) => {
       const { id } = c.req.valid("param");
       if (!store.findSession(id)) return c.json({ error: "Session not found" }, 404);
@@ -472,6 +517,7 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
         sessionId: c.req.valid("param").id,
         message: c.req.valid("json").message,
         documentIds: c.req.valid("json").documentIds,
+        lessonId: c.req.valid("json").lessonId,
         abortSignal: c.req.raw.signal,
       });
       if (!result.ok) return c.json({ error: result.error.message }, turnErrorStatus[result.error.kind]);
@@ -485,7 +531,7 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
       const artifact = store.findArtifact(c.req.valid("param").id)!;
       // A lesson's checks don't continue a chat: the learner reads on, and the lesson page updates.
-      const lesson = lessons.findLessonBySession(artifact.sessionId);
+      const lesson = lessons.findLessonBySession(artifact.sessionId) ?? lessons.lessonForArtifact(artifact.id);
       if (lesson) {
         generator.changed(lesson.id);
         return c.json(result.view as never, 201);

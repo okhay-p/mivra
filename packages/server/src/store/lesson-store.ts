@@ -4,9 +4,24 @@ import type { Db } from "../db/client.js";
 import { artifacts, attempts, lessonSections, lessonVersions, lessons, sessions } from "../db/schema.js";
 
 export type LessonRow = typeof lessons.$inferSelect;
+
+/** A change that would break the lesson's rules; thrown inside a transaction so it rolls back. */
+class Refused extends Error {}
 export type LessonSectionRow = typeof lessonSections.$inferSelect;
 export type LessonOutline = { title: string; sections: { title: string; kind: string; purpose: string }[] };
-export type LessonVersionRow = Omit<typeof lessonVersions.$inferSelect, "outline" | "sectionIds"> & { outline: LessonOutline; sectionIds: string[] };
+export type LessonVersionRow = Omit<typeof lessonVersions.$inferSelect, "outline" | "sectionIds" | "changedSectionIds"> & {
+  outline: LessonOutline;
+  sectionIds: string[];
+  changedSectionIds: string[];
+};
+
+/** One edit of a lesson, as the tutor's change_lesson tool or Add to lesson asks for it. */
+export type LessonOperation =
+  | { op: "rewrite"; sectionId: string; markdown: string; title?: string }
+  | { op: "insert"; afterSectionId: string | null; title: string; markdown: string }
+  | { op: "insert_artifact"; afterSectionId: string | null; title: string; artifactId: string; kind: string }
+  | { op: "remove"; sectionId: string }
+  | { op: "move"; sectionId: string; afterSectionId: string | null };
 
 /**
  * Persistence for lessons (ADR-011). Like SessionStore, the only code that touches these tables.
@@ -15,11 +30,21 @@ export type LessonVersionRow = Omit<typeof lessonVersions.$inferSelect, "outline
 export function createLessonStore(db: Db, clock: () => Date = () => new Date()) {
   const latestVersion = (lessonId: string): LessonVersionRow | undefined => {
     const row = db.select().from(lessonVersions).where(eq(lessonVersions.lessonId, lessonId)).orderBy(desc(lessonVersions.version)).get();
-    return row && { ...row, outline: row.outline as LessonOutline, sectionIds: row.sectionIds as string[] };
+    return row && { ...row, outline: row.outline as LessonOutline, sectionIds: row.sectionIds as string[], changedSectionIds: row.changedSectionIds as string[] };
+  };
+
+  const listeners = new Set<(lessonId: string) => void>();
+  const emit = (lessonId: string) => {
+    for (const listener of listeners) listener(lessonId);
   };
 
   return {
     latestVersion,
+
+    /** Calls `listener` after a lesson changes through a tutor's edit. */
+    onChange(listener: (lessonId: string) => void) {
+      listeners.add(listener);
+    },
 
     /**
      * Starts the lesson for a topic, with a hidden session of its own for generation. Returns the existing
@@ -89,6 +114,104 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
       });
     },
 
+    /**
+     * Applies the tutor's edits to a lesson as a new version (ADR-011). Only a fully written lesson that
+     * isn't finished can change; sections are never edited in place, so earlier versions and their
+     * attempts stay as the learner saw them. All operations apply, or none.
+     */
+    changeLesson(lessonId: string, reason: string, operations: LessonOperation[]): { ok: true; version: number } | { ok: false; reason: string } {
+      const result = this.applyChange(lessonId, reason, operations);
+      if (result.ok) emit(lessonId);
+      return result;
+    },
+
+    applyChange(lessonId: string, reason: string, operations: LessonOperation[]): { ok: true; version: number } | { ok: false; reason: string } {
+      try {
+        return this.applyChangeOrThrow(lessonId, reason, operations);
+      } catch (error) {
+        if (error instanceof Refused) return { ok: false, reason: error.message };
+        throw error;
+      }
+    },
+
+    /** Throws Refused, which rolls back any section already written. */
+    applyChangeOrThrow(lessonId: string, reason: string, operations: LessonOperation[]): { ok: true; version: number } {
+      const refuse = (message: string): never => {
+        throw new Refused(message);
+      };
+      return db.transaction((tx) => {
+        const lesson = tx.select().from(lessons).where(eq(lessons.id, lessonId)).get();
+        if (lesson?.status === "finished") return refuse("This lesson is finished, so it can't change.");
+        if (lesson?.status !== "ready") return refuse("This lesson is still being written.");
+        const current = latestVersion(lessonId)!;
+        const known = new Map(this.sections(current.sectionIds).map((s) => [s.id, s]));
+        type Entry = { id: string; title: string; kind: string; purpose: string };
+        const outlineById = new Map(current.sectionIds.map((id, i) => [id, current.outline.sections[i]!]));
+        let entries: Entry[] = current.sectionIds.map((id) => ({ id, ...outlineById.get(id)! }));
+        const changed = new Set<string>();
+        // A rewritten section gets a new id; later operations may still name the one the tutor saw.
+        const renamed = new Map<string, string>();
+        const resolve = (id: string) => renamed.get(id) ?? id;
+        const now = clock();
+        const newSection = (section: Pick<LessonSectionRow, "kind" | "title" | "markdown" | "artifactId">) => {
+          const row = { id: randomUUID(), lessonId, ...section, createdAt: now };
+          tx.insert(lessonSections).values(row).run();
+          changed.add(row.id);
+          return row;
+        };
+        const position = (afterSectionId: string | null) => {
+          if (afterSectionId === null) return 0;
+          const i = entries.findIndex((e) => e.id === resolve(afterSectionId));
+          return i < 0 ? undefined : i + 1;
+        };
+        for (const op of operations) {
+          if (op.op === "insert" || op.op === "insert_artifact") {
+            const at = position(op.afterSectionId);
+            if (at === undefined) return refuse(`Unknown afterSectionId ${op.afterSectionId}`);
+            const row =
+              op.op === "insert"
+                ? newSection({ kind: "prose", title: op.title, markdown: op.markdown, artifactId: null })
+                : newSection({ kind: "artifact", title: op.title, markdown: null, artifactId: op.artifactId });
+            entries.splice(at, 0, { id: row.id, title: op.title, kind: op.op === "insert" ? "prose" : op.kind, purpose: "Added by the tutor" });
+            continue;
+          }
+          const i = entries.findIndex((e) => e.id === resolve(op.sectionId));
+          if (i < 0) return refuse(`Unknown sectionId ${op.sectionId}`);
+          if (op.op === "remove") {
+            entries.splice(i, 1);
+          } else if (op.op === "move") {
+            const [entry] = entries.splice(i, 1);
+            const at = position(op.afterSectionId);
+            if (at === undefined) return refuse(`Unknown afterSectionId ${op.afterSectionId}`);
+            entries.splice(at, 0, entry!);
+            changed.add(entry!.id);
+          } else {
+            const id = resolve(op.sectionId);
+            const old = known.get(id) ?? tx.select().from(lessonSections).where(eq(lessonSections.id, id)).get();
+            if (old?.kind !== "prose") return refuse("Only a prose section can be rewritten; remove a card and insert a new one instead.");
+            const row = newSection({ kind: "prose", title: op.title ?? old.title, markdown: op.markdown, artifactId: null });
+            entries[i] = { ...entries[i]!, id: row.id, title: row.title };
+            renamed.set(op.sectionId, row.id);
+          }
+        }
+        if (entries.length === 0) return refuse("A lesson needs at least one section.");
+        const version = current.version + 1;
+        tx.insert(lessonVersions)
+          .values({
+            id: randomUUID(),
+            lessonId,
+            version,
+            outline: { title: current.outline.title, sections: entries.map(({ title, kind, purpose }) => ({ title, kind, purpose })) },
+            sectionIds: entries.map((e) => e.id),
+            changedSectionIds: entries.map((e) => e.id).filter((id) => changed.has(id)),
+            reason,
+            createdAt: now,
+          })
+          .run();
+        return { ok: true as const, version };
+      });
+    },
+
     /** Sections by id, in the order given. */
     sections(ids: string[]): LessonSectionRow[] {
       if (ids.length === 0) return [];
@@ -99,6 +222,17 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
     /** Whether an artifact belongs to a lesson section. Such artifacts can be answered as soon as their section is written. */
     isLessonArtifact(artifactId: string): boolean {
       return Boolean(db.select({ id: lessonSections.id }).from(lessonSections).where(eq(lessonSections.artifactId, artifactId)).get());
+    },
+
+    /** The lesson an artifact is a section of, if any. A card the tutor added lives in the course's chat session. */
+    lessonForArtifact(artifactId: string): LessonRow | undefined {
+      const row = db
+        .select({ lesson: lessons })
+        .from(lessonSections)
+        .innerJoin(lessons, eq(lessons.id, lessonSections.lessonId))
+        .where(eq(lessonSections.artifactId, artifactId))
+        .get();
+      return row?.lesson;
     },
 
     /** How many of the version's checks exist and how many have an attempt. */
