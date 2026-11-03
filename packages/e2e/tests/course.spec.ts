@@ -67,8 +67,13 @@ test("a course starts from the first screen, runs the placement interview and wr
   await tutor.getByRole("button", { name: "Send" }).click();
   await expect(tutor.getByText("I simplified it.")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(lesson.getByRole("region", { name: "The idea" })).toContainText("Simpler: a limit is where f heads.");
+  await expect(lesson.getByRole("region", { name: "The idea", exact: true })).toContainText("Simpler: a limit is where f heads.");
   await expect(lesson.getByText("Version 3: Simpler")).toBeVisible();
+
+  // Explain once more, so the last Explain was in this lesson when the learner moves on.
+  await lesson.getByRole("button", { name: "Explain: The idea" }).click();
+  await expect(tutor.getByText("Here is more on the idea.")).toHaveCount(2);
+  await page.keyboard.press("Escape");
 
   // A wrong answer still finishes the lesson: scores never block moving on.
   await check.getByRole("button", { name: /^1/ }).click();
@@ -83,6 +88,16 @@ test("a course starts from the first screen, runs the placement interview and wr
   const next = page.getByRole("article", { name: "The chain rule" });
   await expect(next.getByRole("region", { name: "Looking back" })).toContainText("Last time the limit check tripped you up.");
   await expect(course.getByText("Mivra changed the plan: Added a limits refresher: you missed 1 of 1 checks")).toBeVisible();
+
+  // Add to lesson goes into the open lesson, even though the last Explain was in the earlier one.
+  await page.keyboard.press("Control+k");
+  await tutor.getByRole("textbox", { name: "Message" }).fill("what comes after this?");
+  await tutor.getByRole("button", { name: "Send" }).click();
+  await expect(tutor.locator('[data-message-role="assistant"]').last()).toContainText("The server says");
+  await tutor.getByRole("button", { name: "Add to lesson" }).last().click();
+  await expect(tutor.getByRole("button", { name: "Added to lesson" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(next.getByRole("region", { name: "From the tutor" })).toContainText("The server says");
   const toggle = course.getByRole("button", { name: /Syllabus/ });
   if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
   await expect(course.getByRole("list", { name: "Syllabus topics" })).toContainText("Limits refresher");

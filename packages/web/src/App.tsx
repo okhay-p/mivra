@@ -281,7 +281,7 @@ function CourseSession(props: SessionProps) {
   const [prompt, setPrompt] = useState<SessionProps["prompt"]>();
   const [openLesson, setOpenLesson] = useState<LessonView>();
   // The section the learner last asked about, where Add to lesson puts the answer.
-  const explained = useRef<LessonSection | undefined>(undefined);
+  const explained = useRef<{ lessonId: string; section: LessonSection } | undefined>(undefined);
 
   const refresh = useCallback(async () => {
     const found = await getCourse(sessionId);
@@ -325,11 +325,16 @@ function CourseSession(props: SessionProps) {
   };
   const addAnswer = async (messageId: string) => {
     if (!lessonId) return "No lesson is open.";
-    const after = explained.current ?? openLesson?.sections.at(-1);
+    // The section last asked about, if it's still in the open lesson; otherwise the lesson's last section.
+    const asked =
+      explained.current?.lessonId === lessonId && openLesson?.id === lessonId && openLesson.sections.some((s) => s.id === explained.current!.section.id)
+        ? explained.current.section
+        : undefined;
+    const after = asked ?? (openLesson?.id === lessonId ? openLesson.sections.at(-1) : undefined);
     const result = await addToLesson(lessonId, {
       messageId,
       afterSectionId: after?.id ?? null,
-      title: explained.current ? `More on ${explained.current.title}`.slice(0, 120) : "From the tutor",
+      title: asked ? `More on ${asked.title}`.slice(0, 120) : "From the tutor",
     });
     if (!result.ok) return result.error;
     setOpenLesson(result.value.lesson);
@@ -435,7 +440,7 @@ function CourseSession(props: SessionProps) {
               setFocusSection(sectionId);
             }}
             onExplain={(section) => {
-              explained.current = section;
+              explained.current = { lessonId, section };
               ask(`Explain "${section.title}"`, true);
             }}
             onChange={(section) => {
