@@ -137,7 +137,8 @@ const RAW_HTML = /^ {0,3}<[a-z/!?]/im;
 const LIST_MARKER = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 const FENCE_OPEN = /^ {0,3}(`{3,}(?=[^`]*$)|~{3,})/;
 const MATH_OPEN = /^ {0,3}(\$\$+)[^$]*$/;
-const FENCE_CLOSE = /^ {0,3}(`+|~+|\$+)\s*$/;
+// Only spaces and tabs may follow a closing fence, as in CommonMark: a non-breaking space makes it a content line.
+const FENCE_CLOSE = /^ {0,3}(`+|~+|\$+)[ \t]*$/;
 
 interface Line {
   text: string;
@@ -255,7 +256,8 @@ export function replyBlocks(source: string): ReplyBlock[] {
 export function fenceLines(source: string): string[] {
   const lines = [...linesOf(source)].map((line) => ({ text: line.text, ending: source.slice(line.start + line.text.length, line.next) }));
   const out = lines.map((line) => line.text + line.ending);
-  if (!source.includes("$$") || RAW_HTML.test(source)) return out;
+  // A byte order mark hides a first-line fence from this scan, though not from the parser: leave such a reply as it is.
+  if (!source.includes("$$") || RAW_HTML.test(source) || source.startsWith("\uFEFF")) return out;
   // The top-level code fence or display block that's open, if any.
   let code: ((line: string) => boolean) | undefined;
   let math: number | undefined;
@@ -269,7 +271,8 @@ export function fenceLines(source: string): string[] {
         math = undefined;
       } else {
         const run = closingRun(text, math);
-        if (run) {
+        // Dollars inside TeX that takes literal text (`\verb|$$|`, `\text{a$$ b}`, an `\href` URL) aren't a fence.
+        if (run && !insideTexArgument(text.slice(0, run.start))) {
           const before = text.slice(0, run.start);
           const after = asText(text.slice(run.end).trim());
           out[i] = (before.trim() ? before + newline : "") + text.slice(run.start, run.end) + (after ? newline + after : "") + ending;
@@ -305,6 +308,18 @@ const BLOCK_START = new RegExp(
 function asText(text: string): string {
   if (!BLOCK_START.test(text)) return text;
   return /^\d/.test(text) ? text.replace(/^(\d+)/, "$1\\") : `\\${text}`;
+}
+
+/** Whether text before a `$$` leaves a TeX argument or `\verb` open, so the dollars are part of the formula. */
+function insideTexArgument(before: string): boolean {
+  if (/\\verb\*?/.test(before)) return true;
+  let depth = 0;
+  for (let i = 0; i < before.length; i++) {
+    if (before[i] === "\\") i++;
+    else if (before[i] === "{") depth++;
+    else if (before[i] === "}") depth = Math.max(0, depth - 1);
+  }
+  return depth > 0;
 }
 
 /** The first run of at least `size` dollars that no backslash escapes. */

@@ -289,7 +289,7 @@ describe("MathText display fences in lists and quotes", () => {
   // HTML as a single parse, so the splitter agrees with the parser on the normalised text. Only a display block at
   // the top level is separated: one in a list item or a quote is left as written (`unchanged`), and so keeps the
   // KaTeX error it had (`error`), as telling its lines from code there needs the parser's container rules.
-  it.each<[string, string, { code?: string[]; math?: string[]; text?: string[]; unchanged?: boolean; error?: boolean }]>([
+  it.each<[string, string, { code?: string[]; math?: string[]; text?: string[]; unchanged?: boolean; error?: boolean; startOnly?: boolean }]>([
     ["a fence opened on a list marker", "- ```\n  $$\n  x$$ tail\n  ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
     ["a fence in a quote", "> ```\n> $$\n> x$$ tail\n> ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
     ["a fence in a quote in a list item", "- > ```\n  > $$\n  > x$$ tail\n  > ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
@@ -298,6 +298,16 @@ describe("MathText display fences in lists and quotes", () => {
     ["a formula a dedent ends", "- a\n  $$\n  x\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
     ["a formula the end of a quote ends", "> $$\n> x\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
     ["a formula in a nested list item", "- parent\n  - child\n    $$\n    x$$ tail", { unchanged: true, error: true }],
+    // Sol's redesign review: only spaces and tabs close a fence; a BOM hides a first-line fence from the scan;
+    // dollars inside TeX that takes literal text belong to the formula.
+    ["a fence a non-breaking space doesn't close", "```\n```\u00a0\n$$\nx$$ tail\n```", { code: ["```\u00a0\n$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence a form feed doesn't close", "```\n```\f\n$$\nx$$ tail\n```", { code: ["```\f\n$$\nx$$ tail\n"], unchanged: true }],
+    // A byte order mark only counts at the very start, so this one isn't compared with text put before it.
+    ["a fence after a byte order mark", "\uFEFF```\n$$\nx$$ tail\n```", { code: ["$$\nx$$ tail\n"], unchanged: true, startOnly: true }],
+    ["dollars in \\verb", "$$\n\\verb|$$|\n$$", { math: ["\\verb|$$|"], unchanged: true }],
+    ["dollars in \\text", "$$\n\\text{a$$ b}\n$$", { math: ["\\text{a$$ b}"], unchanged: true }],
+    ["dollars in an \\href URL", "$$\n\\href{https://e.com/?q=$$}{x}\n$$", { math: ["\\href{https://e.com/?q=$$}{x}"], unchanged: true }],
+    ["a closing `$$` after a closed \\text", "$$\n\\text{a} x$$ tail", { math: ["\\text{a} x"], text: ["tail"] }],
     ["a formula in a quote", "> $$\n> x$$ tail", { unchanged: true, error: true }],
     ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { unchanged: true, error: true }],
     ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { text: ["b"], unchanged: true, error: true }],
@@ -349,6 +359,7 @@ describe("MathText display fences in lists and quotes", () => {
     expect(codes(c)).toEqual(want.code ?? []);
     expect(formulas(c)).toEqual(want.math ?? []);
     for (const t of want.text ?? []) expect([...c.querySelectorAll("p, li")].some((p) => p.textContent?.trim().endsWith(t))).toBe(true);
+    if (want.startOnly) return;
     expect(normal(c.innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${text}`).innerHTML));
     const prose = `one\n\n${text}\n\nlast`;
     expect(normal(block(prose).innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${prose}`).innerHTML));
