@@ -244,6 +244,7 @@ function Chat({
   const stopRequested = useRef(false);
   const messageInput = useRef<HTMLInputElement>(null);
   const [stopError, setStopError] = useState<string>();
+  const [continuationFailure, setContinuationFailure] = useState<string>();
   const continuationStopId = useRef<string | undefined>(undefined);
   const continuationResponse = useRef(false);
   const checkVersion = useRef(0);
@@ -272,7 +273,10 @@ function Chat({
           if (response.status === 204) await reconcile(expected);
           checking.current = false;
           const failure = response.headers.get("x-mivra-continuation-error");
-          if (failure) throw new Error(failure);
+          if (failure) {
+            setContinuationFailure(failure);
+            if (response.status === 204) throw new Error(failure);
+          }
         } else if (response.ok) {
           // Bindings come from acceptance on the server, including during a long-running reply.
           await documentsRef.current.refresh();
@@ -411,6 +415,7 @@ function Chat({
     if (!text || busy) return;
     stopRequested.current = false;
     setStopError(undefined);
+    setContinuationFailure(undefined);
     generation.current++;
     checkVersion.current++;
     pendingCheck.current = false;
@@ -429,7 +434,7 @@ function Chat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Conversation instance={conversation} initial="instant" resize="instant" className="min-h-0 min-w-0">
+      <Conversation aria-busy={busy} instance={conversation} initial="instant" resize="instant" className="min-h-0 min-w-0">
         {/* Positioned, so sr-only artifact text cannot stretch or scroll the outer interface. */}
         <ConversationContent className="relative mx-auto max-w-3xl gap-4 p-4"
           scrollClassName="overflow-y-auto overscroll-contain [scrollbar-gutter:auto]!"
@@ -488,7 +493,7 @@ function Chat({
           ))}
           {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
           {stopError && <p className="text-destructive">{stopError}</p>}
-          {error && <p className="text-destructive">{readableError(error)}</p>}
+          {(error || continuationFailure) && <p className="text-destructive">{error ? readableError(error) : continuationFailure}</p>}
         </ConversationContent>
         <ConversationScrollButton aria-label="Scroll to bottom" onClick={() => void conversation.scrollToBottom("instant")} />
       </Conversation>

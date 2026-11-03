@@ -814,3 +814,40 @@ it("replays the full redacted continuation to a late subscriber and finishes wit
     db.$client.close();
   }
 });
+
+it("recovers an interrupted continuation once on concurrent subscription, retaining the failure", async () => {
+  const { app, db } = setup([{ toolCall: { name: "ask_multiple_choice", input: check } }, { text: "Try it." }]);
+  const id = await newSession(app);
+  await turn(app, db, id, "quiz");
+  const store = createSessionStore(db);
+  const artifact = db.select().from(artifacts).get()!;
+  store.createAttempt({ artifactId: artifact.id, sessionId: id, answer: { optionIndex: 1 }, grade: { correct: true, correctOptionIndex: 1, explanation: "Five." }, correct: true });
+  const interrupted = store.startContinuation(id, ["multiple_choice"])!;
+  expect(store.startContinuation(id, ["multiple_choice"])).toBeUndefined();
+  // A new app over the same durable database performs startup recovery, without an old pump.
+  const restarted = setup([{ text: "Recovered lesson." }], db);
+  expect(store.latestRun(id)).toMatchObject({ id: interrupted.id, status: "failed" });
+  const responses = await Promise.all(Array.from({ length: 4 }, () =>
+    restarted.app.request(`/api/sessions/${id}/continuation`, { headers: auth })));
+  expect(responses.some(r => r.headers.get("x-mivra-continuation-error") === "The model request failed.")).toBe(true);
+  await Promise.all(responses.map(r => r.text()));
+  expect(db.select().from(runs).all().map(r => r.status)).toEqual(["completed", "failed", "completed"]);
+  expect(db.select().from(runs).where(eq(runs.id, interrupted.id)).get()).toMatchObject({
+    continuationOf: null, error: "The server stopped before the reply finished",
+  });
+  expect(restarted.model.doStreamCalls).toHaveLength(1);
+  expect(await messagesJson(restarted.app, id)).toContain("Recovered lesson.");
+  expect((await restarted.app.request(`/api/sessions/${id}/continuation`, { headers: auth })).status).toBe(204);
+  expect(store.startContinuation(id, ["multiple_choice"])).toBeUndefined();
+  expect(restarted.model.doStreamCalls).toHaveLength(1);
+  // Cancellation is a terminal claim, even if the source quiz is still fully answered.
+  const cancelledSession = store.createSession();
+  const source = store.startRun(cancelledSession, userMessage("quiz"));
+  const cancelledCheck = store.createArtifact({ sessionId: cancelledSession.id, runId: source, toolCallId: "cancel-check", kind: "multiple_choice", version: 1, spec: check });
+  store.finishRun(source, cancelledSession.id, "completed");
+  store.createAttempt({ sessionId: cancelledSession.id, artifactId: cancelledCheck.id, answer: {}, grade: {}, correct: true });
+  const cancelled = store.startContinuation(cancelledSession.id, ["multiple_choice"])!;
+  store.finishRun(cancelled.id, cancelledSession.id, "cancelled");
+  expect(store.startContinuation(cancelledSession.id, ["multiple_choice"])).toBeUndefined();
+  db.$client.close();
+});

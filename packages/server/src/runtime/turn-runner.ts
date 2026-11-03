@@ -17,6 +17,7 @@ import {
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
+import { createContinuationStream } from "./continuation-stream.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
@@ -190,14 +191,20 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
     controller: AbortController;
     stopId: string;
     continuation: boolean;
-    chunks: UIMessageChunk[];
-    subscribers: Set<ReadableStreamDefaultController<UIMessageChunk>>;
+    broadcast: ReturnType<typeof createContinuationStream>;
   };
   const active = new Map<string, ActiveTurn>();
   // A Stop can overtake the chat POST. Remember its message id, with a fixed bound on stale ids.
   const stopped = new Set<string>();
   const runner = {
-    subscribeContinuation(sessionId: string) {
+    async subscribeContinuation(sessionId: string) {
+      const previous = store.latestRun(sessionId);
+      const failure: Record<string, string> = previous?.continuationOf && previous.status === "failed"
+        ? { "x-mivra-continuation-error": "The model request failed." } : {};
+      // Session load/focus/visibility is the retry trigger. No retry loop runs in the background.
+      if (!active.has(sessionId) && previous?.continuationOf && previous.status === "failed") {
+        await runner.continueAfterAnswer(sessionId);
+      }
       const run = active.get(sessionId);
       if (!run?.continuation) {
         // A tab may have missed the entire run while hidden, including a failure before streaming.
@@ -206,20 +213,12 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
           status: 204,
           headers: latest?.continuationOf && latest.status === "failed"
             ? { "x-mivra-continuation-error": "The model request failed." }
-            : {},
+            : failure,
         });
       }
-      let subscriber: ReadableStreamDefaultController<UIMessageChunk>;
-      const stream = new ReadableStream<UIMessageChunk>({
-        start(controller) {
-          subscriber = controller;
-          // Registration and replay are synchronous: no gap between buffered and live chunks.
-          for (const chunk of run.chunks) controller.enqueue(chunk);
-          run.subscribers.add(controller);
-        },
-        cancel() { run.subscribers.delete(subscriber); },
-      });
-      return createUIMessageStreamResponse({ stream, headers: { "x-mivra-continuation-stop-id": run.stopId } });
+      return createUIMessageStreamResponse({ stream: run.broadcast.subscribe(), headers: {
+        ...failure, "x-mivra-continuation-stop-id": run.stopId,
+      } });
     },
     async continueAfterAnswer(sessionId: string) {
       try {
@@ -230,12 +229,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
           const turn = active.get(sessionId);
           active.delete(sessionId);
           if (turn?.continuation) {
-            for (const subscriber of turn.subscribers) {
-              subscriber.enqueue({ type: "error", errorText: publicErrorText(error) });
-              subscriber.close();
-            }
-            turn.subscribers.clear();
-            turn.chunks.length = 0;
+            turn.broadcast.push({ type: "error", errorText: publicErrorText(error) });
+            turn.broadcast.close();
           }
           store.finishRun(run.id, sessionId, "failed", undefined, errorText(error));
         }
@@ -287,17 +282,14 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       // Automatic turns share the originating learner message in storage, but Stop must target
       // this run alone: a delayed Stop must never cancel the next automatically generated quiz.
       const stopId = continuation ? runId : message.id;
-      const activeTurn: ActiveTurn = { controller: cancellation, stopId, continuation, chunks: [], subscribers: new Set() };
+      const activeTurn: ActiveTurn = { controller: cancellation, stopId, continuation, broadcast: createContinuationStream() };
       active.set(sessionId, activeTurn);
       if (stopped.delete(JSON.stringify([sessionId, stopId]))) cancellation.abort();
       const signal = abortSignal ? AbortSignal.any([abortSignal, cancellation.signal]) : cancellation.signal;
       const cancelledBeforeStream = (): StartTurnResult => {
         active.delete(sessionId);
-        for (const subscriber of activeTurn.subscribers) {
-          subscriber.enqueue({ type: "abort" });
-          subscriber.close();
-        }
-        activeTurn.subscribers.clear();
+        activeTurn.broadcast.push({ type: "abort" });
+        activeTurn.broadcast.close();
         store.finishRun(runId, sessionId, "cancelled");
         store.bindDocuments(sessionId, message.id, readyDocumentIds);
         return { ok: true, response: createUIMessageStreamResponse({
@@ -326,11 +318,8 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         if (signal.aborted) return cancelledBeforeStream();
         active.delete(sessionId);
         store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
-        for (const subscriber of activeTurn.subscribers) {
-          subscriber.enqueue({ type: "error", errorText: "Couldn't start the reply." });
-          subscriber.close();
-        }
-        activeTurn.subscribers.clear();
+        activeTurn.broadcast.push({ type: "error", errorText: "Couldn't start the reply." });
+        activeTurn.broadcast.close();
         // Plugin or context code failed; its message isn't known to be safe to show.
         return { ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } };
       }
@@ -409,21 +398,16 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
         void (async () => {
           try {
             for await (const chunk of clientStream) {
-              activeTurn.chunks.push(chunk);
-              for (const subscriber of activeTurn.subscribers) subscriber.enqueue(chunk);
+              activeTurn.broadcast.push(chunk);
             }
           } catch (error) {
             if (store.latestRun(sessionId)?.id === runId && store.latestRun(sessionId)?.status === "running") {
               active.delete(sessionId);
               store.finishRun(runId, sessionId, "failed", undefined, errorText(error));
             }
-            for (const subscriber of activeTurn.subscribers) {
-              subscriber.enqueue({ type: "error", errorText: publicErrorText(error) });
-            }
+            activeTurn.broadcast.push({ type: "error", errorText: publicErrorText(error) });
           } finally {
-            for (const subscriber of activeTurn.subscribers) subscriber.close();
-            activeTurn.subscribers.clear();
-            activeTurn.chunks.length = 0;
+            activeTurn.broadcast.close();
           }
         })();
         return { ok: true, response: new Response(null, { status: 204 }) };

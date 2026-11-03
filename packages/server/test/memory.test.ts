@@ -140,7 +140,7 @@ describe("remember", () => {
   });
 
   it("links a misconception to a wrong answer on the same concept, whatever the model claims", async () => {
-    const { db, turn, newSession, list, send } = setup([
+    const { db, app, turn, newSession, list, send } = setup([
       remember({ kind: "misconception", text: "No evidence yet", concept: "binary search" }),
       { text: "Noted." },
       { tool: "ask_multiple_choice", input: check },
@@ -153,14 +153,16 @@ describe("remember", () => {
     await turn(session, "chat first");
     await turn(session, "quiz me");
     await send(`/api/artifacts/${db.select().from(artifacts).get()!.id}/attempts`, "POST", { answer: { optionIndex: 0 } });
-    await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true));
+    // Draining the server-owned stream coordinates with durable onEnd, without a timing wait.
+    await (await app.request(`/api/sessions/${session}/continuation`, { headers: auth })).text();
+    expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true);
 
     const byText = Object.fromEntries((await list()).map((m) => [m.text, m.basis]));
     expect(byText).toEqual({ "No evidence yet": "chat", "Thinks four comparisons suffice": "wrong_answer", "Other concept": "chat" });
   });
 
   it("doesn't count a correct answer as support for a misconception", async () => {
-    const { db, turn, newSession, list, send } = setup([
+    const { db, app, turn, newSession, list, send } = setup([
       { tool: "ask_multiple_choice", input: check },
       { text: "Try it." },
       remember({ kind: "misconception", text: "Not backed by anything", concept: "binary search" }),
@@ -169,7 +171,9 @@ describe("remember", () => {
     const session = await newSession();
     await turn(session, "quiz me");
     await send(`/api/artifacts/${db.select().from(artifacts).get()!.id}/attempts`, "POST", { answer: { optionIndex: 1 } });
-    await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true));
+    // Draining the server-owned stream coordinates with durable onEnd, without a timing wait.
+    await (await app.request(`/api/sessions/${session}/continuation`, { headers: auth })).text();
+    expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true);
     expect((await list()).map((m) => m.basis)).toEqual(["chat"]);
   });
 
@@ -214,7 +218,9 @@ describe("memory written around an unanswered check", () => {
 
     await send(`/api/artifacts/${db.select().from(artifacts).get()!.id}/attempts`, "POST", { answer: { optionIndex: 0 } });
     expect(await list()).toMatchObject([{ held: false, text: leak.text }]);
-    await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true));
+    // Draining the server-owned stream coordinates with durable onEnd, without a timing wait.
+    await (await app.request(`/api/sessions/${session}/continuation`, { headers: auth })).text();
+    expect(db.select().from(runs).where(eq(runs.sessionId, session)).all().every(r => r.status !== "running")).toBe(true);
     await turn(await newSession(), "hello again");
     expect(promptOf(4)).toContain("SECRET"); // Released for the automatic continuation.
     expect(promptOf(5)).toContain("SECRET");

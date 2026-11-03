@@ -139,10 +139,20 @@ export function createSessionStore(db: Db) {
     /** Claims an automatic continuation once, only for the latest completed, fully answered quiz reply. */
     startContinuation(sessionId: string, checkKinds: string[]) {
       return db.transaction(tx => {
-        const source = tx.select().from(runs).where(eq(runs.sessionId, sessionId)).orderBy(desc(sql`rowid`)).get();
+        const latest = tx.select().from(runs).where(eq(runs.sessionId, sessionId)).orderBy(desc(sql`rowid`)).get();
+        // Keep failed attempts (and their errors), but transfer their unique logical claim to a
+        // fresh run. A newer learner turn, cancellation or completion must never be retried.
+        const retry = latest?.status === "failed" && latest.continuationOf ? latest : undefined;
+        const source = retry
+          ? tx.select().from(runs).where(eq(runs.id, retry.continuationOf!)).get()
+          : latest;
+        const latestCompleted = tx.select({ id: runs.id }).from(runs)
+          .where(and(eq(runs.sessionId, sessionId), eq(runs.status, "completed"))).orderBy(desc(sql`rowid`)).get();
+        if (source?.id !== latestCompleted?.id) return;
         if (!source || source.status !== "completed" || checkKinds.length === 0) return;
         const checks = tx.select().from(artifacts).where(and(eq(artifacts.runId, source.id), inArray(artifacts.kind, checkKinds))).all();
         if (checks.length === 0 || checks.some(a => !tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, a.id)).get())) return;
+        if (retry) tx.update(runs).set({ continuationOf: null }).where(eq(runs.id, retry.id)).run();
         if (tx.select({ id: runs.id }).from(runs).where(eq(runs.continuationOf, source.id)).get()) return;
         const row = { id: randomUUID(), sessionId, userMessageId: source.userMessageId,
           continuationOf: source.id, status: "running" as const, startedAt: new Date() };
