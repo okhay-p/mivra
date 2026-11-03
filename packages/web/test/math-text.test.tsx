@@ -223,11 +223,16 @@ describe("MathText display fences that share a line with text", () => {
     expect(paragraphs(c)).toEqual(["and so on"]);
   });
 
-  it("keeps a display block in a list item", () => {
-    const c = block("- a\n  $$\n  x$$ tail\n- b");
-    expect(c.querySelectorAll("ul > li")).toHaveLength(2);
-    expect(formulas(c)).toEqual(["x"]);
-    expect(c.querySelector("li")?.textContent).toContain("tail");
+  it("keeps the formula's own indented lines", () => {
+    const c = block("$$\n\\begin{aligned}\n  a &= b\n  c &= d\n\\end{aligned}$$ So both hold.");
+    expect(formulas(c)).toEqual(["\\begin{aligned}\n  a &= b\n  c &= d\n\\end{aligned}"]);
+    expect(paragraphs(c)).toEqual(["So both hold."]);
+  });
+
+  it("leaves a display block in a list item as written", () => {
+    const text = "- a\n  $$\n  x$$ tail\n- b";
+    expect(separateDisplayFences(text)).toBe(text);
+    expect(block(text).querySelectorAll("ul > li")).toHaveLength(2);
   });
 
   it("leaves `$$` in code alone", () => {
@@ -280,9 +285,11 @@ describe("MathText display fences in lists and quotes", () => {
   const normal = (html: string) => html.replace(/<\/?div[^>]*>|\s+/g, "");
   const codes = (c: Element) => [...c.querySelectorAll("pre code")].map((code) => code.textContent);
 
-  // Each case is checked through the real pipeline: the code blocks and formulas it should produce, no KaTeX error,
-  // and the same HTML as a single parse, so the splitter agrees with the parser on the normalised text.
-  it.each<[string, string, { code?: string[]; math?: string[]; text?: string[]; unchanged?: boolean }]>([
+  // Each case is checked through the real pipeline: the code blocks and formulas it should produce, and the same
+  // HTML as a single parse, so the splitter agrees with the parser on the normalised text. Only a display block at
+  // the top level is separated: one in a list item or a quote is left as written (`unchanged`), and so keeps the
+  // KaTeX error it had (`error`), as telling its lines from code there needs the parser's container rules.
+  it.each<[string, string, { code?: string[]; math?: string[]; text?: string[]; unchanged?: boolean; error?: boolean }]>([
     ["a fence opened on a list marker", "- ```\n  $$\n  x$$ tail\n  ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
     ["a fence in a quote", "> ```\n> $$\n> x$$ tail\n> ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
     ["a fence in a quote in a list item", "- > ```\n  > $$\n  > x$$ tail\n  > ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
@@ -290,43 +297,55 @@ describe("MathText display fences in lists and quotes", () => {
     ["a formula the next list item ends", "- a\n  $$\n  x\n- b\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
     ["a formula a dedent ends", "- a\n  $$\n  x\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
     ["a formula the end of a quote ends", "> $$\n> x\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
-    ["a formula in a nested list item", "- parent\n  - child\n    $$\n    x$$ tail", { math: ["x"], text: ["tail"] }],
-    ["a formula in a quote", "> $$\n> x$$ tail", { math: ["x"], text: ["tail"] }],
-    ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { math: ["x + y\n= z"], text: ["after"] }],
-    ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { math: ["x"], text: ["tail", "b"] }],
-    ["a formula after a lazy line", "- a\nb\n  $$\n  x$$ tail", { math: ["x"], text: ["tail"] }],
-    ["a formula in a quote in a list item", "- > $$\n  > x$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula in a nested list item", "- parent\n  - child\n    $$\n    x$$ tail", { unchanged: true, error: true }],
+    ["a formula in a quote", "> $$\n> x$$ tail", { unchanged: true, error: true }],
+    ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { unchanged: true, error: true }],
+    ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { text: ["b"], unchanged: true, error: true }],
+    ["a formula after a lazy line", "- a\nb\n  $$\n  x$$ tail", { unchanged: true, error: true }],
+    ["a formula in a quote in a list item", "- > $$\n  > x$$ tail", { unchanged: true, error: true }],
     ["a formula a blank line ends in a quote", "> $$\n> x\n\n> y$$ z", { math: ["x"], text: ["y$$ z"], unchanged: true }],
-    ["a formula after a blank line in a list item in a quote", "> - a\n>\n>   $$\n>   x$$ tail", { math: ["x"], text: ["tail"] }],
-    ["a formula after indented code", "    $$\n    x\n$$\ny$$ tail", { code: ["$$\nx\n"], math: ["y"], text: ["tail"] }],
+    ["a formula after a blank line in a list item in a quote", "> - a\n>\n>   $$\n>   x$$ tail", { unchanged: true, error: true }],
+    // An indented `$$` could open a block at the top level or in a list item, so nothing after it is touched.
+    ["a formula after indented code", "    $$\n    x\n$$\ny$$ tail", { code: ["$$\nx\n"], unchanged: true, error: true }],
+    // Here the indented `$$` is top level, so the column-0 one closes it and `y$$ tail` is a paragraph.
+    ["a formula after an indented `$$`", "a\n  $$\nx\n\n$$\ny$$ tail", { math: ["x"], text: ["y$$ tail"], unchanged: true }],
     ["a list marker after the closing `$$`", "$$\nx$$ 1. next", { math: ["x"], text: ["1. next"] }],
     ["a `$$` after the closing `$$`", "$$\nx$$ $$ y", { math: ["x"], text: ["$$ y"] }],
-    ["a quote marker after the closing `$$`", "- $$\n  x$$ > y", { math: ["x"], text: ["> y"] }],
-    ["a fence closed in a list item", "- ```\n  a\n  ```\n  $$\n  x$$ tail", { code: ["a\n"], math: ["x"], text: ["tail"] }],
+    ["a quote marker after the closing `$$`", "$$\nx$$ > y", { math: ["x"], text: ["> y"] }],
+    ["a quote marker after the closing `$$` in a list item", "- $$\n  x$$ > y", { unchanged: true, error: true }],
+    ["a fence closed in a list item", "- ```\n  a\n  ```\n  $$\n  x$$ tail", { code: ["a\n"], unchanged: true, error: true }],
+    // A block at column 0 is top level whatever comes before it, as it can't continue a list item lazily.
+    ["a formula after a list item", "- a\n$$\nx$$ tail", { math: ["x"], text: ["a", "tail"] }],
+    ["a formula after a quote", "> a\n$$\nx$$ tail", { math: ["x"], text: ["a", "tail"] }],
+    ["a formula after a table", "| a |\n|---|\n$$\nx$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula after a fence in a list item", "- ```\n$$\nx$$ tail", { code: [""], math: ["x"], text: ["tail"] }],
+    ["a formula after a formula in a quote", "> $$\n> x\n$$\ny$$ tail", { math: ["x", "y"], text: ["tail"] }],
     // The parser ends the empty item at the blank line, and then reads each line as its own indented code.
     ["indented code after an empty item", "-\n\n    $$\n    x$$ tail", { code: ["$$\n", "x$$ tail\n"], unchanged: true }],
     ["a fence in an item after a setext heading", "- a\n  ===\n  2. ```\n     $$\n     x$$ tail\n     ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
     ["a fence in an item after a `-` underline", "- a\n  -\n  2. ```\n     $$\n     x$$ tail\n     ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
-    // After indented code, the parser takes `2. ` for text, as it would after a paragraph.
-    ["a numbered line after indented code", "    a\n\n2. ```\n   $$\n   x$$ tail", { code: ["a\n"], math: ["x"], text: ["tail"] }],
+    ["a fence in an item after indented code in a quote", ">\n    a\n2. ```\n   $$\n   x$$ tail\n   ```", { code: ["a\n", "$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in an item after a table with an escaped backslash", "- a\\\\|b\n  |---|---|\n  2. ```\n     $$\n     x$$ tail\n     ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a numbered line after indented code", "    a\n\n2. ```\n   $$\n   x$$ tail", { code: ["a\n"], unchanged: true, error: true }],
     ["a numbered line after a quote and a blank line of spaces", "> a\n     \nb\n10. $$ x\ny tail", { text: ["y tail"], unchanged: true }],
-    // A table can't continue lazily, so `b` ends the item, and the empty item can't interrupt its paragraph.
     ["a line after a table in a list item", "* a\n  |---|\nb\n1)\n      $$ x", { text: ["$$ x"], unchanged: true }],
-    // Once a line can't start a numbered item, no container it opens can.
     ["a numbered line in a quote after indented code", "    a\n\n> 2. $$ x", { code: ["a\n"], text: ["2. $$ x"], unchanged: true }],
     ["a numbered line in a list item after a paragraph", "a\n- 2. $$ x", { text: ["2. $$ x"], unchanged: true }],
     ["a numbered line after a row indented past a table's", "a\n     ---|\n2. $$ x", { text: ["2. $$ x"], unchanged: true }],
-    ["a formula in a quote after an empty item", ">-\n  > $$\n  > x$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula in a quote after an empty item", ">-\n  > $$\n  > x$$ tail", { unchanged: true, error: true }],
     ["a definition after the closing `$$`", "$$\nx$$ [a]: https://example.com", { math: ["x"], text: ["[a]: https://example.com"] }],
     ["a definition label left open after the closing `$$`", "$$\nx$$ [a\n]: https://example.com", { math: ["x"], text: ["]: https://example.com"] }],
     ["an HTML tag after the closing `$$`", "$$\nx$$ <div>\n$$\ny\n$$", { math: ["x", "y"], text: ["<div>"] }],
     ["an autolink after the closing `$$`", "$$\nx$$ <https://example.com>", { math: ["x"], text: ["https://example.com"] }],
+    ["a fence after the closing `$$`", "$$\nx$$ ```\n$$\ny$$ tail", { math: ["x", "y"], text: ["```", "tail"] }],
+    ["a top-level fence holding a display block", "```\n$$\nx$$ tail\n```\n$$\ny$$ tail", { code: ["$$\nx$$ tail\n"], math: ["y"], text: ["tail"] }],
   ])("normalises %s as the parser reads it", (_name, text, want) => {
     const normalised = separateDisplayFences(text);
     if (want.unchanged) expect(normalised).toBe(text);
+    else expect(normalised).not.toBe(text);
     expect(separateDisplayFences(normalised)).toBe(normalised);
     const c = block(text);
-    expect(c.querySelector(".katex-error")).toBeNull();
+    expect(c.querySelector(".katex-error") !== null).toBe(want.error ?? false);
     expect(codes(c)).toEqual(want.code ?? []);
     expect(formulas(c)).toEqual(want.math ?? []);
     for (const t of want.text ?? []) expect([...c.querySelectorAll("p, li")].some((p) => p.textContent?.trim().endsWith(t))).toBe(true);
