@@ -261,8 +261,9 @@ export function fenceLines(source: string): string[] {
   // The top-level code fence or display block that's open, if any.
   let code: ((line: string) => boolean) | undefined;
   let math: number | undefined;
-  // The open display block's TeX so far, to tell a closing `$$` from dollars inside TeX.
-  let body = "";
+  // What the open display block's TeX so far leaves open, to tell a closing `$$` from dollars inside TeX. Kept as
+  // running state, so each line is read once, however long the block.
+  let tex: TexState = PLAIN;
   for (const [i, { text, ending }] of lines.entries()) {
     const newline = ending || "\n";
     if (code) {
@@ -275,13 +276,13 @@ export function fenceLines(source: string): string[] {
         const run = closingRun(text, math);
         // Dollars inside TeX (`\verb|$$|`, `\text{a$$ b}` even across lines, an `\href` URL, a `%` comment) aren't
         // a fence. If the block's TeX up to the run leaves any of those open, the block is left as written.
-        if (run && texIsPlain(body + text.slice(0, run.start))) {
+        if (run && isPlain(readTex(tex, text.slice(0, run.start)))) {
           const before = text.slice(0, run.start);
           const after = asText(text.slice(run.end).trim());
           out[i] = (before.trim() ? before + newline : "") + text.slice(run.start, run.end) + (after ? newline + after : "") + ending;
           math = undefined;
         } else {
-          body += text + "\n";
+          tex = readTex(tex, text);
         }
       }
     } else if (/^[ \t]/.test(text)) {
@@ -295,7 +296,7 @@ export function fenceLines(source: string): string[] {
       if (open) {
         const [, fence, rest] = open as unknown as [string, string, string];
         math = fence.length;
-        body = rest ? rest + "\n" : "";
+        tex = rest ? readTex(PLAIN, rest) : PLAIN;
         if (rest) out[i] = fence + newline + rest + ending;
       }
     }
@@ -316,20 +317,38 @@ function asText(text: string): string {
   return /^\d/.test(text) ? text.replace(/^(\d+)/, "$1\\") : `\\${text}`;
 }
 
-/** Whether a display block's TeX up to a `$$` is plain: no `\verb`, no comment, and every brace closed. */
-function texIsPlain(tex: string): boolean {
-  // `\verb` takes any delimiter, so its end can't be found reliably: any `\verb` makes the block uncertain.
-  if (/\\verb/.test(tex)) return false;
-  let depth = 0;
-  for (let i = 0; i < tex.length; i++) {
-    if (tex[i] === "\\") i++;
-    // A comment runs to the end of its line, possibly hiding the dollars and any text after them.
-    else if (tex[i] === "%") return false;
-    else if (tex[i] === "{") depth++;
-    else if (tex[i] === "}") depth = Math.max(0, depth - 1);
-  }
-  return depth === 0;
+/** What a display block's TeX so far leaves open: unclosed braces, or something whose end can't be found. */
+interface TexState {
+  depth: number;
+  uncertain: boolean;
 }
+const PLAIN: TexState = { depth: 0, uncertain: false };
+
+// Commands after which literal text, and so dollars, can run to a delimiter this scan can't find: `\verb` takes any
+// delimiter, and a macro defined with `\def` and its relatives can take an argument up to any text at all.
+const UNCERTAIN_COMMANDS = new Set(["verb", "def", "gdef", "edef", "xdef", "let", "futurelet", "newcommand", "renewcommand", "providecommand", "catcode", "csname"]);
+
+/** Reads more of a display block's TeX. A `%` comment can hide the dollars and text after it, so it is uncertain too. */
+function readTex(state: TexState, text: string): TexState {
+  if (state.uncertain) return state;
+  let depth = state.depth;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\\") {
+      let end = i + 1;
+      while (end < text.length && /[a-zA-Z]/.test(text[end]!)) end++;
+      if (UNCERTAIN_COMMANDS.has(text.slice(i + 1, end))) return { depth, uncertain: true };
+      // A control word, or the one character a backslash escapes.
+      i = end > i + 1 ? end - 1 : i + 1;
+    } else if (c === "%") return { depth, uncertain: true };
+    else if (c === "{") depth++;
+    else if (c === "}") depth = Math.max(0, depth - 1);
+  }
+  return { depth, uncertain: false };
+}
+
+/** Whether a `$$` after this TeX can only be the closing fence: every brace closed and nothing uncertain. */
+const isPlain = (state: TexState) => !state.uncertain && state.depth === 0;
 
 /** The first run of at least `size` dollars that no backslash escapes. */
 function closingRun(line: string, size: number): { start: number; end: number } | undefined {

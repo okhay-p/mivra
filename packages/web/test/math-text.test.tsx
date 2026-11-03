@@ -315,6 +315,9 @@ describe("MathText display fences in lists and quotes", () => {
     ["dollars in a comment", "$$\nx % $$ hidden comment\n$$", { math: ["x % $$ hidden comment"], unchanged: true }],
     ["dollars after a comment on an earlier line", "$$\nx % note\ny$$ tail", { unchanged: true, error: true }],
     ["a closing `$$` after an escaped percent", "$$\n50\\% x$$ tail", { math: ["50\\% x"], text: ["tail"] }],
+    // Round 3: a macro defined in the formula can take its argument up to any text, dollars included.
+    ["dollars in a \\def macro's argument", "$$\n\\def\\foo#1!{\\text{#1}}\\foo a$$ b!\n$$", { math: ["\\def\\foo#1!{\\text{#1}}\\foo a$$ b!"], unchanged: true }],
+    ["dollars after a \\newcommand", "$$\n\\newcommand{\\x}{1} x$$ tail", { unchanged: true, error: true }],
     ["a formula in a quote", "> $$\n> x$$ tail", { unchanged: true, error: true }],
     ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { unchanged: true, error: true }],
     ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { text: ["b"], unchanged: true, error: true }],
@@ -370,6 +373,16 @@ describe("MathText display fences in lists and quotes", () => {
     expect(normal(c.innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${text}`).innerHTML));
     const prose = `one\n\n${text}\n\nlast`;
     expect(normal(block(prose).innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${prose}`).innerHTML));
+  });
+});
+
+describe("separating display fences in a long block", () => {
+  // Sol, round 3: re-reading the whole block at every candidate `$$` took over 9 s on the main thread.
+  it("reads each line once, however many dollar runs the block holds", () => {
+    const text = "$$\n\\text{\n" + "a$$\n".repeat(8000) + "}\n$$";
+    const started = performance.now();
+    expect(separateDisplayFences(text)).toBe(text);
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 
