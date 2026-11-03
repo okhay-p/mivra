@@ -189,6 +189,71 @@ export function splitBlocks(source: string): string[] {
   return blocks;
 }
 
+// A `$$` alone on its line opens a display block that closes only on a line holding nothing but a `$` run at
+// least as long. Models also write the fence's ends on lines with text: `$$ x = 1` (the parser drops the text as
+// the fence's info string) and `x = 1.$$ Next sentence` (the block swallows the rest of the reply). Moving that
+// text onto its own lines makes both layouts mean what they look like. It runs before splitting, so the splitter
+// and the parser see the same fences. Code fences are skipped, and raw HTML can hide a fence, so a reply with any
+// is left alone, as the splitter leaves it in one piece.
+
+const MATH_OPEN_WITH_TEXT = /^( {0,3})(\$\$+)[ \t]*([^$]*?)[ \t]*$/;
+
+/** Moves text that shares a line with a display block's opening or closing `$$` onto lines of its own. */
+export function separateDisplayFences(source: string): string {
+  if (!source.includes("$$") || RAW_HTML.test(source)) return source;
+  let out = "";
+  let code: ((line: string) => boolean) | undefined;
+  let math: { indent: string; size: number } | undefined;
+  for (const line of linesOf(source)) {
+    const ending = source.slice(line.start + line.text.length, line.next);
+    const newline = ending || "\n";
+    let text = line.text;
+    if (code) {
+      if (code(text)) code = undefined;
+    } else if (math) {
+      const close = FENCE_CLOSE.exec(text)?.[1];
+      if (close?.[0] === "$" && close.length >= math.size) {
+        math = undefined;
+      } else {
+        const run = closingRun(text, math.size);
+        if (run) {
+          const before = text.slice(0, run.start);
+          const after = text.slice(run.end).trim();
+          text = (before.trim() ? before + newline : "") + math.indent + text.slice(run.start, run.end) + (after ? newline + math.indent + after : "");
+          math = undefined;
+        }
+      }
+    } else if (FENCE_OPEN.test(text)) {
+      code = opensBlock(text);
+    } else {
+      const open = MATH_OPEN_WITH_TEXT.exec(text);
+      if (open) {
+        const [, indent, fence, rest] = open as unknown as [string, string, string, string];
+        math = { indent, size: fence.length };
+        if (rest) text = indent + fence + newline + indent + rest;
+      }
+    }
+    out += text + ending;
+  }
+  return out;
+}
+
+/** The first run of at least `size` dollars that no backslash escapes. */
+function closingRun(line: string, size: number): { start: number; end: number } | undefined {
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (line[i] !== "$") continue;
+    let end = i;
+    while (line[end] === "$") end++;
+    if (end - i >= size) return { start: i, end };
+    i = end - 1;
+  }
+  return undefined;
+}
+
 function opensBlock(line: string): ((line: string) => boolean) | undefined {
   const delimiter = FENCE_OPEN.exec(line)?.[1] ?? MATH_OPEN.exec(line)?.[1];
   if (!delimiter) return undefined;

@@ -4,7 +4,7 @@ import { Component, isValidElement, memo, useDeferredValue, useMemo, type Compon
 import Markdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { blockSections, isTooDeep, remarkDollarRule, splitBlocks, splitMath } from "./math-syntax.js";
+import { blockSections, isTooDeep, remarkDollarRule, separateDisplayFences, splitBlocks, splitMath } from "./math-syntax.js";
 
 interface MathTextProps {
   /** The text. May be half-written, while a reply streams. */
@@ -149,7 +149,7 @@ const Block = memo(function Block({ text }: { text: string }) {
 function BlockText({ text, className }: { text: string; className: string }) {
   // Keeps typing and scrolling responsive during a long reply: a render that falls behind skips to the latest delta.
   const deferred = useDeferredValue(text);
-  const blocks = useMemo(() => splitBlocks(deferred), [deferred]);
+  const blocks = useMemo(() => splitBlocks(separateDisplayFences(deferred)), [deferred]);
   return (
     <div className={className}>
       {blocks.map((block, i) => (

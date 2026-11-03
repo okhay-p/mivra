@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import katex from "katex";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MathText } from "../src/MathText.js";
-import { isTooDeep, splitBlocks } from "../src/math-syntax.js";
+import { isTooDeep, separateDisplayFences, splitBlocks } from "../src/math-syntax.js";
 
 const block = (text: string) => render(<MathText text={text} />).container;
 const math = (text: string) => render(<MathText text={text} mode="math" />).container;
@@ -183,6 +183,89 @@ describe("MathText dollars in markdown", () => {
     expect(c.textContent).toContain("echo $5 $6");
     expect(c.textContent).toContain("$7 and $8");
     expect(c.textContent).not.toContain("\\");
+  });
+});
+
+describe("MathText display fences that share a line with text", () => {
+  const formula = String.raw`|A\cup B\cup C|=|A|+|B|+|C| -|A\cap B|-|A\cap C|-|B\cap C| +|A\cap B\cap C|.`;
+  const paragraphs = (c: Element) => [...c.querySelectorAll("p")].map((p) => p.textContent?.trim());
+
+  // The four layouts from issue #30.
+  it.each([
+    ["the closing `$$` followed by text", `That gives the formula:\n$$\n${formula}$$ The pairwise overlaps.`],
+    ["a one-line `$$...$$` after a newline", `That gives the formula:\n$$${formula}$$\nThe pairwise overlaps.`],
+    ["`$$...$$` inline in a sentence", `That gives the formula: $$${formula}$$ The pairwise overlaps.`],
+    ["each `$$` on its own line", `That gives the formula:\n$$\n${formula}\n$$\nThe pairwise overlaps.`],
+  ])("renders %s as display maths followed by the text", (_name, text) => {
+    const c = block(text);
+    expect(c.querySelector(".katex-error")).toBeNull();
+    expect(c.querySelector(".katex-display")).not.toBeNull();
+    expect(formulas(c)).toEqual([formula]);
+    expect(c.textContent).toContain("That gives the formula:");
+    expect(c.textContent).toContain("The pairwise overlaps.");
+    expect(c.textContent).not.toContain("$");
+  });
+
+  it("puts the text after the closing `$$` in its own paragraph", () => {
+    const c = block(`Intro:\n$$\n${formula}$$ The pairwise overlaps.`);
+    expect(paragraphs(c)).toEqual(["Intro:", "The pairwise overlaps."]);
+  });
+
+  it("closes the block at a `$$` that ends a line of the formula", () => {
+    const c = block("$$\na +\nb$$\n\nafter");
+    expect(formulas(c)).toEqual(["a +\nb"]);
+    expect(paragraphs(c)).toEqual(["after"]);
+  });
+
+  it("keeps the text on the opening `$$` line, which the parser would drop", () => {
+    const c = block("$$ x + y\n= z\n$$ and so on");
+    expect(formulas(c)).toEqual(["x + y\n= z"]);
+    expect(paragraphs(c)).toEqual(["and so on"]);
+  });
+
+  it("keeps a display block in a list item", () => {
+    const c = block("- a\n  $$\n  x$$ tail\n- b");
+    expect(c.querySelectorAll("ul > li")).toHaveLength(2);
+    expect(formulas(c)).toEqual(["x"]);
+    expect(c.querySelector("li")?.textContent).toContain("tail");
+  });
+
+  it("leaves `$$` in code alone", () => {
+    const fenced = "```\n$$\nx$$ y\n```";
+    expect(separateDisplayFences(fenced)).toBe(fenced);
+    expect(block(fenced).querySelector("pre code")?.textContent).toBe("$$\nx$$ y\n");
+    const span = "`$$`\n\nx$$ y";
+    expect(separateDisplayFences(span)).toBe(span);
+  });
+
+  it.each([
+    ["an escaped dollar", String.raw`$$` + "\n" + String.raw`a \$$ b` + "\n$$"],
+    ["a shorter run in a `$$$` block", "$$$\na $$ b\n$$$"],
+    ["text with raw HTML", "<div>\n$$\nx$$ y"],
+    ["a closed block", "$$\nx\n$$\ny $$ z"],
+    ["a one-line formula", "$$x$$ y\n\nz $$ w"],
+  ])("doesn't move anything for %s", (_name, text) => {
+    expect(separateDisplayFences(text)).toBe(text);
+  });
+
+  it("closes at a `$$` after an escaped backslash, and keeps line endings", () => {
+    expect(separateDisplayFences("$$\r\na \\\\$$ b\r\n")).toBe("$$\r\na \\\\\r\n$$\r\nb\r\n");
+  });
+
+  it("renders every prefix of the reply without swallowing what follows", () => {
+    const reply = `Intro:\n$$\n${formula}$$ The pairwise overlaps.\n\nNext.`;
+    const { container, rerender } = render(<MathText text="" />);
+    for (let i = 1; i <= reply.length; i += 7) rerender(<MathText text={reply.slice(0, i)} />);
+    rerender(<MathText text={reply} />);
+    expect(formulas(container)).toEqual([formula]);
+    expect(paragraphs(container)).toEqual(["Intro:", "The pairwise overlaps.", "Next."]);
+  });
+
+  it("splits the separated text the same as a single parse", () => {
+    const text = `one\n\n$$\n${formula}$$ two\n\nthree`;
+    expect(splitBlocks(separateDisplayFences(text)).length).toBeGreaterThan(1);
+    const normal = (html: string) => html.replace(/<\/?div[^>]*>|\s+/g, "");
+    expect(normal(block(text).innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${text}`).innerHTML));
   });
 });
 
