@@ -308,6 +308,13 @@ describe("MathText display fences in lists and quotes", () => {
     ["dollars in \\text", "$$\n\\text{a$$ b}\n$$", { math: ["\\text{a$$ b}"], unchanged: true }],
     ["dollars in an \\href URL", "$$\n\\href{https://e.com/?q=$$}{x}\n$$", { math: ["\\href{https://e.com/?q=$$}{x}"], unchanged: true }],
     ["a closing `$$` after a closed \\text", "$$\n\\text{a} x$$ tail", { math: ["\\text{a} x"], text: ["tail"] }],
+    // Round 2 of the redesign: TeX arguments that span lines, and comments, keep their dollars.
+    ["dollars in a \\text across lines", "$$\n\\text{a\n b$$ c}\n$$", { math: ["\\text{a\n b$$ c}"], unchanged: true }],
+    ["dollars in a nested \\texttt across lines", "$$\nx + \\textbf{\\texttt{a\nb$$ c}}\n$$", { unchanged: true, error: true }],
+    ["dollars in an \\href URL across lines", "$$\n\\href{https://e.com/\n?q=$$}{x}\n$$", { math: ["\\href{https://e.com/\n?q=$$}{x}"], unchanged: true }],
+    ["dollars in a comment", "$$\nx % $$ hidden comment\n$$", { math: ["x % $$ hidden comment"], unchanged: true }],
+    ["dollars after a comment on an earlier line", "$$\nx % note\ny$$ tail", { unchanged: true, error: true }],
+    ["a closing `$$` after an escaped percent", "$$\n50\\% x$$ tail", { math: ["50\\% x"], text: ["tail"] }],
     ["a formula in a quote", "> $$\n> x$$ tail", { unchanged: true, error: true }],
     ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { unchanged: true, error: true }],
     ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { text: ["b"], unchanged: true, error: true }],

@@ -261,6 +261,8 @@ export function fenceLines(source: string): string[] {
   // The top-level code fence or display block that's open, if any.
   let code: ((line: string) => boolean) | undefined;
   let math: number | undefined;
+  // The open display block's TeX so far, to tell a closing `$$` from dollars inside TeX.
+  let body = "";
   for (const [i, { text, ending }] of lines.entries()) {
     const newline = ending || "\n";
     if (code) {
@@ -271,12 +273,15 @@ export function fenceLines(source: string): string[] {
         math = undefined;
       } else {
         const run = closingRun(text, math);
-        // Dollars inside TeX that takes literal text (`\verb|$$|`, `\text{a$$ b}`, an `\href` URL) aren't a fence.
-        if (run && !insideTexArgument(text.slice(0, run.start))) {
+        // Dollars inside TeX (`\verb|$$|`, `\text{a$$ b}` even across lines, an `\href` URL, a `%` comment) aren't
+        // a fence. If the block's TeX up to the run leaves any of those open, the block is left as written.
+        if (run && texIsPlain(body + text.slice(0, run.start))) {
           const before = text.slice(0, run.start);
           const after = asText(text.slice(run.end).trim());
           out[i] = (before.trim() ? before + newline : "") + text.slice(run.start, run.end) + (after ? newline + after : "") + ending;
           math = undefined;
+        } else {
+          body += text + "\n";
         }
       }
     } else if (/^[ \t]/.test(text)) {
@@ -290,6 +295,7 @@ export function fenceLines(source: string): string[] {
       if (open) {
         const [, fence, rest] = open as unknown as [string, string, string];
         math = fence.length;
+        body = rest ? rest + "\n" : "";
         if (rest) out[i] = fence + newline + rest + ending;
       }
     }
@@ -310,16 +316,19 @@ function asText(text: string): string {
   return /^\d/.test(text) ? text.replace(/^(\d+)/, "$1\\") : `\\${text}`;
 }
 
-/** Whether text before a `$$` leaves a TeX argument or `\verb` open, so the dollars are part of the formula. */
-function insideTexArgument(before: string): boolean {
-  if (/\\verb\*?/.test(before)) return true;
+/** Whether a display block's TeX up to a `$$` is plain: no `\verb`, no comment, and every brace closed. */
+function texIsPlain(tex: string): boolean {
+  // `\verb` takes any delimiter, so its end can't be found reliably: any `\verb` makes the block uncertain.
+  if (/\\verb/.test(tex)) return false;
   let depth = 0;
-  for (let i = 0; i < before.length; i++) {
-    if (before[i] === "\\") i++;
-    else if (before[i] === "{") depth++;
-    else if (before[i] === "}") depth = Math.max(0, depth - 1);
+  for (let i = 0; i < tex.length; i++) {
+    if (tex[i] === "\\") i++;
+    // A comment runs to the end of its line, possibly hiding the dollars and any text after them.
+    else if (tex[i] === "%") return false;
+    else if (tex[i] === "{") depth++;
+    else if (tex[i] === "}") depth = Math.max(0, depth - 1);
   }
-  return depth > 0;
+  return depth === 0;
 }
 
 /** The first run of at least `size` dollars that no backslash escapes. */
