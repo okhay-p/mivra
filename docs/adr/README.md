@@ -16,6 +16,7 @@ Files use four digits (`0010-*.md`); the code cites them as `ADR-010`. The next 
 - [ADR-008](0008-shadcn-paper-and-amber.md): web UI: shadcn/ui with the Paper & Amber theme
 - [ADR-009](0009-learner-memory.md): learner memory: evidence, derived concept state, automatic global memories
 - [ADR-010](0010-uploaded-documents-local-text-extraction.md): uploaded documents: local text extraction
+- [ADR-011](0011-courses-syllabus-and-lessons.md): courses, syllabus and lessons: syllabus up front, lessons just in time, frozen once finished
 
 ## Project scope
 
@@ -31,7 +32,6 @@ Files use four digits (`0010-*.md`); the code cites them as `ADR-010`. The next 
 - **SQLite operations:** backup approach and schema versioning. See [Foundation — Local-First Storage & Cloud Sync](https://app.notion.com/p/408fb102b9b681c5b636d60cdfd891d7) (Notion).
 - **Plugin system:** isolation and permissions beyond ADR-007's in-process trusted plugins. See [Foundation — Extension & Plugin API Research](https://app.notion.com/p/408fb102b9b681138484e219ea70934d) (Notion).
 - **Agent runtime:** single agent + tools vs specialized roles.
-- **Learning:** the definition of learning success.
 
 ## Exploratory (not commitments)
 
