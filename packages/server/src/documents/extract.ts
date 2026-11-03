@@ -3,8 +3,8 @@ import { getResolvedPDFJS } from "unpdf";
 import yauzl from "yauzl";
 
 /**
- * Text extraction for untrusted PDF and PPTX files (ADR-010). This runs inside a worker thread (see
- * extract-in-worker.ts), which supplies the timeout and memory limits this code can't enforce itself.
+ * Text extraction for untrusted PDF and PPTX files (ADR-010). This runs inside a subprocess (see
+ * extract-in-child.ts), which supplies the timeout and memory limits this code can't enforce itself.
  */
 
 export type DocumentErrorCode = "too_large" | "wrong_type" | "no_text" | "encrypted" | "corrupt" | "too_complex" | "timeout" | "failed";

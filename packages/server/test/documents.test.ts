@@ -73,7 +73,7 @@ function setup(deps: Partial<AppDeps> = {}) {
       }) as never,
     }),
   });
-  // In-process by default, since starting a worker takes seconds; one test below goes through the real one.
+  // In-process by default, since starting a subprocess takes seconds; one test below goes through the real one.
   const app = createApp({ db, model: () => model, security: { token: "t", allowedHosts: [] }, extractDocument: extractInProcess, ...deps });
   const newSession = async () => ((await (await app.request("/api/sessions", { method: "POST", headers: auth })).json()) as { id: string }).id;
   const upload = (sessionId: string, bytes: Uint8Array, filename = "notes.pdf", headers: Record<string, string> = auth) => {
@@ -115,9 +115,9 @@ describe("document upload API", () => {
     expect(await (await app.request(`/api/sessions/${id}/documents`, { headers: auth })).json()).toEqual([view]);
   });
 
-  it("extracts on the real worker by default", async () => {
+  it("extracts in the real subprocess by default", async () => {
     const { newSession, upload } = setup({ extractDocument: undefined });
-    const res = await upload(await newSession(), makePdf([["Worker thread reads this real text quite happily."]]));
+    const res = await upload(await newSession(), makePdf([["The subprocess reads this real text quite happily."]]));
     expect(res.status).toBe(201);
   }, 30_000);
 

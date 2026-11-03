@@ -69,7 +69,7 @@ The model can also save goals, preferences and misconceptions with the `remember
 
 ## Uploaded documents
 
-The learner can attach PDF and PPTX files of up to 25 MB to a session, up to 20 per session (ADR-010). The server extracts their text locally on a worker thread and stores only that, split into chunks with their page or slide numbers and indexed with SQLite FTS5; the original file isn't kept. Deleting a document removes its text from storage and search, though replies already written from it stay in the conversation.
+The learner can attach PDF and PPTX files of up to 25 MB to a session, up to 20 per session (ADR-010). The server extracts their text locally in a separate Node process and stores only that, split into chunks with their page or slide numbers and indexed with SQLite FTS5; the original file isn't kept. Deleting a document removes its text from storage and search, though replies already written from it stay in the conversation.
 
 Each turn, the session's document names and page counts go to the model, along with up to 8,000 characters of excerpts: any page or slide the learner's latest message asks for by number ("page 3", "slides 2-4", and "page 3 of Week 2" for a named document), then what best matches the message, or the start of each document if nothing does. A page request with no document name reads that page from every document, and the tutor is told what was missing or cut. Only those excerpts reach the provider.
 
@@ -77,7 +77,7 @@ Document names and excerpts are escaped data in a separately labelled user-role 
 
 Only text is read. Diagrams and images are lost, and scanned PDFs are refused because they have no text. Slide text comes from slide XML, including equations but not speaker notes. PDF maths depends on how the file was made: fonts with real Unicode extract cleanly, while LaTeX output keeps most symbols but flattens subscripts and superscripts (`fn` for f_n), loses the layout of fractions and sum limits, and can turn ≠ into `6 =`. A symbol such as ∈ isn't searchable, since search only indexes letters and digits.
 
-Uploaded files are treated as hostile. The size cap applies to the whole request while reading, whatever it declares; a request with anything other than the one file is refused, and reading has a deadline (120 s) and stops if the client disconnects. The type is decided by content, zips have limits on entries and unpacked size, XML with a DTD is refused and entities are never expanded, and extraction stops at a timeout (120 s), a heap limit or about 2 GB of process memory growth.
+Uploaded files are treated as hostile. The size cap applies to the whole request while reading, whatever it declares; a request with anything other than the one file is refused, and reading has a deadline (120 s) and stops if the client disconnects. The type is decided by content, zips have limits on entries and unpacked size, XML with a DTD is refused and entities are never expanded, and extraction runs in a subprocess that gets none of the server's environment, so a crash or running out of memory there only fails the upload. It stops at a timeout (120 s), a 512 MB heap limit or 2 GB of the subprocess's resident memory, with SIGTERM and then SIGKILL two seconds later; the upload's slot is freed only once the subprocess has exited.
 
 ## Web UI
 

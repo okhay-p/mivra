@@ -3,7 +3,7 @@ import type { LanguageModel } from "ai";
 import { ArtifactView, DocumentView, MemoryEdit, MemoryView } from "@mivra/protocol";
 import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
-import type { Extract } from "./documents/extract-in-worker.js";
+import type { Extract } from "./documents/extract-in-child.js";
 import { coreLearning } from "./plugins/core-learning.js";
 import { coreMemory } from "./plugins/core-memory.js";
 import { presentMessages } from "./runtime/artifacts.js";
