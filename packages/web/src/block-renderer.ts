@@ -115,7 +115,9 @@ export function createWorkerRenderer(spawn: () => WorkerLike, options: WorkerRen
       if (worker === created && running?.job.id === event.data.id) finish(event.data.block ?? "plain");
     };
     created.onerror = () => {
-      if (worker === created) kill("plain");
+      if (worker !== created) return;
+      if (running) kill("plain");
+      else stop();
     };
     return (worker = created);
   };
@@ -136,10 +138,14 @@ export function createWorkerRenderer(spawn: () => WorkerLike, options: WorkerRen
     pump();
   };
 
-  /** The worker may be stuck in the parser, which only ends with the worker. */
-  const kill = (result: BlockResult | undefined) => {
+  const stop = () => {
     worker?.terminate();
     worker = undefined;
+  };
+
+  /** The worker may be stuck in the parser, which only ends with the worker. */
+  const kill = (result: BlockResult | undefined) => {
+    stop();
     finish(result);
   };
 
@@ -171,6 +177,7 @@ export function createWorkerRenderer(spawn: () => WorkerLike, options: WorkerRen
     dispose() {
       for (const job of queue.splice(0)) settle(job, undefined);
       if (running) kill(undefined);
+      else stop();
     },
     render(text, signal) {
       if (signal.aborted) return Promise.resolve(undefined);

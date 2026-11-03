@@ -170,9 +170,11 @@ function BlockText({ text, className }: { text: string; className: string }) {
   const mounted = blocksWithin(blocks, budget);
   useEffect(() => {
     if (mounted >= blocks.length) return;
-    const timer = setTimeout(() => setBudget((chars) => chars + MOUNT_BATCH_CHARS), 0);
+    // Counted from the end of what's mounted, so a block longer than a batch can't stall the ones after it.
+    const end = blocks.slice(0, mounted).reduce((chars, block) => chars + block.text.length, 0);
+    const timer = setTimeout(() => setBudget((chars) => Math.max(chars, end) + MOUNT_BATCH_CHARS), 0);
     return () => clearTimeout(timer);
-  }, [mounted, blocks.length]);
+  }, [mounted, blocks]);
   return (
     <div className={className}>
       {blocks.slice(0, mounted).map((block, i) => (

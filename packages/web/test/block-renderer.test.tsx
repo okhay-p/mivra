@@ -142,6 +142,28 @@ describe("createWorkerRenderer", () => {
     expect(await queued).toBeUndefined();
     expect(latest().terminated).toBe(true);
   });
+
+  it("stops an idle worker when disposed", async () => {
+    const { renderer, latest } = setup();
+    const pending = renderer.render(big("a"), new AbortController().signal);
+    latest().answer();
+    await pending;
+    renderer.dispose();
+    expect(latest().terminated).toBe(true);
+  });
+
+  it("replaces an idle worker that fails, without throwing", async () => {
+    const { renderer, workers, latest } = setup();
+    const pending = renderer.render(big("a"), new AbortController().signal);
+    latest().answer();
+    await pending;
+    expect(() => latest().onerror?.({} as ErrorEvent)).not.toThrow();
+    expect(workers[0]!.terminated).toBe(true);
+    const next = renderer.render(big("b"), new AbortController().signal);
+    expect(workers).toHaveLength(2);
+    latest().answer();
+    expect(await next).toMatchObject({ tree: { type: "root" } });
+  });
 });
 
 describe("the render worker", () => {
@@ -262,6 +284,11 @@ describe("MathText with a very long reply", () => {
     expect(container.querySelector("strong")?.textContent).toBe("p0");
     expect([...container.querySelectorAll("strong")].at(-1)?.textContent).toBe("p199");
   }, 20_000);
+
+  it("mounts the blocks after one longer than a batch", async () => {
+    const { container } = render(<MathText text={`${"x".repeat(45_000)}\n\n**after**`} />);
+    await waitFor(() => expect(container.querySelector("strong")?.textContent).toBe("after"), { timeout: 5_000 });
+  });
 
   it("shows text that grows past a batch without dropping what was shown", async () => {
     const { container, rerender } = render(<MathText text={"**a**"} />);
