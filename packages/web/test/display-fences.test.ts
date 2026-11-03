@@ -1,8 +1,7 @@
-import { createElement } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
-import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import remarkParse from "remark-parse";
+import { unified, type PluggableList } from "unified";
 import { describe, expect, it } from "vitest";
 import { fenceLines, remarkDollarRule, replyBlocks, separateDisplayFences } from "../src/math-syntax.js";
 
@@ -13,17 +12,12 @@ interface MdNode {
   position?: { start: { line: number }; end: { line: number } };
 }
 
-const plugins = [remarkGfm, remarkMath, remarkDollarRule];
+const processor = unified()
+  .use(remarkParse)
+  .use([remarkGfm, remarkMath, remarkDollarRule] as unknown as PluggableList);
 
 /** The parser's tree for `text`, as MathText's plugins parse it. */
-function parse(text: string): MdNode {
-  let tree: MdNode | undefined;
-  const capture = () => (root: MdNode) => {
-    tree = root;
-  };
-  renderToStaticMarkup(createElement(Markdown, { remarkPlugins: [...plugins, capture] as never }, text));
-  return tree!;
-}
+const parse = (text: string) => processor.runSync(processor.parse(text)) as unknown as MdNode;
 
 /**
  * The blocks' top-level nodes, without positions, to compare a split parse with a whole one. Maths that differs only

@@ -1,10 +1,10 @@
-import katex from "katex";
+import { toJsxRuntime, type Components } from "hast-util-to-jsx-runtime";
 import "katex/dist/katex.min.css";
-import { Component, isValidElement, memo, useDeferredValue, useMemo, type ComponentProps, type ReactElement, type ReactNode } from "react";
-import Markdown, { type Components, type Options } from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import { blockSections, isTooDeep, remarkDollarRule, replyBlocks, splitMath } from "./math-syntax.js";
+import { Component, createContext, Fragment, memo, useContext, useDeferredValue, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { jsx, jsxs } from "react/jsx-runtime";
+import { createSyncRenderer, createWorkerRenderer, type BlockRenderer, type BlockResult } from "./block-renderer.js";
+import { blockSections, isTooDeep, replyBlocks, splitMath, type ReplyBlock } from "./math-syntax.js";
+import { clearFormulaCache, typeset, type RenderedBlock } from "./render-markdown.js";
 
 interface MathTextProps {
   /** The text. May be half-written, while a reply streams. */
@@ -22,91 +22,46 @@ interface MathTextProps {
   className?: string;
 }
 
-const LINK_PROTOCOLS = ["http:", "https:", "mailto:"];
-
-/** Absolute http, https and mailto links only. Anything else, including a relative URL, is no link at all. */
-export function safeUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return LINK_PROTOCOLS.includes(parsed.protocol) ? parsed.href : "";
-  } catch {
-    return "";
-  }
-}
-
-/** Replaces the parser's verdict on a one-line `$$x$$`, which it calls inline, with the display maths it reads as. */
-function remarkDisplayDollars() {
-  return (tree: MdNode, file: { value: unknown }) => {
-    const source = String(file.value);
-    const visit = (node: MdNode) => {
-      for (const child of node.children ?? []) {
-        const start = child.position?.start.offset;
-        if (child.type === "inlineMath" && start !== undefined && source.startsWith("$$", start)) {
-          child.data = { ...child.data, hProperties: { ...child.data?.hProperties, className: ["language-math", "math-display"] } };
-        }
-        visit(child);
-      }
-    };
-    visit(tree);
-  };
-}
-
-interface MdNode {
-  type: string;
-  children?: MdNode[];
-  position?: { start: { offset?: number } };
-  data?: { hProperties?: Record<string, unknown> };
-}
-
-const remarkPlugins = [remarkGfm, remarkMath, remarkDollarRule, remarkDisplayDollars] as unknown as NonNullable<Options["remarkPlugins"]>;
-
-/**
- * One formula. Memoised, so a streaming paragraph doesn't typeset the same 100 formulas again per delta. KaTeX
- * escapes its input and, with trust: false, won't produce anything active (\href, \includegraphics), which is
- * why its HTML is safe to insert. Invalid LaTeX shows as its source in errorColor. strict: "ignore" only
- * silences console warnings.
- */
+/** One formula in math mode. Memoised, and typeset results are cached, so streaming doesn't typeset it again. */
 const Formula = memo(function Formula({ source, display }: { source: string; display: boolean }) {
-  try {
-    const html = katex.renderToString(source, { displayMode: display, trust: false, strict: "ignore", throwOnError: false, errorColor: "var(--destructive)" });
-    return <span className="math-text-formula" dangerouslySetInnerHTML={{ __html: html }} />;
-  } catch {
-    return <span className="katex-error">{source}</span>;
-  }
+  const html = typeset(source, display);
+  return html === undefined ? <span className="katex-error">{source}</span> : <span className="math-text-formula" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
-const isMath = (className: string | undefined) => className?.split(" ").includes("language-math") ?? false;
-
-const components: Components = {
-  a: ({ href, children }) =>
-    href ? (
-      <a href={href} target="_blank" rel="noopener noreferrer">
-        {children}
-      </a>
-    ) : (
-      <span>{children}</span>
-    ),
-  code: ({ className, children }) =>
-    isMath(className) ? <Formula source={String(children ?? "")} display={className!.includes("math-display")} /> : <code className={className}>{children}</code>,
-  // `$$` blocks and ```math fences arrive as a <pre> around the <code> above.
-  pre: ({ children }) => {
-    const code = isValidElement(children) ? (children as ReactElement<{ className?: string; children?: ReactNode }>) : undefined;
-    return code && isMath(code.props.className) ? <Formula source={String(code.props.children ?? "").replace(/\n$/, "")} display /> : <pre>{children}</pre>;
-  },
-  // A remote image would send data to whoever hosts it, so show its description instead.
-  img: ({ alt }) => (alt ? <span>{alt}</span> : null),
-  table: (props: ComponentProps<"table">) => (
-    <div className="math-text-scroll">
-      <table>{props.children}</table>
-    </div>
-  ),
-  // Below the card titles' level in the page outline as well as in size.
-  h1: "h4",
-  h2: "h4",
-  h3: "h5",
-  h4: "h6",
-  h5: "h6",
-};
+/** A rendered block as React elements. Formulas come as an index into the block's typeset HTML. */
+function RenderedTree({ block }: { block: RenderedBlock }) {
+  return useMemo(() => {
+    const components: Components = {
+      a: ({ href, children }) =>
+        href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer">
+            {children}
+          </a>
+        ) : (
+          <span>{children}</span>
+        ),
+      span: (props: ComponentProps<"span"> & { "data-formula"?: number }) => {
+        const index = props["data-formula"];
+        if (index === undefined) return <span className={props.className}>{props.children}</span>;
+        return <span className="math-text-formula" dangerouslySetInnerHTML={{ __html: block.formulas[Number(index)] ?? "" }} />;
+      },
+      // A remote image would send data to whoever hosts it, so show its description instead.
+      img: ({ alt }) => (alt ? <span>{alt}</span> : null),
+      table: (props: ComponentProps<"table">) => (
+        <div className="math-text-scroll">
+          <table>{props.children}</table>
+        </div>
+      ),
+      // Below the card titles' level in the page outline as well as in size.
+      h1: "h4",
+      h2: "h4",
+      h3: "h5",
+      h4: "h6",
+      h5: "h6",
+    };
+    return toJsxRuntime(block.tree, { Fragment, jsx, jsxs, components, passKeys: true, ignoreInvalidStyle: true });
+  }, [block]);
+}
 
 /** A block as plain text. Code keeps its box, so it still scrolls instead of wrapping. */
 function PlainBlock({ text }: { text: string }) {
@@ -134,28 +89,93 @@ class PlainTextOnError extends Component<{ text: string; children: ReactNode }, 
   }
 }
 
+let defaultRenderer: BlockRenderer | undefined;
+
+/** One worker for the page, started when a block first needs it. Without workers, everything renders in place. */
+function getDefaultRenderer(): BlockRenderer {
+  defaultRenderer ??=
+    typeof Worker === "undefined"
+      ? createSyncRenderer()
+      : createWorkerRenderer(() => new Worker(new URL("./render.worker.ts", import.meta.url), { type: "module", name: "mivra-render" }));
+  return defaultRenderer;
+}
+
+/** Forgets every rendered block and formula, and stops the worker. For tests. */
+export function resetBlockRendering() {
+  defaultRenderer?.dispose();
+  defaultRenderer = undefined;
+  clearFormulaCache();
+}
+
+/** Overrides where blocks render. For tests. */
+export const BlockRendererContext = createContext<BlockRenderer | undefined>(undefined);
+
+/**
+ * The block's rendering, or the last one this block showed while a newer one is on its way, so a streaming block
+ * doesn't flash back to plain text with each delta. Leaving the text, or the page, cancels the render.
+ */
+function useBlockResult(text: string | undefined): BlockResult | undefined {
+  const renderer = useContext(BlockRendererContext) ?? getDefaultRenderer();
+  const ready = text === undefined ? undefined : renderer.peek(text);
+  const [arrived, setArrived] = useState<{ text: string; result: BlockResult }>();
+  const shown = useRef<BlockResult>(undefined);
+  useEffect(() => {
+    if (text === undefined || ready !== undefined) return;
+    const controller = new AbortController();
+    void renderer.render(text, controller.signal).then((result) => {
+      if (result !== undefined) setArrived({ text, result });
+    });
+    return () => controller.abort();
+  }, [renderer, text, ready]);
+  const current = ready ?? (arrived && arrived.text === text ? arrived.result : undefined);
+  useEffect(() => {
+    if (current !== undefined) shown.current = current;
+  });
+  return text === undefined ? undefined : (current ?? shown.current);
+}
+
 /**
  * Memoised on its text, so only the block a delta touches is parsed again. `source` is the block as the reply wrote
  * it, before display fences were separated, which is what plain text shows.
  */
 const Block = memo(function Block({ text, source }: { text: string; source: string }) {
-  if (isTooDeep(text)) return <PlainBlock text={source} />;
+  const tooDeep = useMemo(() => isTooDeep(text), [text]);
+  const result = useBlockResult(tooDeep ? undefined : text);
+  // Until its first rendering arrives, if it timed out, or if it's too deep to try, a block shows as plain text.
+  if (tooDeep || result === undefined || result === "plain") return <PlainBlock text={source} />;
   return (
     <PlainTextOnError text={source}>
-      <Markdown remarkPlugins={remarkPlugins} urlTransform={safeUrl} components={components}>
-        {text}
-      </Markdown>
+      <RenderedTree block={result} />
     </PlainTextOnError>
   );
 });
+
+// A long reply mounts this many characters of blocks at a time, yielding between them, so that showing it can't
+// hold the page for long. Ordinary replies fit in the first batch.
+const MOUNT_BATCH_CHARS = 20_000;
+
+/** How many of the blocks start within the first `chars` characters. Always at least one. */
+function blocksWithin(blocks: ReplyBlock[], chars: number): number {
+  let offset = 0;
+  let count = 0;
+  while (count < blocks.length && (count === 0 || offset < chars)) offset += blocks[count++]!.text.length;
+  return count;
+}
 
 function BlockText({ text, className }: { text: string; className: string }) {
   // Keeps typing and scrolling responsive during a long reply: a render that falls behind skips to the latest delta.
   const deferred = useDeferredValue(text);
   const blocks = useMemo(() => replyBlocks(deferred), [deferred]);
+  const [budget, setBudget] = useState(MOUNT_BATCH_CHARS);
+  const mounted = blocksWithin(blocks, budget);
+  useEffect(() => {
+    if (mounted >= blocks.length) return;
+    const timer = setTimeout(() => setBudget((chars) => chars + MOUNT_BATCH_CHARS), 0);
+    return () => clearTimeout(timer);
+  }, [mounted, blocks.length]);
   return (
     <div className={className}>
-      {blocks.map((block, i) => (
+      {blocks.slice(0, mounted).map((block, i) => (
         <Block key={i} text={block.text} source={block.source} />
       ))}
     </div>

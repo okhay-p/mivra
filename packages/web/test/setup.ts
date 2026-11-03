@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, vi } from "vitest";
-import { MathText } from "../src/MathText.js";
+import { MathText, resetBlockRendering } from "../src/MathText.js";
 
 // A file's first role query takes about a second as dom-testing-library builds its role tables, and its first
 // render and formula take hundreds of milliseconds more while the code warms up. Without this, that lands on
@@ -14,6 +14,7 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
+  resetBlockRendering();
   vi.restoreAllMocks();
   vi.useRealTimers();
   vi.unstubAllGlobals();
