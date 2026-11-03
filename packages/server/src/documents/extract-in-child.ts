@@ -70,8 +70,8 @@ function childTarget(): { path: string; execArgv: string[] } {
 /** The child's resident memory, read from /proc where there is one; elsewhere the child reports it. */
 async function procRss(pid: number): Promise<number | undefined> {
   try {
-    const pages = Number((await readFile(`/proc/${pid}/statm`, "utf8")).split(" ")[1]);
-    return Number.isFinite(pages) ? pages * 4096 : undefined;
+    const kb = /^VmRSS:\s+(\d+) kB/m.exec(await readFile(`/proc/${pid}/status`, "utf8"))?.[1];
+    return kb === undefined ? undefined : Number(kb) * 1024;
   } catch {
     return undefined;
   }
@@ -178,10 +178,10 @@ export const extractInChild: Extract = (
     child.once("close", () => {
       if (exited) return;
       exited = true;
-      if (!outcome) {
-        if (/heap out of memory|Allocation failed/i.test(stderrTail)) fail("too_complex", TOO_COMPLEX);
-        else fail("failed", UNREADABLE);
-      }
+      // Exiting before reporting is a crash, or running out of heap.
+      outcome ??= /heap out of memory|Allocation failed/i.test(stderrTail)
+        ? () => reject(new DocumentError("too_complex", TOO_COMPLEX))
+        : () => reject(new DocumentError("failed", UNREADABLE));
       finish();
     });
 
