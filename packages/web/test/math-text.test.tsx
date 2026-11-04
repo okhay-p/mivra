@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import katex from "katex";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MathText } from "../src/MathText.js";
@@ -559,11 +559,21 @@ describe("MathText robustness", () => {
     ["ordered lists", "1. ".repeat(2000) + "deep"],
     ["emphasis", "*".repeat(5000) + "deep" + "*".repeat(5000)],
     ["links", "[".repeat(5000) + "deep" + "](u)".repeat(5000)],
-  ])("shows hostile nested %s as plain text, keeping the rest of the reply", (_name, hostile) => {
+  ])("shows hostile nested %s as plain text, keeping the rest of the reply", async (_name, hostile) => {
     const c = block(`**before**\n\n${hostile}\n\n**after**`);
-    expect([...c.querySelectorAll("strong")].map((e) => e.textContent)).toEqual(["before", "after"]);
+    // A long reply mounts in batches.
+    await waitFor(() => expect([...c.querySelectorAll("strong")].map((e) => e.textContent)).toEqual(["before", "after"]));
     expect(c.querySelector("blockquote, ul, ol, em, a")).toBeNull();
     expect(c.querySelector("p.math-text-literal")?.textContent?.trim()).toBe(hostile.trim());
+  });
+
+  it("doesn't keep showing a streaming block's earlier rendering once it's too deep", () => {
+    const text = ">".repeat(2000) + " deep";
+    const { container, rerender } = render(<MathText text={text.slice(0, 24)} />);
+    expect(container.querySelectorAll("blockquote")).toHaveLength(24);
+    rerender(<MathText text={text} />);
+    expect(container.querySelector("blockquote")).toBeNull();
+    expect(container.querySelector("p.math-text-literal")?.textContent).toBe(text);
   });
 
   it("shows hostile indentation as plain text", () => {
@@ -819,15 +829,15 @@ describe("MathText split against a single parse", () => {
 });
 
 describe("MathText failure fallback", () => {
-  it("shows plain text if rendering throws", async () => {
+  it("shows plain text if parsing throws", async () => {
     vi.resetModules();
-    vi.doMock("react-markdown", () => ({
-      default: ({ children }: { children: string }) => {
-        if (children.includes("boom")) throw new Error("boom");
-        return <em>{children}</em>;
+    vi.doMock("../src/render-markdown.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../src/render-markdown.js")>()),
+      renderMarkdown: (text: string) => {
+        if (text.includes("boom")) throw new Error("boom");
+        return { tree: { type: "root", children: [{ type: "element", tagName: "em", properties: {}, children: [{ type: "text", value: text }] }] }, formulas: [] };
       },
     }));
-    vi.spyOn(console, "error").mockImplementation(() => {});
     const { MathText: Mocked } = await import("../src/MathText.js");
     const { container, rerender } = render(<Mocked text="boom text" />);
     expect(container.textContent).toBe("boom text");
@@ -836,6 +846,28 @@ describe("MathText failure fallback", () => {
     rerender(<Mocked text={"boom\n```\ncode\n```"} />);
     expect(container.querySelector("pre code")?.textContent).toBe("code\n");
     expect(container.querySelector("p.math-text-literal")?.textContent).toBe("boom\n");
-    vi.doUnmock("react-markdown");
+    vi.doUnmock("../src/render-markdown.js");
+  });
+
+  it("shows plain text if showing the parsed block throws", async () => {
+    vi.resetModules();
+    vi.doMock("hast-util-to-jsx-runtime", async (importOriginal) => {
+      const original = await importOriginal<typeof import("hast-util-to-jsx-runtime")>();
+      return {
+        ...original,
+        toJsxRuntime: (...args: Parameters<typeof original.toJsxRuntime>) => {
+          if (JSON.stringify(args[0]).includes("boom")) throw new Error("boom");
+          return original.toJsxRuntime(...args);
+        },
+      };
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { MathText: Mocked } = await import("../src/MathText.js");
+    const { container, rerender } = render(<Mocked text="**boom** text" />);
+    expect(container.querySelector("strong")).toBeNull();
+    expect(container.textContent).toBe("**boom** text");
+    rerender(<Mocked text="**fine**" />);
+    expect(container.querySelector("strong")?.textContent).toBe("fine");
+    vi.doUnmock("hast-util-to-jsx-runtime");
   });
 });
