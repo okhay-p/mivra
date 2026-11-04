@@ -2,7 +2,7 @@ import { render } from "@testing-library/react";
 import katex from "katex";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MathText } from "../src/MathText.js";
-import { isTooDeep, splitBlocks } from "../src/math-syntax.js";
+import { isTooDeep, replyBlocks, separateDisplayFences, splitBlocks } from "../src/math-syntax.js";
 
 const block = (text: string) => render(<MathText text={text} />).container;
 const math = (text: string) => render(<MathText text={text} mode="math" />).container;
@@ -186,6 +186,221 @@ describe("MathText dollars in markdown", () => {
   });
 });
 
+describe("MathText display fences that share a line with text", () => {
+  const formula = String.raw`|A\cup B\cup C|=|A|+|B|+|C| -|A\cap B|-|A\cap C|-|B\cap C| +|A\cap B\cap C|.`;
+  const paragraphs = (c: Element) => [...c.querySelectorAll("p")].map((p) => p.textContent?.trim());
+
+  // The four layouts from issue #30.
+  it.each([
+    ["the closing `$$` followed by text", `That gives the formula:\n$$\n${formula}$$ The pairwise overlaps.`],
+    ["a one-line `$$...$$` after a newline", `That gives the formula:\n$$${formula}$$\nThe pairwise overlaps.`],
+    ["`$$...$$` inline in a sentence", `That gives the formula: $$${formula}$$ The pairwise overlaps.`],
+    ["each `$$` on its own line", `That gives the formula:\n$$\n${formula}\n$$\nThe pairwise overlaps.`],
+  ])("renders %s as display maths followed by the text", (_name, text) => {
+    const c = block(text);
+    expect(c.querySelector(".katex-error")).toBeNull();
+    expect(c.querySelector(".katex-display")).not.toBeNull();
+    expect(formulas(c)).toEqual([formula]);
+    expect(c.textContent).toContain("That gives the formula:");
+    expect(c.textContent).toContain("The pairwise overlaps.");
+    expect(c.textContent).not.toContain("$");
+  });
+
+  it("puts the text after the closing `$$` in its own paragraph", () => {
+    const c = block(`Intro:\n$$\n${formula}$$ The pairwise overlaps.`);
+    expect(paragraphs(c)).toEqual(["Intro:", "The pairwise overlaps."]);
+  });
+
+  it("closes the block at a `$$` that ends a line of the formula", () => {
+    const c = block("$$\na +\nb$$\n\nafter");
+    expect(formulas(c)).toEqual(["a +\nb"]);
+    expect(paragraphs(c)).toEqual(["after"]);
+  });
+
+  it("keeps the text on the opening `$$` line, which the parser would drop", () => {
+    const c = block("$$ x + y\n= z\n$$ and so on");
+    expect(formulas(c)).toEqual(["x + y\n= z"]);
+    expect(paragraphs(c)).toEqual(["and so on"]);
+  });
+
+  it("keeps the formula's own indented lines", () => {
+    const c = block("$$\n\\begin{aligned}\n  a &= b\n  c &= d\n\\end{aligned}$$ So both hold.");
+    expect(formulas(c)).toEqual(["\\begin{aligned}\n  a &= b\n  c &= d\n\\end{aligned}"]);
+    expect(paragraphs(c)).toEqual(["So both hold."]);
+  });
+
+  it("leaves a display block in a list item as written", () => {
+    const text = "- a\n  $$\n  x$$ tail\n- b";
+    expect(separateDisplayFences(text)).toBe(text);
+    expect(block(text).querySelectorAll("ul > li")).toHaveLength(2);
+  });
+
+  it("leaves `$$` in code alone", () => {
+    const fenced = "```\n$$\nx$$ y\n```";
+    expect(separateDisplayFences(fenced)).toBe(fenced);
+    expect(block(fenced).querySelector("pre code")?.textContent).toBe("$$\nx$$ y\n");
+    const span = "`$$`\n\nx$$ y";
+    expect(separateDisplayFences(span)).toBe(span);
+  });
+
+  it.each([
+    ["an escaped dollar", String.raw`$$` + "\n" + String.raw`a \$$ b` + "\n$$"],
+    ["a shorter run in a `$$$` block", "$$$\na $$ b\n$$$"],
+    ["text with raw HTML", "<div>\n$$\nx$$ y"],
+    ["a closed block", "$$\nx\n$$\ny $$ z"],
+    ["a one-line formula", "$$x$$ y\n\nz $$ w"],
+  ])("doesn't move anything for %s", (_name, text) => {
+    expect(separateDisplayFences(text)).toBe(text);
+  });
+
+  it("closes at a `$$` after an escaped backslash, and keeps line endings", () => {
+    expect(separateDisplayFences("$$\r\na \\\\$$ b\r\n")).toBe("$$\r\na \\\\\r\n$$\r\nb\r\n");
+  });
+
+  it("renders every prefix of the reply without swallowing what follows", () => {
+    const reply = `Intro:\n$$\n${formula}$$ The pairwise overlaps.\n\nNext.`;
+    const { container, rerender } = render(<MathText text="" />);
+    for (let i = 1; i <= reply.length; i += 7) rerender(<MathText text={reply.slice(0, i)} />);
+    rerender(<MathText text={reply} />);
+    expect(formulas(container)).toEqual([formula]);
+    expect(paragraphs(container)).toEqual(["Intro:", "The pairwise overlaps.", "Next."]);
+  });
+
+  it("shows a block too long to parse as the reply wrote it, without the escapes added to separate it", () => {
+    const text = `$$\n${"x".repeat(50_001)}$$ - tail`;
+    const c = block(text);
+    expect(c.querySelector(".katex")).toBeNull();
+    expect(c.textContent).toBe(text);
+  });
+
+  it("splits the separated text the same as a single parse", () => {
+    const text = `one\n\n$$\n${formula}$$ two\n\nthree`;
+    expect(splitBlocks(separateDisplayFences(text)).length).toBeGreaterThan(1);
+    const normal = (html: string) => html.replace(/<\/?div[^>]*>|\s+/g, "");
+    expect(normal(block(text).innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${text}`).innerHTML));
+  });
+});
+
+describe("MathText display fences in lists and quotes", () => {
+  const normal = (html: string) => html.replace(/<\/?div[^>]*>|\s+/g, "");
+  const codes = (c: Element) => [...c.querySelectorAll("pre code")].map((code) => code.textContent);
+
+  // Each case is checked through the real pipeline: the code blocks and formulas it should produce, and the same
+  // HTML as a single parse, so the splitter agrees with the parser on the normalised text. Only a display block at
+  // the top level is separated: one in a list item or a quote is left as written (`unchanged`), and so keeps the
+  // KaTeX error it had (`error`), as telling its lines from code there needs the parser's container rules.
+  it.each<[string, string, { code?: string[]; math?: string[]; text?: string[]; unchanged?: boolean; error?: boolean; startOnly?: boolean }]>([
+    ["a fence opened on a list marker", "- ```\n  $$\n  x$$ tail\n  ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in a quote", "> ```\n> $$\n> x$$ tail\n> ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in a quote in a list item", "- > ```\n  > $$\n  > x$$ tail\n  > ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["indented code in a list item", "- a\n\n      $$\n      x$$ y", { code: ["$$\nx$$ y\n"], unchanged: true }],
+    ["a formula the next list item ends", "- a\n  $$\n  x\n- b\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
+    ["a formula a dedent ends", "- a\n  $$\n  x\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
+    ["a formula the end of a quote ends", "> $$\n> x\n\ntext $$ tail", { math: ["x"], text: ["text $$ tail"], unchanged: true }],
+    ["a formula in a nested list item", "- parent\n  - child\n    $$\n    x$$ tail", { unchanged: true, error: true }],
+    // Sol's redesign review: only spaces and tabs close a fence; a BOM hides a first-line fence from the scan;
+    // dollars inside TeX that takes literal text belong to the formula.
+    ["a fence a non-breaking space doesn't close", "```\n```\u00a0\n$$\nx$$ tail\n```", { code: ["```\u00a0\n$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence a form feed doesn't close", "```\n```\f\n$$\nx$$ tail\n```", { code: ["```\f\n$$\nx$$ tail\n"], unchanged: true }],
+    // A byte order mark only counts at the very start, so this one isn't compared with text put before it.
+    ["a fence after a byte order mark", "\uFEFF```\n$$\nx$$ tail\n```", { code: ["$$\nx$$ tail\n"], unchanged: true, startOnly: true }],
+    ["dollars in \\verb", "$$\n\\verb|$$|\n$$", { math: ["\\verb|$$|"], unchanged: true }],
+    ["dollars in \\text", "$$\n\\text{a$$ b}\n$$", { math: ["\\text{a$$ b}"], unchanged: true }],
+    ["dollars in an \\href URL", "$$\n\\href{https://e.com/?q=$$}{x}\n$$", { math: ["\\href{https://e.com/?q=$$}{x}"], unchanged: true }],
+    ["a closing `$$` after a closed \\text", "$$\n\\text{a} x$$ tail", { math: ["\\text{a} x"], text: ["tail"] }],
+    // Round 2 of the redesign: TeX arguments that span lines, and comments, keep their dollars.
+    ["dollars in a \\text across lines", "$$\n\\text{a\n b$$ c}\n$$", { math: ["\\text{a\n b$$ c}"], unchanged: true }],
+    ["dollars in a nested \\texttt across lines", "$$\nx + \\textbf{\\texttt{a\nb$$ c}}\n$$", { unchanged: true, error: true }],
+    ["dollars in an \\href URL across lines", "$$\n\\href{https://e.com/\n?q=$$}{x}\n$$", { math: ["\\href{https://e.com/\n?q=$$}{x}"], unchanged: true }],
+    ["dollars in a comment", "$$\nx % $$ hidden comment\n$$", { math: ["x % $$ hidden comment"], unchanged: true }],
+    ["dollars after a comment on an earlier line", "$$\nx % note\ny$$ tail", { unchanged: true, error: true }],
+    ["a closing `$$` after an escaped percent", "$$\n50\\% x$$ tail", { math: ["50\\% x"], text: ["tail"] }],
+    // Round 3: a macro defined in the formula can take its argument up to any text, dollars included.
+    ["dollars in a \\def macro's argument", "$$\n\\def\\foo#1!{\\text{#1}}\\foo a$$ b!\n$$", { math: ["\\def\\foo#1!{\\text{#1}}\\foo a$$ b!"], unchanged: true }],
+    ["dollars after a \\newcommand", "$$\n\\newcommand{\\x}{1} x$$ tail", { unchanged: true, error: true }],
+    // Round 4: KaTeX allows `@` in command names, and a conditional consumes the tokens after it, dollars included.
+    ["dollars a \\@ifnextchar reads", "$$\n\\@ifnextchar$$ {} x\n$$", { math: ["\\@ifnextchar$$ {} x"], unchanged: true }],
+    ["dollars a \\@ifnextchar on an earlier line reads", "$$\n\\@ifnextchar\n$$ {} x\n$$", { math: ["\\@ifnextchar\n$$ {} x"], unchanged: true }],
+    // Round 5: \includegraphics's optional argument is raw text, dollars included.
+    ["dollars in \\includegraphics's raw option", "$$\n\\includegraphics[alt=a$$ b]{https://example.com/x.png}\n$$", { math: ["\\includegraphics[alt=a$$ b]{https://example.com/x.png}"], unchanged: true }],
+    ["dollars in \\includegraphics's option across lines", "$$\n\\includegraphics[alt=a\nb$$ c]{https://example.com/x.png}\n$$", { math: ["\\includegraphics[alt=a\nb$$ c]{https://example.com/x.png}"], unchanged: true }],
+    ["a formula in a quote", "> $$\n> x$$ tail", { unchanged: true, error: true }],
+    ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { unchanged: true, error: true }],
+    ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { text: ["b"], unchanged: true, error: true }],
+    ["a formula after a lazy line", "- a\nb\n  $$\n  x$$ tail", { unchanged: true, error: true }],
+    ["a formula in a quote in a list item", "- > $$\n  > x$$ tail", { unchanged: true, error: true }],
+    ["a formula a blank line ends in a quote", "> $$\n> x\n\n> y$$ z", { math: ["x"], text: ["y$$ z"], unchanged: true }],
+    ["a formula after a blank line in a list item in a quote", "> - a\n>\n>   $$\n>   x$$ tail", { unchanged: true, error: true }],
+    // An indented `$$` could open a block at the top level or in a list item, so nothing after it is touched.
+    ["a formula after indented code", "    $$\n    x\n$$\ny$$ tail", { code: ["$$\nx\n"], unchanged: true, error: true }],
+    // Here the indented `$$` is top level, so the column-0 one closes it and `y$$ tail` is a paragraph.
+    ["a formula after an indented `$$`", "a\n  $$\nx\n\n$$\ny$$ tail", { math: ["x"], text: ["y$$ tail"], unchanged: true }],
+    ["a list marker after the closing `$$`", "$$\nx$$ 1. next", { math: ["x"], text: ["1. next"] }],
+    ["a `$$` after the closing `$$`", "$$\nx$$ $$ y", { math: ["x"], text: ["$$ y"] }],
+    ["a quote marker after the closing `$$`", "$$\nx$$ > y", { math: ["x"], text: ["> y"] }],
+    ["a quote marker after the closing `$$` in a list item", "- $$\n  x$$ > y", { unchanged: true, error: true }],
+    ["a fence closed in a list item", "- ```\n  a\n  ```\n  $$\n  x$$ tail", { code: ["a\n"], unchanged: true, error: true }],
+    // A block at column 0 is top level whatever comes before it, as it can't continue a list item lazily.
+    ["a formula after a list item", "- a\n$$\nx$$ tail", { math: ["x"], text: ["a", "tail"] }],
+    ["a formula after a quote", "> a\n$$\nx$$ tail", { math: ["x"], text: ["a", "tail"] }],
+    ["a formula after a table", "| a |\n|---|\n$$\nx$$ tail", { math: ["x"], text: ["tail"] }],
+    ["a formula after a fence in a list item", "- ```\n$$\nx$$ tail", { code: [""], math: ["x"], text: ["tail"] }],
+    ["a formula after a formula in a quote", "> $$\n> x\n$$\ny$$ tail", { math: ["x", "y"], text: ["tail"] }],
+    // The parser ends the empty item at the blank line, and then reads each line as its own indented code.
+    ["indented code after an empty item", "-\n\n    $$\n    x$$ tail", { code: ["$$\n", "x$$ tail\n"], unchanged: true }],
+    ["a fence in an item after a setext heading", "- a\n  ===\n  2. ```\n     $$\n     x$$ tail\n     ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in an item after a `-` underline", "- a\n  -\n  2. ```\n     $$\n     x$$ tail\n     ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in an item after indented code in a quote", ">\n    a\n2. ```\n   $$\n   x$$ tail\n   ```", { code: ["a\n", "$$\nx$$ tail\n"], unchanged: true }],
+    ["a fence in an item after a table with an escaped backslash", "- a\\\\|b\n  |---|---|\n  2. ```\n     $$\n     x$$ tail\n     ```", { code: ["$$\nx$$ tail\n"], unchanged: true }],
+    ["a numbered line after indented code", "    a\n\n2. ```\n   $$\n   x$$ tail", { code: ["a\n"], unchanged: true, error: true }],
+    ["a numbered line after a quote and a blank line of spaces", "> a\n     \nb\n10. $$ x\ny tail", { text: ["y tail"], unchanged: true }],
+    ["a line after a table in a list item", "* a\n  |---|\nb\n1)\n      $$ x", { text: ["$$ x"], unchanged: true }],
+    ["a numbered line in a quote after indented code", "    a\n\n> 2. $$ x", { code: ["a\n"], text: ["2. $$ x"], unchanged: true }],
+    ["a numbered line in a list item after a paragraph", "a\n- 2. $$ x", { text: ["2. $$ x"], unchanged: true }],
+    ["a numbered line after a row indented past a table's", "a\n     ---|\n2. $$ x", { text: ["2. $$ x"], unchanged: true }],
+    ["a formula in a quote after an empty item", ">-\n  > $$\n  > x$$ tail", { unchanged: true, error: true }],
+    ["a definition after the closing `$$`", "$$\nx$$ [a]: https://example.com", { math: ["x"], text: ["[a]: https://example.com"] }],
+    ["a definition label left open after the closing `$$`", "$$\nx$$ [a\n]: https://example.com", { math: ["x"], text: ["]: https://example.com"] }],
+    ["an HTML tag after the closing `$$`", "$$\nx$$ <div>\n$$\ny\n$$", { math: ["x", "y"], text: ["<div>"] }],
+    ["an autolink after the closing `$$`", "$$\nx$$ <https://example.com>", { math: ["x"], text: ["https://example.com"] }],
+    ["a fence after the closing `$$`", "$$\nx$$ ```\n$$\ny$$ tail", { math: ["x", "y"], text: ["```", "tail"] }],
+    ["a top-level fence holding a display block", "```\n$$\nx$$ tail\n```\n$$\ny$$ tail", { code: ["$$\nx$$ tail\n"], math: ["y"], text: ["tail"] }],
+  ])("normalises %s as the parser reads it", (_name, text, want) => {
+    const normalised = separateDisplayFences(text);
+    if (want.unchanged) expect(normalised).toBe(text);
+    else expect(normalised).not.toBe(text);
+    expect(separateDisplayFences(normalised)).toBe(normalised);
+    const c = block(text);
+    expect(c.querySelector(".katex-error") !== null).toBe(want.error ?? false);
+    expect(codes(c)).toEqual(want.code ?? []);
+    expect(formulas(c)).toEqual(want.math ?? []);
+    for (const t of want.text ?? []) expect([...c.querySelectorAll("p, li")].some((p) => p.textContent?.trim().endsWith(t))).toBe(true);
+    if (want.startOnly) return;
+    expect(normal(c.innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${text}`).innerHTML));
+    const prose = `one\n\n${text}\n\nlast`;
+    expect(normal(block(prose).innerHTML)).toBe(normal(block(`[unused]: https://e.com\n\n${prose}`).innerHTML));
+  });
+});
+
+describe("separating display fences in a long block", () => {
+  // Sol, round 4: the opener's regex backtracked on long runs of spaces (4.8 s for 1,000).
+  it("reads an opening line of spaces without backtracking", () => {
+    const text = "$$" + " ".repeat(50_000) + "$";
+    const started = performance.now();
+    expect(separateDisplayFences(text)).toBe(text);
+    expect(replyBlocks(text).map((b) => b.source).join("")).toBe(text);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  // Sol, round 3: re-reading the whole block at every candidate `$$` took over 9 s on the main thread.
+  it("reads each line once, however many dollar runs the block holds", () => {
+    const text = "$$\n\\text{\n" + "a$$\n".repeat(8000) + "}\n$$";
+    const started = performance.now();
+    expect(separateDisplayFences(text)).toBe(text);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+});
+
 describe("splitBlocks", () => {
   it("splits at blank lines before a new top-level block", () => {
     expect(splitBlocks("one\n\ntwo\n\n\nthree")).toEqual(["one\n\n", "two\n\n\n", "three"]);
@@ -208,6 +423,20 @@ describe("splitBlocks", () => {
   it("doesn't take a one-line `$$x$$` or code span for an opening fence", () => {
     expect(splitBlocks("$$x$$\n\none")).toHaveLength(2);
     expect(splitBlocks("```a```\n\none")).toHaveLength(2);
+  });
+
+  it("keeps each block's source as the reply wrote it", () => {
+    expect(replyBlocks("one\n\n$$\nx$$ - two\n\nthree")).toEqual([
+      { text: "one\n\n", source: "one\n\n" },
+      { text: "$$\nx\n$$\n\\- two\n\n", source: "$$\nx$$ - two\n\n" },
+      { text: "three", source: "three" },
+    ]);
+    expect(replyBlocks("")).toEqual([{ text: "", source: "" }]);
+  });
+
+  it("doesn't split before a list marker the parser reads as text after indented code", () => {
+    expect(splitBlocks("    a\n\n2. b")).toEqual(["    a\n\n2. b"]);
+    expect(splitBlocks("    a\n\n> - b")).toEqual(["    a\n\n> - b"]);
   });
 
   it("splits before a list that follows a paragraph, and after one", () => {
