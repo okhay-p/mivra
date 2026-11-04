@@ -24,7 +24,8 @@ async function startHarness(port: number, dataDir: string): Promise<ChildProcess
   // if the worker dies, the pipe closes and the harness stops.
   const child = spawn(process.execPath, ["--conditions=@mivra/source", "--import", "tsx", "harness.ts", String(port)], {
     cwd: here,
-    detached: true,
+    // A process group of its own on POSIX; on Windows, detaching would open a console window.
+    detached: process.platform !== "win32",
     stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, MIVRA_E2E_INSTANCE: instance, MIVRA_E2E_OWNED: "1", MIVRA_E2E_DATA_DIR: dataDir },
   });
@@ -80,6 +81,17 @@ async function groupGone(pid: number, ms: number): Promise<boolean> {
 async function stopHarness(child: ChildProcess) {
   const pid = child.pid;
   if (!pid) return;
+  // Windows has no process groups: stop the one harness process and wait for it to exit, so its database is closed
+  // before the fixture removes the directory.
+  if (process.platform === "win32") {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    child.kill();
+    const timer = setTimeout(() => child.kill("SIGKILL"), 5_000);
+    await exited;
+    clearTimeout(timer);
+    return;
+  }
   for (const signal of ["SIGTERM", "SIGKILL"] as const) {
     try {
       process.kill(-pid, signal);
