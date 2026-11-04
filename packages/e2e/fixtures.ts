@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
 
@@ -9,22 +12,21 @@ export type { Locator, Page } from "@playwright/test";
 /** The first port; worker N uses BASE_PORT + N. Override to run alongside another checkout. */
 const BASE_PORT = Number(process.env.MIVRA_E2E_PORT ?? 4198);
 const here = fileURLToPath(new URL(".", import.meta.url));
-const tsx = fileURLToPath(new URL("node_modules/tsx/dist/cli.mjs", import.meta.url));
 
 /**
  * Starts the harness (the real server and built UI with a scripted model) and waits for it to say it is listening.
  * Readiness comes from this child's own output, carrying an id made for this start, so a server someone else left on
  * the port can't be mistaken for it. A port that's taken makes the harness exit, which fails the start.
  */
-async function startHarness(port: number): Promise<ChildProcess> {
+async function startHarness(port: number, dataDir: string): Promise<ChildProcess> {
   const instance = randomUUID();
-  // Its own process group, so stopping it also stops the process tsx starts for the script. The harness also stops
-  // itself if this worker dies without stopping it (MIVRA_E2E_OWNER_PID).
-  const child = spawn(process.execPath, [tsx, "--conditions=@mivra/source", "harness.ts", String(port)], {
+  // One process (tsx as a loader, not a launcher), in its own process group. Its stdin is a pipe this worker holds:
+  // if the worker dies, the pipe closes and the harness stops.
+  const child = spawn(process.execPath, ["--conditions=@mivra/source", "--import", "tsx", "harness.ts", String(port)], {
     cwd: here,
     detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, MIVRA_E2E_INSTANCE: instance, MIVRA_E2E_OWNER_PID: String(process.pid) },
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, MIVRA_E2E_INSTANCE: instance, MIVRA_E2E_OWNED: "1", MIVRA_E2E_DATA_DIR: dataDir },
   });
   let stdout = "";
   let stderr = "";
@@ -51,24 +53,41 @@ async function startHarness(port: number): Promise<ChildProcess> {
   return child;
 }
 
-/** SIGTERM lets the harness delete its data directory; SIGKILL follows if it hangs. */
-async function stopHarness(child: ChildProcess) {
-  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
-  const exited = new Promise((resolve) => child.once("exit", resolve));
+/** Whether any process is left in the harness's process group. */
+function groupAlive(pid: number): boolean {
   try {
-    process.kill(-child.pid, "SIGTERM");
+    process.kill(-pid, 0);
+    return true;
   } catch {
-    return;
+    return false;
   }
-  const timer = setTimeout(() => {
+}
+
+/** Waits up to `ms` for the process group to empty. */
+async function groupGone(pid: number, ms: number): Promise<boolean> {
+  const deadline = Date.now() + ms;
+  while (groupAlive(pid)) {
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return true;
+}
+
+/**
+ * Stops everything in the harness's process group, whether or not its first process is still running: SIGTERM lets
+ * it shut down cleanly, and SIGKILL follows after 5 s.
+ */
+async function stopHarness(child: ChildProcess) {
+  const pid = child.pid;
+  if (!pid) return;
+  for (const signal of ["SIGTERM", "SIGKILL"] as const) {
     try {
-      process.kill(-child.pid!, "SIGKILL");
+      process.kill(-pid, signal);
     } catch {
-      // Already gone.
+      return; // Nothing left in the group.
     }
-  }, 5_000);
-  await exited;
-  clearTimeout(timer);
+    if (await groupGone(pid, signal === "SIGTERM" ? 5_000 : 2_000)) return;
+  }
 }
 
 /**
@@ -79,11 +98,17 @@ export const test = base.extend<object, { harnessURL: string }>({
   harnessURL: [
     async ({}, use, workerInfo) => {
       const port = BASE_PORT + workerInfo.parallelIndex;
-      const harness = await startHarness(port);
+      // Made here, not by the harness, so it's removed even if the harness is killed before it can clean up.
+      const dataDir = mkdtempSync(join(tmpdir(), "mivra-e2e-"));
       try {
-        await use(`http://127.0.0.1:${port}`);
+        const harness = await startHarness(port, dataDir);
+        try {
+          await use(`http://127.0.0.1:${port}`);
+        } finally {
+          await stopHarness(harness);
+        }
       } finally {
-        await stopHarness(harness);
+        rmSync(dataDir, { recursive: true, force: true });
       }
     },
     { scope: "worker", timeout: 90_000 },

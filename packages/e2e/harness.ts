@@ -647,7 +647,8 @@ const model = new MockLanguageModelV4({
   },
 });
 
-const dataDir = mkdtempSync(join(tmpdir(), "mivra-e2e-"));
+// The test fixture makes the directory, so it can remove it even if this process is killed outright.
+const dataDir = process.env.MIVRA_E2E_DATA_DIR ?? mkdtempSync(join(tmpdir(), "mivra-e2e-"));
 // However the process ends, its database goes with it.
 process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
 const token = loadOrCreateToken(dataDir);
@@ -685,15 +686,11 @@ server.on("error", (error) => {
 process.on("SIGTERM", () => process.exit(0));
 process.on("SIGINT", () => process.exit(0));
 
-// If the Playwright worker that started this dies without stopping it (a crash, an OOM kill), stop anyway, so no
-// server is left holding the port and its database.
-const owner = Number(process.env.MIVRA_E2E_OWNER_PID);
-if (owner) {
-  setInterval(() => {
-    try {
-      process.kill(owner, 0);
-    } catch {
-      process.exit(0);
-    }
-  }, 1_000).unref();
+// The test fixture holds this process's stdin open for as long as it wants the harness. When the Playwright worker
+// that started it dies without stopping it (a crash, an OOM kill), the system closes that pipe, so the harness stops
+// too, and no server is left holding the port and its database.
+if (process.env.MIVRA_E2E_OWNED === "1") {
+  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("close", () => process.exit(0));
+  process.stdin.resume();
 }
