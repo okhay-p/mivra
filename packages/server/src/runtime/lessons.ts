@@ -10,7 +10,7 @@ import {
   type LessonView,
 } from "@mivra/protocol";
 import { convertToModelMessages, stepCountIs, streamText, tool, wrapLanguageModel, type LanguageModel, type Tool, type UIMessage } from "ai";
-import { providerOptionsFor, type ModelSelection } from "../model.js";
+import { callOptionsFor, type ModelSelection } from "../model.js";
 import type { ModelSettings } from "../models/selection.js";
 import type { LessonRow, LessonStore } from "../store/lesson-store.js";
 import type { SessionStore } from "../store/session-store.js";
@@ -342,7 +342,7 @@ export function createLessonGenerator({ store, lessons, registry, model, models 
         instructions: instructionsFor(lesson),
         messages: await convertToModelMessages([message]),
         tools: toolsFor(lesson, runId),
-        providerOptions: providerOptionsFor(selection),
+        ...callOptionsFor(selection),
         stopWhen: stepCountIs(LESSON_MAX_STEPS),
         onError: ({ error }) => {
           streamError ??= error;

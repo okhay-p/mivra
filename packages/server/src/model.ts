@@ -1,5 +1,5 @@
-import { anthropic } from "@ai-sdk/anthropic";
-import { openai } from "@ai-sdk/openai";
+import { createAnthropic } from "@ai-sdk/anthropic";
+import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createProviderRegistry, type LanguageModel, type streamText } from "ai";
 
@@ -16,8 +16,10 @@ export interface ModelSelection {
 }
 
 export interface RegistryOptions {
-  /** Defaults to the OPENROUTER_API_KEY environment variable. */
+  /** Each defaults to its environment variable: OPENROUTER_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY. */
   openrouterApiKey?: string;
+  anthropicApiKey?: string;
+  openaiApiKey?: string;
   /** Override fetch, for tests. */
   fetch?: typeof fetch;
 }
@@ -38,6 +40,8 @@ export function createRegistry(options: RegistryOptions = {}) {
   // execute. Declaring v4 makes the registry pass the provider through unchanged.
   Object.assign(openrouter, { specificationVersion: "v4" as const });
 
+  const anthropic = createAnthropic({ apiKey: options.anthropicApiKey, fetch: options.fetch });
+  const openai = createOpenAI({ apiKey: options.openaiApiKey, fetch: options.fetch });
   return createProviderRegistry({ anthropic, openai, openrouter });
 }
 
@@ -54,8 +58,12 @@ export function resolveModel(id: string, registry = defaultRegistry): LanguageMo
   return registry.languageModel(id as ModelId);
 }
 
-/** Per-call options for a selection. Effort reaches OpenRouter models only for now (ADR-012 build step 2 adds the others). */
-export function providerOptionsFor(selection: ModelSelection): ProviderOptions | undefined {
-  if (!selection.effort || !selection.model.startsWith("openrouter:")) return undefined;
-  return { openrouter: { reasoning: { effort: selection.effort } } };
+/** Per-call options for a selection: its effort, in the form each provider takes (ADR-012). */
+export function callOptionsFor(selection: ModelSelection): { reasoning?: ReasoningEffort; providerOptions?: ProviderOptions } {
+  if (!selection.effort) return {};
+  // OpenRouter takes effort in its own request field; the AI SDK's `reasoning` option doesn't reach it.
+  if (selection.model.startsWith("openrouter:")) return { providerOptions: { openrouter: { reasoning: { effort: selection.effort } } } };
+  // Anthropic and OpenAI map the AI SDK's level onto their own settings (Anthropic's effort and adaptive thinking,
+  // OpenAI's reasoningEffort).
+  return { reasoning: selection.effort };
 }

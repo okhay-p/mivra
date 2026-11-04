@@ -3,8 +3,16 @@ import { reasoningEfforts, type ModelSelection } from "../model.js";
 import type { SettingsStore } from "../store/settings-store.js";
 import type { CatalogModel, CatalogState, ModelCatalog } from "./catalog.js";
 
-/** Tool-capable OpenRouter models offered before the learner has picked enough of their own (ADR-012). */
+/**
+ * Tool-capable models offered before the learner has picked enough of their own (ADR-012). Only models the
+ * catalog lists show, so each provider's appear only when its key is set. Direct models come first: when both
+ * a direct model and its OpenRouter counterpart are listed, only the direct one is suggested.
+ */
 export const SUGGESTED_MODELS = [
+  "anthropic:claude-sonnet-5-5",
+  "anthropic:claude-opus-5-5",
+  "openai:gpt-6-luna",
+  "openai:gpt-6.1-sol",
   "openrouter:openai/gpt-6-luna",
   "openrouter:anthropic/claude-sonnet-5.5",
   "openrouter:anthropic/claude-opus-5.5",
@@ -18,6 +26,14 @@ export const SUGGESTED_MODELS = [
 
 /** The model a new install uses until the learner picks one (ADR-012). Needs only OPENROUTER_API_KEY. */
 export const DEFAULT_SELECTION: ModelSelection = { model: "openrouter:openai/gpt-6-luna", effort: "high" };
+
+/** The built-in default for the keys that are set: OpenRouter's if its key is, otherwise a direct provider's. */
+export function defaultSelectionFor(keys: { openrouter?: string; anthropic?: string; openai?: string }): ModelSelection {
+  if (keys.openrouter) return DEFAULT_SELECTION;
+  if (keys.openai) return { model: "openai:gpt-6-luna", effort: "high" };
+  if (keys.anthropic) return { model: "anthropic:claude-sonnet-5-5", effort: "high" };
+  return DEFAULT_SELECTION;
+}
 
 const MAX_RECENT = 5;
 export const MAX_PINNED = 20;
@@ -70,6 +86,18 @@ export function createModelSettings({ settings, catalog, defaults = DEFAULT_SELE
     return { models: all, state };
   }
 
+  /** Suggested models the catalog lists and the learner hasn't used, one per model name (direct before OpenRouter). */
+  function suggestions(all: CatalogModel[], ownIds: Set<string>) {
+    const byId = new Map(all.map((m) => [m.id, m]));
+    const names = new Set([...ownIds].map((id) => byId.get(id)?.name));
+    return suggested.filter((id) => {
+      const name = byId.get(id)?.name;
+      if (!name || ownIds.has(id) || names.has(name)) return false;
+      names.add(name);
+      return true;
+    });
+  }
+
   return {
     current,
     /** The selection for a run starting now. Counts as using the model, so it moves to the front of recent. */
@@ -86,7 +114,7 @@ export function createModelSettings({ settings, catalog, defaults = DEFAULT_SELE
       return {
         current: current(),
         ...own,
-        suggested: ownIds.size >= ENOUGH_OWN ? [] : suggested.filter((id) => known.has(id) && !ownIds.has(id)),
+        suggested: ownIds.size >= ENOUGH_OWN ? [] : suggestions(all, ownIds),
         models: all,
         catalog: state,
       };

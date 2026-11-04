@@ -15,7 +15,7 @@ import {
   type UIMessageStreamOutcome,
 } from "ai";
 import type { LessonStore } from "../store/lesson-store.js";
-import { providerOptionsFor, type ModelSelection } from "../model.js";
+import { callOptionsFor, type ModelSelection } from "../model.js";
 import type { ModelSettings } from "../models/selection.js";
 import { Conflict, type ReplyMetadata, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
@@ -374,7 +374,7 @@ export function createTurnRunner({ store, registry, model, models, lessons, asse
         instructions: assembled.instructions ? `${INSTRUCTIONS}\n\n${assembled.instructions}` : INSTRUCTIONS,
         messages: assembled.messages,
         tools: turnTools.tools,
-        providerOptions: providerOptionsFor(selection),
+        ...callOptionsFor(selection),
         stopWhen: stepCountIs(MAX_STEPS),
         abortSignal: signal,
         onStepEnd: ({ providerMetadata }) => { stepMetadata.push(providerMetadata); },
