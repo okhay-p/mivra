@@ -43,6 +43,20 @@ export function shortModelName(id: string, models: CatalogModel[] = []): string 
   return id.replace(/^[a-z][a-z0-9-]*:/, "");
 }
 
+const PROVIDERS: Record<string, string> = { openrouter: "OpenRouter", anthropic: "Anthropic", openai: "OpenAI" };
+
+/** "anthropic:claude-sonnet-5-5" → "Anthropic". */
+export function providerLabel(id: string): string {
+  const prefix = id.slice(0, Math.max(0, id.indexOf(":")));
+  return PROVIDERS[prefix] ?? prefix;
+}
+
+/** The short name, plus the provider when it isn't OpenRouter, since a model can be reached both ways. */
+export function modelLabel(id: string, models: CatalogModel[] = []): string {
+  const name = shortModelName(id, models);
+  return id.startsWith("openrouter:") || !(id.split(":")[0]! in PROVIDERS) ? name : `${name} (${providerLabel(id)})`;
+}
+
 function priceText(price: CatalogModel["price"]) {
   if (!price) return undefined;
   if (price.input === 0 && price.output === 0) return "free";
@@ -105,7 +119,7 @@ function ModelRow({ model, selected }: { model: CatalogModel; selected: boolean 
       <span className="flex min-w-0 flex-col">
         <span className="truncate">{model.name}</span>
         <span className="text-muted-foreground truncate text-xs">
-          {model.id.replace(/^openrouter:/, "")}
+          {providerLabel(model.id)} · {model.id.slice(model.id.indexOf(":") + 1)}
           {price && ` · ${price}`}
         </span>
       </span>
@@ -125,7 +139,15 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
     const lookup = (ids: string[]) => ids.flatMap((id) => byId.get(id) ?? []);
     if (query.trim()) {
       const matches = searchModels(view.models, query);
-      return [{ heading: matches.length > MAX_MATCHES ? `First ${MAX_MATCHES} of ${matches.length} matches` : undefined, models: matches.slice(0, MAX_MATCHES) }];
+      const shown = matches.slice(0, MAX_MATCHES);
+      const note = matches.length > MAX_MATCHES ? `First ${MAX_MATCHES} of ${matches.length} matches` : undefined;
+      // Grouped by provider once there's more than one; the catalog lists each provider's models together.
+      const providers = [...new Set(shown.map((m) => providerLabel(m.id)))];
+      if (providers.length < 2) return [{ heading: note, models: shown }];
+      return providers.map((provider, i) => ({
+        heading: i === 0 && note ? `${note} · ${provider}` : provider,
+        models: shown.filter((m) => providerLabel(m.id) === provider),
+      }));
     }
     const pinned = new Set(view.pinned);
     const own = [
@@ -143,7 +165,7 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
     return error ? <span className="text-destructive text-xs">{error}</span> : null;
   }
   const current = byId.get(view.current.model);
-  const currentName = shortModelName(view.current.model, view.models);
+  const currentName = modelLabel(view.current.model, view.models);
   const efforts = current?.reasoning?.efforts ?? [];
   const defaultEffort = current?.reasoning?.defaultEffort;
   const pinned = view.pinned.includes(view.current.model);
@@ -197,8 +219,8 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
             {view.catalog !== "fresh" && (
               <p className="text-muted-foreground border-t px-3 py-2 text-xs">
                 {view.catalog === "stale"
-                  ? "Couldn't refresh OpenRouter's model list, so this is a saved copy."
-                  : "Couldn't load OpenRouter's model list. Search covers only the default model."}
+                  ? "Couldn't refresh every provider's model list, so some of this is a saved copy."
+                  : "Couldn't load the model list. Search covers only the default model."}
               </p>
             )}
           </Command>

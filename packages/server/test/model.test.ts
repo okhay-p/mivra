@@ -1,7 +1,7 @@
 import { stepCountIs, streamText, tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createRegistry, providerOptionsFor, resolveModel } from "../src/model.js";
+import { createRegistry, callOptionsFor, resolveModel } from "../src/model.js";
 
 const chunk = (delta: object, finish: string | null, extra: object = {}) =>
     `data: ${JSON.stringify({
@@ -83,7 +83,7 @@ describe("openrouter provider", () => {
     const run = (effort: "medium" | null = null) =>
       streamText({
         model: resolveModel("openrouter:vendor/model", createRegistry({ openrouterApiKey: "k", fetch: fakeFetch })),
-        providerOptions: providerOptionsFor({ model: "openrouter:vendor/model", effort }),
+        ...callOptionsFor({ model: "openrouter:vendor/model", effort }),
         prompt: "quiz me",
         tools: { ask_check: tool({ inputSchema: z.object({ question: z.string() }), execute: async () => "ok" }) },
         stopWhen: stepCountIs(2),
@@ -93,6 +93,32 @@ describe("openrouter provider", () => {
     bodies.length = 0;
     await run();
     expect(bodies[0]?.reasoning).toBeUndefined();
+  });
+
+  it("sends the effort to Anthropic and OpenAI in each provider's own form, and none by default", async () => {
+    const requests: { url: string; body: Record<string, unknown> }[] = [];
+    const fakeFetch: typeof fetch = async (input, init) => {
+      requests.push({ url: String(input), body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+      // The request is all this test needs.
+      return new Response(JSON.stringify({ error: { message: "stop here" } }), { status: 400, headers: { "content-type": "application/json" } });
+    };
+    const registry = createRegistry({ anthropicApiKey: "a", openaiApiKey: "o", fetch: fakeFetch });
+    const send = async (model: string, effort: "high" | null) => {
+      const result = streamText({ model: resolveModel(model, registry), ...callOptionsFor({ model, effort }), prompt: "hi", maxRetries: 0 });
+      await result.consumeStream({ onError: () => {} });
+      return requests.at(-1)!;
+    };
+
+    const claude = await send("anthropic:claude-sonnet-5-5", "high");
+    expect(claude.url).toMatch(/api\.anthropic\.com/);
+    expect(claude.body.model).toBe("claude-sonnet-5-5");
+    expect(JSON.stringify(claude.body)).toContain('"effort":"high"');
+    const gpt = await send("openai:gpt-6-luna", "high");
+    expect(gpt.url).toMatch(/api\.openai\.com/);
+    expect(gpt.body.reasoning).toMatchObject({ effort: "high" });
+
+    expect(JSON.stringify((await send("anthropic:claude-sonnet-5-5", null)).body)).not.toContain("effort");
+    expect((await send("openai:gpt-6-luna", null)).body.reasoning).toBeUndefined();
   });
 
   it("runs tool calls through the registry and continues to the next step", async () => {

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { CatalogModel, ModelPickerView } from "../src/api.js";
-import { ModelPicker, searchModels, shortModelName, useModelPicker } from "../src/ModelPicker.js";
+import { ModelPicker, modelLabel, searchModels, shortModelName, useModelPicker } from "../src/ModelPicker.js";
 
 const model = (id: string, name: string, reasoning: CatalogModel["reasoning"] = null): CatalogModel => ({
   id: `openrouter:${id}`,
@@ -55,6 +55,10 @@ describe("ModelPicker", () => {
   it("names models without their vendor prefix, and searches every word", () => {
     expect(shortModelName(sonnet.id, [sonnet])).toBe("Claude Sonnet 5.5");
     expect(shortModelName("anthropic:claude-direct")).toBe("claude-direct");
+    // A model reached directly says which provider; through OpenRouter, it doesn't need to.
+    expect(modelLabel("anthropic:claude-sonnet-5-5", [{ ...sonnet, id: "anthropic:claude-sonnet-5-5" }])).toBe("Claude Sonnet 5.5 (Anthropic)");
+    expect(modelLabel(sonnet.id, [sonnet])).toBe("Claude Sonnet 5.5");
+    expect(modelLabel("mivra:scripted")).toBe("scripted");
     expect(searchModels([sonnet, flash, plain], "claude 5.5").map((m) => m.id)).toEqual([sonnet.id]);
     expect(searchModels([sonnet, flash, plain], "GOOGLE flash").map((m) => m.id)).toEqual([flash.id]);
   });
@@ -82,6 +86,18 @@ describe("ModelPicker", () => {
     expect(await within(list).findByText("No models match.")).toBeTruthy();
     // Renders 50 rows: about 2 s alone, and far more when every suite runs at once.
   }, 20_000);
+
+  it("groups search results by provider when more than one provider matches", async () => {
+    const direct = { ...sonnet, id: "anthropic:claude-sonnet-5-5" };
+    serve(picker({ models: [sonnet, flash, plain, direct] }));
+    render(<Harness />);
+    fireEvent.click(await screen.findByRole("button", { name: /^Model: / }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Choose a model" }), { target: { value: "sonnet" } });
+    const list = await screen.findByRole("listbox");
+    expect(await within(list).findByText("Anthropic")).toBeTruthy();
+    expect(within(list).getByText("OpenRouter")).toBeTruthy();
+    expect(within(list).getByText("Anthropic · claude-sonnet-5-5", { exact: false })).toBeTruthy();
+  });
 
   it("keeps the effort when the new model supports it, and falls back to the default when it doesn't", async () => {
     const puts = serve(picker({ current: { model: sonnet.id, effort: "high" } }));
@@ -125,7 +141,7 @@ describe("ModelPicker", () => {
     serve(picker({ catalog: "stale" }), () => json({ error: "The model list couldn't be loaded, so the model can't be checked. Try again later." }, 503));
     render(<Harness />);
     fireEvent.click(await screen.findByRole("button", { name: /^Model: / }));
-    expect(await screen.findByText("Couldn't refresh OpenRouter's model list, so this is a saved copy.")).toBeTruthy();
+    expect(await screen.findByText("Couldn't refresh every provider's model list, so some of this is a saved copy.")).toBeTruthy();
     fireEvent.click(await screen.findByRole("option", { name: /Gemini 3.8 Flash/ }));
     expect((await screen.findByRole("alert")).textContent).toContain("can't be checked");
     // The selection didn't change.

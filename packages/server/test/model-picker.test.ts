@@ -5,8 +5,8 @@ import { createApp } from "../src/app.js";
 import { openDb } from "../src/db/client.js";
 import { runs } from "../src/db/schema.js";
 import type { ModelSelection } from "../src/model.js";
-import { createOpenRouterCatalog, parseOpenRouterModels, staticCatalog, type CatalogModel } from "../src/models/catalog.js";
-import { DEFAULT_SELECTION, createModelSettings } from "../src/models/selection.js";
+import { createOpenRouterCatalog, createProviderCatalog, matchDirectModels, parseOpenRouterModels, staticCatalog, type CatalogModel } from "../src/models/catalog.js";
+import { DEFAULT_SELECTION, createModelSettings, defaultSelectionFor } from "../src/models/selection.js";
 import { loadConfig } from "../src/config.js";
 import { replayMessages } from "../src/runtime/turn-runner.js";
 import { createSettingsStore } from "../src/store/settings-store.js";
@@ -103,6 +103,94 @@ describe("OpenRouter's model list", () => {
     expect(await restarted.list()).toMatchObject({ state: "stale", models: [{ id: "openrouter:vendor/thinker" }] });
     const empty = createOpenRouterCatalog({ fetch: fakeFetch, clock: () => now });
     expect(await empty.list()).toEqual({ models: [], state: "unavailable" });
+  });
+});
+
+describe("direct providers' models", () => {
+  const described = parseOpenRouterModels({
+    data: [
+      openRouterEntry("anthropic/claude-sonnet-5.5"),
+      openRouterEntry("openai/gpt-6-luna"),
+      openRouterEntry("openai/text-embedding-4", { supported_parameters: [] }),
+      openRouterEntry("vendor/other"),
+    ],
+  });
+
+  it("describes each of a provider's models by its OpenRouter counterpart, and leaves out models that can't use tools", () => {
+    const anthropic = matchDirectModels("anthropic", [{ id: "claude-sonnet-5-5" }, { id: "claude-sonnet-5-5-20260915" }, { id: "claude-unknown" }], described);
+    expect(anthropic.map((m) => m.id)).toEqual(["anthropic:claude-sonnet-5-5", "anthropic:claude-sonnet-5-5-20260915"]);
+    expect(anthropic[0]).toMatchObject({ name: "Vendor: anthropic/claude-sonnet-5.5", price: { input: 3, output: 15 }, reasoning: { efforts: ["low", "high", "max"] } });
+    expect(matchDirectModels("openai", [{ id: "gpt-6-luna" }, { id: "text-embedding-4" }, { id: "whisper-2" }], described).map((m) => m.id)).toEqual(["openai:gpt-6-luna"]);
+    // Another vendor's OpenRouter models never match.
+    expect(matchDirectModels("openai", [{ id: "claude-sonnet-5-5" }], described)).toEqual([]);
+  });
+
+  const lists = (failing: string[] = []) => {
+    const seen: { url: string; headers: Headers }[] = [];
+    const fakeFetch: typeof fetch = async (input, init) => {
+      const url = String(input);
+      seen.push({ url, headers: new Headers(init?.headers) });
+      if (failing.some((host) => url.includes(host))) throw new Error("offline");
+      if (url.includes("openrouter.ai")) {
+        return Response.json({ data: [openRouterEntry("anthropic/claude-sonnet-5.5"), openRouterEntry("anthropic/claude-opus-5.5"), openRouterEntry("openai/gpt-6-luna")] });
+      }
+      if (url.includes("anthropic.com")) {
+        // Two pages.
+        return url.includes("after_id=")
+          ? Response.json({ data: [{ id: "claude-opus-5-5", type: "model" }], has_more: false, last_id: "claude-opus-5-5" })
+          : Response.json({ data: [{ id: "claude-sonnet-5-5", type: "model" }], has_more: true, last_id: "claude-sonnet-5-5" });
+      }
+      return Response.json({ object: "list", data: [{ id: "gpt-6-luna", object: "model" }, { id: "dall-e-4", object: "model" }] });
+    };
+    return { seen, fakeFetch };
+  };
+
+  it("lists only the providers whose key is set", async () => {
+    const { seen, fakeFetch } = lists();
+    const all = await createProviderCatalog({ fetch: fakeFetch, keys: { openrouter: "r", anthropic: "a", openai: "o" } }).list();
+    expect(all.state).toBe("fresh");
+    expect(all.models.map((m) => m.id)).toEqual([
+      "openrouter:anthropic/claude-sonnet-5.5",
+      "openrouter:anthropic/claude-opus-5.5",
+      "openrouter:openai/gpt-6-luna",
+      "anthropic:claude-sonnet-5-5",
+      "anthropic:claude-opus-5-5",
+      "openai:gpt-6-luna",
+    ]);
+    expect(seen.find((r) => r.url.includes("anthropic.com"))?.headers.get("x-api-key")).toBe("a");
+    expect(seen.find((r) => r.url.includes("openai.com"))?.headers.get("authorization")).toBe("Bearer o");
+
+    // Without OpenRouter's key its models aren't offered, though its public list still describes the others.
+    const anthropicOnly = await createProviderCatalog({ fetch: lists().fakeFetch, keys: { anthropic: "a" } }).list();
+    expect(anthropicOnly.models.map((m) => m.id)).toEqual(["anthropic:claude-sonnet-5-5", "anthropic:claude-opus-5-5"]);
+    expect(await createProviderCatalog({ fetch: lists().fakeFetch, keys: {} }).list()).toEqual({ models: [], state: "fresh" });
+  });
+
+  it("says the list is stale when one provider's list fails, and unavailable when nothing could be loaded", async () => {
+    const partly = await createProviderCatalog({ fetch: lists(["openai.com"]).fakeFetch, keys: { openrouter: "r", openai: "o" } }).list();
+    expect(partly.state).toBe("stale");
+    expect(partly.models.map((m) => m.id)).not.toContain("openai:gpt-6-luna");
+    // Direct models need OpenRouter's list to be described.
+    expect(await createProviderCatalog({ fetch: lists(["openrouter.ai"]).fakeFetch, keys: { openai: "o" } }).list()).toEqual({ models: [], state: "unavailable" });
+  });
+
+  it("defaults to a model from a provider whose key is set", () => {
+    expect(defaultSelectionFor({ openrouter: "r", openai: "o" })).toEqual(DEFAULT_SELECTION);
+    expect(defaultSelectionFor({ openai: "o", anthropic: "a" })).toEqual({ model: "openai:gpt-6-luna", effort: "high" });
+    expect(defaultSelectionFor({ anthropic: "a" })).toEqual({ model: "anthropic:claude-sonnet-5-5", effort: "high" });
+  });
+
+  it("suggests a direct model rather than the same model through OpenRouter", async () => {
+    const sonnet = { ...thinker, id: "openrouter:anthropic/claude-sonnet-5.5", name: "Anthropic: Claude Sonnet 5.5" };
+    const direct = { ...sonnet, id: "anthropic:claude-sonnet-5-5" };
+    const luna = { ...thinker, id: "openrouter:openai/gpt-6-luna", name: "OpenAI: GPT-6 Luna" };
+    const models = createModelSettings({
+      settings: createSettingsStore(openDb(":memory:")),
+      catalog: staticCatalog([sonnet, direct, luna]),
+      defaults: { model: luna.id, effort: null },
+      suggested: [direct.id, sonnet.id, luna.id],
+    });
+    expect((await models.picker()).suggested).toEqual([direct.id, luna.id]);
   });
 });
 

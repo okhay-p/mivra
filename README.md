@@ -16,12 +16,12 @@ Requires Node.js 22.14+ and pnpm 10 (`npm i -g pnpm`, or prefix commands with `n
 
 ```sh
 pnpm install
-cp .env.example .env   # add your OPENROUTER_API_KEY
+cp .env.example .env   # add your OPENROUTER_API_KEY (or ANTHROPIC_API_KEY / OPENAI_API_KEY)
 ```
 
-Models run through [OpenRouter](https://openrouter.ai), so `OPENROUTER_API_KEY` is the only setting needed. A new install uses GPT-6 Luna at high effort until you choose another model (ADR-012); direct Anthropic and OpenAI keys come later. `MIVRA_MODEL` and `MIVRA_REASONING_EFFORT` are no longer read, and the server warns at startup if they're still set.
+Models run through [OpenRouter](https://openrouter.ai), Anthropic or OpenAI, so one API key is the only setting needed: `OPENROUTER_API_KEY` reaches every model, while `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` call those providers directly. Until you choose a model, a new install uses GPT-6 Luna at high effort: through OpenRouter if its key is set, otherwise through OpenAI. With only an Anthropic key, it uses Claude Sonnet 5.5 (ADR-012). `MIVRA_MODEL` and `MIVRA_REASONING_EFFORT` are no longer read, and the server warns at startup if they're still set.
 
-The picker under the message box chooses the model and reasoning effort for every later reply, syllabus and lesson; a reply already streaming keeps its model. It lists OpenRouter's models that can call tools, which Mivra's learning tools need (from OpenRouter's public list, refreshed hourly; a saved copy is used offline), plus the default model. Opened, it shows your pinned and recent models and a few suggestions; typing searches the whole list. The star pins the current model. The effort menu shows only the levels the selected model supports. Each reply names the model that wrote it, and each run records its model and effort. Reasoning details from earlier replies go back only to the model that wrote them, so after a switch the new model sees earlier replies as text.
+The picker under the message box chooses the model and reasoning effort for every later reply, syllabus and lesson; a reply already streaming keeps its model. It lists the models that can call tools, which Mivra's learning tools need, from each provider whose key is set, plus the default model. OpenRouter's public list describes every model (name, price, effort levels and tool support), so Anthropic's and OpenAI's own models appear only when OpenRouter lists their counterpart. The lists refresh hourly, and a saved copy is used offline. Search results are grouped by provider, and a model called directly shows its provider next to its name. Opened, it shows your pinned and recent models and a few suggestions; typing searches the whole list. The star pins the current model. The effort menu shows only the levels the selected model supports. Each reply names the model that wrote it, and each run records its model and effort. Reasoning details from earlier replies go back only to the model that wrote them, so after a switch the new model sees earlier replies as text.
 
 ## Native dependency
 

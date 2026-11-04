@@ -14,7 +14,7 @@ import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
-import { ModelPicker, shortModelName, useModelPicker } from "./ModelPicker.js";
+import { ModelPicker, modelLabel, useModelPicker } from "./ModelPicker.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
@@ -807,7 +807,7 @@ function Chat({
               })}
               {m.role === "assistant" && typeof (m.metadata as { model?: unknown } | undefined)?.model === "string" && (
                 <p className="text-muted-foreground text-xs" data-reply-model>
-                  {shortModelName((m.metadata as { model: string }).model, modelPicker.view?.models)}
+                  {modelLabel((m.metadata as { model: string }).model, modelPicker.view?.models)}
                 </p>
               )}
               {onAddToLesson && m.role === "assistant" && mi > interviewEnd && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (
