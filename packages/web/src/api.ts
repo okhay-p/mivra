@@ -169,3 +169,29 @@ export const selectModel = (selection: ModelSelection) =>
 
 export const setPinnedModels = (models: string[]) =>
   request(() => api.settings["pinned-models"].$put({ json: { models } }), async (res) => ((await res.json()) as { pinned: string[] }).pinned);
+
+/** Which providers have an API key, and whether this client may change them (ADR-013). Keys never come back. */
+export type ProviderKeysView = InferResponseType<typeof api.settings.providers.$get, 200>;
+export type ProviderKey = ProviderKeysView["providers"][number];
+export type ProviderId = ProviderKey["id"];
+
+/** Fired after a key is saved or removed, so the model picker reloads the providers it lists. */
+export const PROVIDERS_CHANGED = "mivra:providers-changed";
+
+const readProviderKeys = async (res: Response) => {
+  window.dispatchEvent(new Event(PROVIDERS_CHANGED));
+  return (await res.json()) as ProviderKeysView;
+};
+
+export const getProviderKeys = () => request(() => api.settings.providers.$get(), async (res) => (await res.json()) as ProviderKeysView);
+
+export const saveProviderKey = (id: ProviderId, key: string) =>
+  request(() => api.settings.providers[":id"].$put({ param: { id }, json: { key } }), readProviderKeys);
+
+export const removeProviderKey = (id: ProviderId) => request(() => api.settings.providers[":id"].$delete({ param: { id } }), readProviderKeys);
+
+export const checkProviderKey = (id: ProviderId) =>
+  request(
+    () => api.settings.providers[":id"].check.$post({ param: { id } }),
+    async (res) => (await res.json()) as { ok: boolean; reason?: "rejected" | "unreachable"; message?: string },
+  );

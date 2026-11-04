@@ -38,7 +38,21 @@ export default defineConfig({
     // binding all interfaces; set MIVRA_DEV_HOST only if you understand the exposure.
     host: process.env.MIVRA_DEV_HOST ?? "127.0.0.1",
     allowedHosts: [".ts.net"],
-    // changeOrigin makes proxied requests arrive with a loopback Host, which the server accepts.
-    proxy: { "/api": { target: `http://127.0.0.1:${serverPort}`, changeOrigin: true } },
+    proxy: {
+      "/api": {
+        target: `http://127.0.0.1:${serverPort}`,
+        // changeOrigin makes proxied requests arrive with a loopback Host, which the server accepts.
+        changeOrigin: true,
+        // That hides where a request came from, so pass on a non-loopback Host (a tailnet name, say): the
+        // server then treats the request as remote and won't let it change API keys (ADR-013).
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq, req) => {
+            const host = req.headers.host ?? "";
+            const hostname = host.replace(/:\d+$/, "").toLowerCase();
+            if (!["localhost", "127.0.0.1", "[::1]"].includes(hostname)) proxyReq.setHeader("x-forwarded-host", host);
+          });
+        },
+      },
+    },
   },
 });

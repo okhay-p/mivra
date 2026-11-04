@@ -1,10 +1,13 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import type { LanguageModel } from "ai";
 import { AddToLesson, ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
+import { ApiKey, memoryCredentials, providerIds, type CredentialStore, type ProviderId } from "./credentials.js";
 import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
 import { reasoningEfforts, type ModelSelection } from "./model.js";
 import { staticCatalog, type ModelCatalog } from "./models/catalog.js";
+import type { KeyCheck } from "./models/key-check.js";
 import { MAX_PINNED, ModelId, SelectionInput, createModelSettings } from "./models/selection.js";
 import type { Extract } from "./documents/extract-in-child.js";
 import { coreCourse } from "./plugins/core-course.js";
@@ -15,7 +18,7 @@ import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
 import { courseLessons, createLessonGenerator, lessonRevision, lessonView, reconcileCompletion } from "./runtime/lessons.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
-import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
+import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
 import { createSettingsStore } from "./store/settings-store.js";
 import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
@@ -25,8 +28,13 @@ export interface AppDeps {
   /** Resolves the selected model. Tests may ignore the selection and return a mock. */
   model: (selection: ModelSelection) => LanguageModel;
   /** The model picker (ADR-012). Without a catalog, the default model is the only choice; `defaults` replaces the built-in one. */
-  models?: { defaults?: ModelSelection; catalog?: ModelCatalog; suggested?: string[] };
+  models?: { defaults?: ModelSelection | (() => ModelSelection); catalog?: ModelCatalog; suggested?: string[] };
   security: SecurityConfig;
+  /**
+   * Provider API keys (ADR-013). `check` asks the provider whether it accepts a key; `isLocal` says whether a
+   * request may change keys, by default when it comes from a loopback address. Defaults to no keys in memory.
+   */
+  providers?: { credentials: CredentialStore; check?: (provider: ProviderId, key: string) => Promise<KeyCheck>; isLocal?: (c: Context) => boolean };
   /** Defaults to the first-party core-learning, core-memory and core-course plugins. */
   plugins?: Plugin[];
   /** Defaults to extracting on a worker thread. */
@@ -240,6 +248,69 @@ const setPinnedModels = createRoute({
   description: "Replace the models the learner pinned in the picker, in order.",
   request: { body: { content: { "application/json": { schema: z.object({ models: z.array(ModelId).max(MAX_PINNED) }) } } } },
   responses: { 200: { description: "The pinned models", content: { "application/json": { schema: z.object({ pinned: z.array(z.string()) }) } } } },
+});
+
+const ProviderKey = z
+  .object({
+    id: z.enum(providerIds),
+    label: z.string(),
+    source: z.enum(["env", "saved"]).nullable().openapi({ description: "env: set by an environment variable, which Mivra can't change" }),
+    hint: z.string().nullable().openapi({ description: "The key's last four characters" }),
+  })
+  .openapi("ProviderKey");
+const ProviderKeys = z
+  .object({
+    providers: z.array(ProviderKey),
+    canEdit: z.boolean().openapi({ description: "Whether this client may change keys: only from the server's own machine" }),
+  })
+  .openapi("ProviderKeys");
+const ProviderParams = z.object({ id: z.enum(providerIds) });
+
+const listProviderKeys = createRoute({
+  method: "get",
+  path: "/settings/providers",
+  description: "Which providers have an API key and where it comes from (ADR-013). Keys themselves are never returned.",
+  responses: { 200: { description: "Each provider's key status", content: { "application/json": { schema: ProviderKeys } } } },
+});
+
+const setProviderKey = createRoute({
+  method: "put",
+  path: "/settings/providers/{id}",
+  description: "Save a provider's API key. Only accepted from the server's own machine. It applies from the next run.",
+  request: { params: ProviderParams, body: { content: { "application/json": { schema: z.object({ key: z.string() }) } } } },
+  responses: {
+    200: { description: "Each provider's key status", content: { "application/json": { schema: ProviderKeys } } },
+    400: errorResponse("Not a valid API key"),
+    403: errorResponse("Keys can only be changed on the server's own machine"),
+    409: errorResponse("The key comes from an environment variable"),
+  },
+});
+
+const removeProviderKey = createRoute({
+  method: "delete",
+  path: "/settings/providers/{id}",
+  description: "Remove a saved API key. Only accepted from the server's own machine.",
+  request: { params: ProviderParams },
+  responses: {
+    200: { description: "Each provider's key status", content: { "application/json": { schema: ProviderKeys } } },
+    403: errorResponse("Keys can only be changed on the server's own machine"),
+    404: errorResponse("No saved key"),
+    409: errorResponse("The key comes from an environment variable"),
+  },
+});
+
+const checkProviderKeyRoute = createRoute({
+  method: "post",
+  path: "/settings/providers/{id}/check",
+  description: "Ask the provider whether it accepts the key in use, with a request that spends no tokens.",
+  request: { params: ProviderParams },
+  responses: {
+    200: {
+      description: "Whether the provider accepted the key",
+      content: { "application/json": { schema: z.object({ ok: z.boolean(), reason: z.enum(["rejected", "unreachable"]).optional(), message: z.string().optional() }) } },
+    },
+    404: errorResponse("No key set for this provider"),
+  },
 });
 
 /** How long a client waiting on a lesson is held before it asks again. */
@@ -468,8 +539,12 @@ function toDocumentJson(row: DocumentRow): DocumentView {
   };
 }
 
-export function createApp({ db, model, models: modelOptions = {}, security, plugins = [coreLearning, coreMemory, coreCourse], extractDocument }: AppDeps) {
+export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse], extractDocument }: AppDeps) {
   const store = createSessionStore(db);
+  const { credentials, check, isLocal = isLoopbackPeer } = providers;
+  const providerKeys = (c: Context) => ({ providers: credentials.views(), canEdit: isLocal(c) });
+  const notLocal = "API keys can only be changed on the computer running Mivra. Use `mivra auth set` there.";
+  const fromEnv = "This key comes from an environment variable. Change or unset it there.";
   const models = createModelSettings({
     settings: createSettingsStore(db),
     catalog: modelOptions.catalog ?? staticCatalog([]),
@@ -634,6 +709,28 @@ export function createApp({ db, model, models: modelOptions = {}, security, plug
       const result = await models.select(c.req.valid("json"));
       if (!result.ok) return c.json({ error: result.message }, result.kind === "invalid" ? 400 : 503);
       return c.json(result.selection, 200);
+    })
+    .openapi(listProviderKeys, (c) => c.json(providerKeys(c), 200))
+    .openapi(setProviderKey, (c) => {
+      if (!isLocal(c)) return c.json({ error: notLocal }, 403);
+      const key = ApiKey.safeParse(c.req.valid("json").key);
+      if (!key.success) return c.json({ error: key.error.issues[0]!.message }, 400);
+      if (!credentials.set(c.req.valid("param").id, key.data).ok) return c.json({ error: fromEnv }, 409);
+      return c.json(providerKeys(c), 200);
+    })
+    .openapi(removeProviderKey, (c) => {
+      if (!isLocal(c)) return c.json({ error: notLocal }, 403);
+      const removed = credentials.remove(c.req.valid("param").id);
+      if (removed === "env") return c.json({ error: fromEnv }, 409);
+      if (!removed) return c.json({ error: "No saved key for this provider" }, 404);
+      return c.json(providerKeys(c), 200);
+    })
+    .openapi(checkProviderKeyRoute, async (c) => {
+      const provider = c.req.valid("param").id;
+      const key = credentials.keys()[provider];
+      if (!key) return c.json({ error: "No key set for this provider" }, 404);
+      if (!check) return c.json({ ok: true }, 200);
+      return c.json(await check(provider, key), 200);
     })
     .openapi(setPinnedModels, (c) => c.json({ pinned: models.setPinned(c.req.valid("json").models) }, 200))
     .openapi(listMemories, (c) => c.json(store.listMemoriesForLearner(registry.checkKinds()).map(toMemoryJson), 200))

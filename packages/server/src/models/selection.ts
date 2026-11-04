@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ProviderKeys } from "../credentials.js";
 import { reasoningEfforts, type ModelSelection } from "../model.js";
 import type { SettingsStore } from "../store/settings-store.js";
 import type { CatalogModel, CatalogState, ModelCatalog } from "./catalog.js";
@@ -28,7 +29,7 @@ export const SUGGESTED_MODELS = [
 export const DEFAULT_SELECTION: ModelSelection = { model: "openrouter:openai/gpt-6-luna", effort: "high" };
 
 /** The built-in default for the keys that are set: OpenRouter's if its key is, otherwise a direct provider's. */
-export function defaultSelectionFor(keys: { openrouter?: string; anthropic?: string; openai?: string }): ModelSelection {
+export function defaultSelectionFor(keys: ProviderKeys): ModelSelection {
   if (keys.openrouter) return DEFAULT_SELECTION;
   if (keys.openai) return { model: "openai:gpt-6-luna", effort: "high" };
   if (keys.anthropic) return { model: "anthropic:claude-sonnet-5-5", effort: "high" };
@@ -62,27 +63,29 @@ export type SelectResult =
 export interface ModelSettingsDeps {
   settings: SettingsStore;
   catalog: ModelCatalog;
-  /** Used until the learner picks a model. Defaults to DEFAULT_SELECTION; tests pass their own. */
-  defaults?: ModelSelection;
+  /** Used until the learner picks a model. Defaults to DEFAULT_SELECTION; a function follows the keys set now. */
+  defaults?: ModelSelection | (() => ModelSelection);
   suggested?: string[];
 }
 
 /** The app-wide model selection, with the learner's recent and pinned models (ADR-012). */
-export function createModelSettings({ settings, catalog, defaults = DEFAULT_SELECTION, suggested = SUGGESTED_MODELS }: ModelSettingsDeps) {
+export function createModelSettings({ settings, catalog, defaults: defaultsOption = DEFAULT_SELECTION, suggested = SUGGESTED_MODELS }: ModelSettingsDeps) {
+  const defaults = () => (typeof defaultsOption === "function" ? defaultsOption() : defaultsOption);
   const read = <T>(key: string, schema: z.ZodType<T>, fallback: T): T => {
     const parsed = schema.safeParse(settings.get(key));
     return parsed.success ? parsed.data : fallback;
   };
-  const current = (): ModelSelection => read(KEYS.current, SelectionInput, defaults);
+  const current = (): ModelSelection => read(KEYS.current, SelectionInput, defaults());
   const recent = () => read(KEYS.recent, Ids, []);
   const pinned = () => read(KEYS.pinned, Ids, []);
 
   /** The catalog, plus the default when the catalog doesn't list it (offline, or a test's scripted model). */
   async function models() {
     const { models, state } = await catalog.list();
-    const all = models.some((m) => m.id === defaults.model)
+    const fallback = defaults();
+    const all = models.some((m) => m.id === fallback.model)
       ? models
-      : [{ id: defaults.model, name: defaults.model, contextLength: null, price: null, reasoning: null }, ...models];
+      : [{ id: fallback.model, name: fallback.model, contextLength: null, price: null, reasoning: null }, ...models];
     return { models: all, state };
   }
 

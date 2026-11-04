@@ -6,6 +6,7 @@ import { serve } from "@hono/node-server";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { createApp } from "../server/src/app.js";
+import { memoryCredentials } from "../server/src/credentials.js";
 import { staticCatalog } from "../server/src/models/catalog.js";
 import { runs, memories } from "../server/src/db/schema.js";
 import { openDb } from "../server/src/db/client.js";
@@ -727,6 +728,8 @@ const app = createApp({
     ]),
     suggested: ["openrouter:e2e/thinker", "openrouter:e2e/plain"],
   },
+  // A saved key, so the first-run setup stays closed; a test removes it to see that setup. Checks always pass.
+  providers: { credentials: memoryCredentials({ saved: { openrouter: "sk-or-e2e-key-0000WXYZ" } }), check: async () => ({ ok: true }) },
   security: { token, allowedHosts: [] },
 });
 // Test-only observability: no credentials or private provider details.

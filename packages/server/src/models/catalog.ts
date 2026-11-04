@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { keysSignature, type ProviderKeys } from "../credentials.js";
 import { reasoningEfforts, type ReasoningEffort } from "../model.js";
 
 /** A model the picker can offer (ADR-012). Ids carry the provider prefix, like a selection. */
@@ -248,8 +249,8 @@ export function matchDirectModels(provider: DirectProvider, direct: DirectModel[
 }
 
 export interface ProviderCatalogOptions extends CatalogSourceOptions {
-  /** API keys from the environment. A provider is listed only when its key is set (ADR-012). */
-  keys: { openrouter?: string; anthropic?: string; openai?: string };
+  /** API keys. A provider is listed only when its key is set (ADR-012). */
+  keys: ProviderKeys;
   /** Base URLs for the direct providers, as their SDKs read them (ANTHROPIC_BASE_URL, OPENAI_BASE_URL). */
   baseUrls?: Partial<Record<DirectProvider, string>>;
   /** One store per source; each keeps its last good list. */
@@ -279,6 +280,22 @@ export function createProviderCatalog({ keys, baseUrls = {}, persistFor, ...opti
       const states = [or.state, ...lists.map((l) => l.state)];
       const state: CatalogState = states.every((s) => s === "fresh") ? "fresh" : models.length > 0 ? "stale" : "unavailable";
       return { models, state };
+    },
+  };
+}
+
+/**
+ * A catalog for the keys set now (ADR-013): rebuilt when a key is added, changed or removed, so the picker
+ * follows keys saved in settings or with `mivra auth` without a restart. Persisted lists carry over.
+ */
+export function createKeyedCatalog(keys: () => ProviderKeys, build: (keys: ProviderKeys) => ModelCatalog): ModelCatalog {
+  let current: { signature: string; catalog: ModelCatalog } | undefined;
+  return {
+    list() {
+      const now = keys();
+      const signature = keysSignature(now);
+      if (current?.signature !== signature) current = { signature, catalog: build(now) };
+      return current.catalog.list();
     },
   };
 }
