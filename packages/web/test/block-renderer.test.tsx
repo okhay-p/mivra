@@ -54,6 +54,27 @@ describe("createWorkerRenderer", () => {
     expect(renderer.peek(text)).toBe(result);
   });
 
+  // Sol, round 5: a short block can define a macro that expands far beyond its source and hang KaTeX.
+  it.each([
+    ["\\def", "$$\n\\def\\x{" + "a".repeat(500) + "}" + "\\x ".repeat(483) + "\n$$"],
+    ["\\newcommand", "$$\\newcommand{\\x}{a} \\x$$"],
+    ["\\let", "$$\\let\\y=x \\y$$"],
+  ])("renders a short block that defines a macro (%s) in the worker, never in place", async (_name, text) => {
+    const { renderer, latest } = setup();
+    expect(text.length).toBeLessThan(2_000);
+    expect(renderer.peek(text)).toBeUndefined();
+    const pending = renderer.render(text, new AbortController().signal);
+    expect(latest().requests.at(-1)?.text).toBe(text);
+    latest().answer(latest().requests.at(-1), true);
+    await pending;
+  });
+
+  it("still renders a short block that only uses a command named like a macro definer in place", () => {
+    const { renderer, workers } = setup();
+    expect(renderer.peek("$\\deferred + \\letter$")).toBeDefined();
+    expect(workers).toHaveLength(0);
+  });
+
   it("shows a block the parser fails on as plain text", async () => {
     const { renderer, latest } = setup();
     const pending = renderer.render(big("a"), new AbortController().signal);

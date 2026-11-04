@@ -53,6 +53,9 @@ const TIMEOUT_MS = 8_000;
 // Far longer than an ordinary block takes, and far shorter than respawning the worker after every delta would cost.
 const CANCEL_GRACE_MS = 250;
 const SYNC_LIMIT = 2_000;
+// A macro the formula defines can expand far beyond its source (Sol, round 5: under 2,000 characters hung KaTeX for
+// over 25 s), so a block that defines one always renders in the worker, where the deadline can stop it.
+const DEFINES_MACRO = /\\(?:[gex]?def|let|futurelet|(?:re|provide)?newcommand|(?:re)?newenvironment)(?![a-zA-Z])/;
 const CACHE_SIZE = 300;
 
 /** Results by text, least recently used first. */
@@ -169,7 +172,7 @@ export function createWorkerRenderer(spawn: () => WorkerLike, options: WorkerRen
   return {
     peek(text) {
       const cached = cache.get(text);
-      if (cached !== undefined || text.length > syncLimit) return cached;
+      if (cached !== undefined || text.length > syncLimit || DEFINES_MACRO.test(text)) return cached;
       const result = renderNow(text);
       cache.set(text, result);
       return result;

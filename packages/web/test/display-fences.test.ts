@@ -21,12 +21,15 @@ const parse = (text: string) => processor.runSync(processor.parse(text)) as unkn
 
 /**
  * The blocks' top-level nodes, without positions, to compare a split parse with a whole one. Maths that differs only
- * in surrounding whitespace renders the same, so it compares trimmed.
+ * in surrounding whitespace renders the same, so it compares trimmed, without the `data` remark-math derives from
+ * its value (which keeps the whitespace).
  */
 const shape = (texts: string[]) =>
   JSON.stringify(texts.flatMap((text) => parse(text).children ?? []), function (this: MdNode, key, value: unknown) {
     if (key === "position") return undefined;
-    return key === "value" && (this.type === "math" || this.type === "inlineMath") ? (value as string).trim() : value;
+    const math = this.type === "math" || this.type === "inlineMath";
+    if (math && key === "data") return undefined;
+    return math && key === "value" ? (value as string).trim() : value;
   });
 
 function* nodes(node: MdNode): Generator<MdNode> {
