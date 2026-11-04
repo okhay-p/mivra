@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures.js";
 
 test("a course starts from the first screen, runs the placement interview and writes the syllabus", async ({ page }) => {
   await page.goto("/");
