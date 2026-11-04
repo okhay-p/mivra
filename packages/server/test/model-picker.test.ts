@@ -120,7 +120,7 @@ describe("direct providers' models", () => {
     const anthropic = matchDirectModels("anthropic", [{ id: "claude-sonnet-5-5" }, { id: "claude-sonnet-5-5-20260915" }, { id: "claude-unknown" }], described);
     expect(anthropic.map((m) => m.id)).toEqual(["anthropic:claude-sonnet-5-5", "anthropic:claude-sonnet-5-5-20260915"]);
     expect(anthropic[0]).toMatchObject({ name: "Vendor: anthropic/claude-sonnet-5.5", price: { input: 3, output: 15 }, reasoning: { efforts: ["low", "high", "max"] } });
-    expect(matchDirectModels("openai", [{ id: "gpt-6-luna" }, { id: "text-embedding-4" }, { id: "whisper-2" }], described).map((m) => m.id)).toEqual(["openai:gpt-6-luna"]);
+    expect(matchDirectModels("openai", [{ id: "gpt-6-luna" }, { id: "gpt-6-luna-2026-08-14" }, { id: "text-embedding-4" }, { id: "whisper-2" }], described).map((m) => m.id)).toEqual(["openai:gpt-6-luna", "openai:gpt-6-luna-2026-08-14"]);
     // Another vendor's OpenRouter models never match.
     expect(matchDirectModels("openai", [{ id: "claude-sonnet-5-5" }], described)).toEqual([]);
   });

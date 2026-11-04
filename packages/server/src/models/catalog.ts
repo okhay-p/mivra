@@ -224,8 +224,8 @@ function directList(provider: DirectProvider, key: string, baseUrl: string | und
   );
 }
 
-/** "claude-sonnet-5-5-20261001" and "claude-sonnet-5.5" both become "claude-sonnet-5-5". */
-const matchKey = (id: string) => id.toLowerCase().replace(/-\d{8}$/, "").replace(/\./g, "-");
+/** Snapshots match their alias (Anthropic dates them "-20261001", OpenAI "-2026-10-01"), and dots become dashes. */
+const matchKey = (id: string) => id.toLowerCase().replace(/-(\d{8}|\d{4}-\d{2}-\d{2})$/, "").replace(/\./g, "-");
 
 /**
  * A provider's own models, described by their OpenRouter counterpart (`anthropic/…`, `openai/…`). A model
