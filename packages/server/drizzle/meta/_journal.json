@@ -50,6 +50,34 @@
       "when": 1793644201129,
       "tag": "0006_closed_karen_page",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1793685498258,
+      "tag": "0007_regular_white_tiger",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1793688326879,
+      "tag": "0008_long_millenium_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1793690300770,
+      "tag": "0009_legal_spirit",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1793692194310,
+      "tag": "0010_goofy_thanos",
+      "breakpoints": true
     }
   ]
 }

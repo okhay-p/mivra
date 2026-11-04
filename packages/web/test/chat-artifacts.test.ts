@@ -45,3 +45,4 @@ describe("mergeViews", () => {
     expect(mergeViews({ "art-mc": question }, { "art-mc": answered })).toEqual({ "art-mc": answered });
   });
 });
+

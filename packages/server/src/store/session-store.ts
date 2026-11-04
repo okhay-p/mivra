@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
 import { and, asc, desc, eq, inArray, isNull, isNotNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { artifacts, attempts, documentChunks, documents, memories, messages, runs, sessions, type RunStatus } from "../db/schema.js";
+import { artifacts, attempts, courses, documentChunks, documents, lessons, memories, messages, runs, sessions, syllabusVersions, type RunStatus } from "../db/schema.js";
 
 export type { RunStatus };
 
@@ -12,6 +12,18 @@ export type AttemptRow = typeof attempts.$inferSelect;
 export type EvidenceRow = Pick<AttemptRow, "id" | "concept" | "correct" | "createdAt">;
 export type MemoryRow = typeof memories.$inferSelect;
 export type DocumentRow = typeof documents.$inferSelect;
+export type CourseRow = typeof courses.$inferSelect;
+export type SyllabusRow = typeof syllabusVersions.$inferSelect;
+export type SyllabusTopicRow = { id: string; title: string; summary: string; reason: string; requestedByLearner: boolean; concepts: string[] };
+export type KnownConceptRow = { concept: string; source: "memory" | "test" | "guess"; note: string };
+export type SyllabusVersion = Omit<SyllabusRow, "topics" | "known" | "changedTopicIds"> & { topics: SyllabusTopicRow[]; known: KnownConceptRow[]; changedTopicIds: string[] };
+/** One edit of a syllabus's future topics. */
+export type SyllabusOperation =
+  | { op: "insert"; afterTopicId: string | null; title: string; summary: string; reason: string; concepts: string[] }
+  | { op: "edit"; topicId: string; title?: string; summary?: string }
+  | { op: "remove"; topicId: string }
+  | { op: "move"; topicId: string; afterTopicId: string | null }
+  | { op: "split"; topicId: string; into: { title: string; summary: string; concepts: string[] }[] };
 /** A chunk of a document's text with what's needed to cite it. `documentOrder` is the document's rowid, so its upload order. */
 export type DocumentExcerpt = { documentId: string; filename: string; kind: DocumentRow["kind"]; page: number; seq: number; text: string; documentOrder: number };
 
@@ -51,7 +63,7 @@ function firstText(message: UIMessage): string | undefined {
 }
 
 /**
- * All persistence for sessions, messages and runs. This is the only module that talks to Drizzle
+ * All persistence for sessions, messages and runs. With lesson-store.ts, the only code that talks to Drizzle
  * (ADR-007), so the storage engine and schema can change without touching the runtime or routes.
  */
 export function createSessionStore(db: Db, clock: () => Date = () => new Date()) {
@@ -70,8 +82,268 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       db.delete(memories).where(eq(memories.status, "pending")).run();
     },
 
-    listSessions(): SessionRow[] {
-      return db.select().from(sessions).orderBy(desc(sessions.updatedAt)).all();
+    /** Sessions, most recent first, with the course each one teaches, if any. A lesson's own session is hidden. */
+    listSessions(): (SessionRow & { courseId: string | null })[] {
+      return db
+        .select({ session: sessions, courseId: courses.id })
+        .from(sessions)
+        .leftJoin(courses, eq(courses.sessionId, sessions.id))
+        .leftJoin(lessons, eq(lessons.sessionId, sessions.id))
+        .where(isNull(lessons.id))
+        .orderBy(desc(sessions.updatedAt))
+        .all()
+        .map((row) => ({ ...row.session, courseId: row.courseId }));
+    },
+
+    /** Starts a course in a new session of its own, titled after the goal. */
+    createCourse(goal: string): { course: CourseRow; session: SessionRow } {
+      return db.transaction((tx) => {
+        const now = clock();
+        const session = { id: randomUUID(), title: goal.trim().slice(0, 60), createdAt: now, updatedAt: now };
+        tx.insert(sessions).values(session).run();
+        const course = { id: randomUUID(), sessionId: session.id, goal: goal.trim(), status: "interviewing" as const, createdAt: now, updatedAt: now };
+        tx.insert(courses).values(course).run();
+        return { course, session };
+      });
+    },
+
+    /**
+     * Undoes the latest syllabus version if it was an automatic change and none of the topics it added or
+     * moved has a lesson yet: a new version with the topics as they were before it (ADR-011).
+     */
+    undoSyllabusChange(courseId: string, version: number, startedTopicIds: string[]): { ok: true; version: number } | { ok: false; reason: string } {
+      return db.transaction((tx) => {
+        const rows = tx.select().from(syllabusVersions).where(eq(syllabusVersions.courseId, courseId)).orderBy(desc(syllabusVersions.version)).limit(2).all();
+        const [latest, before] = rows;
+        if (!latest || latest.version !== version) return { ok: false, reason: "Only the latest change can be undone." };
+        if (latest.source !== "adaptive" || !before) return { ok: false, reason: "Only an automatic change can be undone." };
+        const started = new Set(startedTopicIds);
+        if ((latest.changedTopicIds as string[]).some((id) => started.has(id))) return { ok: false, reason: "A lesson from that change has already started." };
+        const now = clock();
+        tx.insert(syllabusVersions)
+          .values({
+            id: randomUUID(),
+            courseId,
+            version: latest.version + 1,
+            topics: before.topics,
+            known: latest.known,
+            source: "undo",
+            triggerLessonId: null,
+            reason: `Undid: ${latest.reason ?? "the automatic change"}`,
+            changedTopicIds: [],
+            runId: null,
+            createdAt: now,
+          })
+          .run();
+        tx.update(courses).set({ updatedAt: now }).where(eq(courses.id, courseId)).run();
+        return { ok: true, version: latest.version + 1 };
+      });
+    },
+
+    /**
+     * The last message of a course's placement interview: the stored reply of the run that wrote the first
+     * syllabus, or, if that run stored no reply (it failed after writing it), the last message stored before
+     * the syllabus was written. Null only while there is no syllabus.
+     */
+    interviewMessageId(courseId: string): string | null {
+      const syllabus = db
+        .select({ runId: syllabusVersions.runId, createdAt: syllabusVersions.createdAt, sessionId: courses.sessionId })
+        .from(syllabusVersions)
+        .innerJoin(courses, eq(courses.id, syllabusVersions.courseId))
+        .where(and(eq(syllabusVersions.courseId, courseId), eq(syllabusVersions.version, 1)))
+        .get();
+      if (!syllabus) return null;
+      const reply = syllabus.runId
+        ? db.select({ id: runs.assistantMessageId }).from(runs).where(eq(runs.id, syllabus.runId)).get()?.id
+        : undefined;
+      if (reply) return reply;
+      const before = db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(and(eq(messages.sessionId, syllabus.sessionId), sql`${messages.createdAt} <= ${syllabus.createdAt.getTime()}`))
+        .orderBy(desc(messages.seq))
+        .get();
+      return before?.id ?? null;
+    },
+
+    /** Whether an automatic syllabus change was already made after a finished lesson. */
+    hasAdaptiveChange(courseId: string, triggerLessonId: string): boolean {
+      return Boolean(
+        db
+          .select({ id: syllabusVersions.id })
+          .from(syllabusVersions)
+          .where(and(eq(syllabusVersions.courseId, courseId), eq(syllabusVersions.triggerLessonId, triggerLessonId)))
+          .get(),
+      );
+    },
+
+    /** Marks an active course complete: the learner reached the end of its syllabus (ADR-011). */
+    completeCourse(courseId: string) {
+      db.update(courses).set({ status: "complete", updatedAt: clock() }).where(and(eq(courses.id, courseId), eq(courses.status, "active"))).run();
+    },
+
+    findCourse(id: string): CourseRow | undefined {
+      return db.select().from(courses).where(eq(courses.id, id)).get();
+    },
+
+    findCourseBySession(sessionId: string): CourseRow | undefined {
+      return db.select().from(courses).where(eq(courses.sessionId, sessionId)).get();
+    },
+
+    /** The course's newest syllabus version, if one has been written. */
+    latestSyllabus(courseId: string): SyllabusVersion | undefined {
+      const row = db.select().from(syllabusVersions).where(eq(syllabusVersions.courseId, courseId)).orderBy(desc(syllabusVersions.version)).get();
+      return row && { ...row, topics: row.topics as SyllabusTopicRow[], known: row.known as KnownConceptRow[], changedTopicIds: row.changedTopicIds as string[] };
+    },
+
+    /**
+     * Changes a course's future topics as a new syllabus version (ADR-011). `startedTopicIds` are topics
+     * that already have a lesson: they stay where they are, and nothing may be inserted before them.
+     * All operations apply, or none.
+     */
+    changeSyllabus(
+      courseId: string,
+      change: {
+        source: "tutor" | "adaptive";
+        reason: string;
+        runId: string | null;
+        startedTopicIds: string[];
+        operations: SyllabusOperation[];
+        /** For an adaptive change: the finished lesson that prompted it. Only one change per lesson. */
+        triggerLessonId?: string;
+      },
+    ): { ok: true; version: number; changedTopicIds: string[] } | { ok: false; reason: string } {
+      return db.transaction((tx) => {
+        const row = tx.select().from(syllabusVersions).where(eq(syllabusVersions.courseId, courseId)).orderBy(desc(syllabusVersions.version)).get();
+        if (!row) return { ok: false, reason: "The course has no syllabus yet." };
+        // A course that is complete (perhaps by a finish racing this change) keeps its syllabus.
+        if (tx.select({ status: courses.status }).from(courses).where(eq(courses.id, courseId)).get()?.status !== "active") {
+          return { ok: false, reason: "The course is complete, so its syllabus can't change." };
+        }
+        if (change.source === "adaptive") {
+          if (!change.triggerLessonId) return { ok: false, reason: "An automatic change needs the lesson that prompted it." };
+          const earlier = tx
+            .select({ id: syllabusVersions.id })
+            .from(syllabusVersions)
+            .where(and(eq(syllabusVersions.courseId, courseId), eq(syllabusVersions.triggerLessonId, change.triggerLessonId)))
+            .get();
+          if (earlier) return { ok: false, reason: "The plan was already changed once after that lesson." };
+        }
+        const started = new Set(change.startedTopicIds);
+        let topics = [...(row.topics as SyllabusTopicRow[])];
+        const changed = new Set<string>();
+        const firstFuture = () => topics.findIndex((t) => !started.has(t.id));
+        const future = (id: string) => {
+          const i = topics.findIndex((t) => t.id === id);
+          if (i < 0) return { error: `Unknown topicId ${id}` };
+          if (started.has(id)) return { error: "Only future topics can change: this one already has a lesson." };
+          return { index: i };
+        };
+        const insertionPoint = (afterTopicId: string | null) => {
+          const lastStarted = topics.reduce((last, t, i) => (started.has(t.id) ? i : last), -1);
+          if (afterTopicId === null) return { at: lastStarted + 1 };
+          const i = topics.findIndex((t) => t.id === afterTopicId);
+          if (i < 0) return { error: `Unknown afterTopicId ${afterTopicId}` };
+          if (i < lastStarted) return { error: "New topics can only go after the lessons already started." };
+          return { at: i + 1 };
+        };
+        for (const op of change.operations) {
+          if (op.op === "insert") {
+            const point = insertionPoint(op.afterTopicId);
+            if ("error" in point) return { ok: false, reason: point.error! };
+            const topic = { id: randomUUID(), title: op.title, summary: op.summary, reason: op.reason, requestedByLearner: change.source === "tutor", concepts: op.concepts };
+            topics.splice(point.at, 0, topic);
+            changed.add(topic.id);
+            continue;
+          }
+          const found = future(op.topicId);
+          if ("error" in found) return { ok: false, reason: found.error! };
+          if (op.op === "split") {
+            const topic = topics[found.index]!;
+            const parts = op.into.map((part) => ({
+              id: randomUUID(),
+              ...part,
+              reason: change.reason,
+              requestedByLearner: topic.requestedByLearner,
+            }));
+            topics.splice(found.index, 1, ...parts);
+            parts.forEach((p) => changed.add(p.id));
+          } else if (op.op === "remove") {
+            if (change.source === "adaptive" && topics[found.index]!.requestedByLearner) {
+              return { ok: false, reason: "A topic the learner asked for is never removed automatically." };
+            }
+            topics.splice(found.index, 1);
+          } else if (op.op === "edit") {
+            const topic = topics[found.index]!;
+            topics[found.index] = { ...topic, ...(op.title ? { title: op.title } : {}), ...(op.summary ? { summary: op.summary } : {}) };
+            changed.add(topic.id);
+          } else {
+            const [topic] = topics.splice(found.index, 1);
+            const point = insertionPoint(op.afterTopicId);
+            if ("error" in point) return { ok: false, reason: point.error! };
+            topics.splice(point.at, 0, topic!);
+            changed.add(topic!.id);
+          }
+        }
+        if (firstFuture() >= 0 && topics.slice(0, firstFuture()).some((t) => !started.has(t.id))) {
+          return { ok: false, reason: "Started topics must stay first." };
+        }
+        const titles = new Set<string>();
+        for (const t of topics) {
+          const key = t.title.trim().toLowerCase();
+          if (titles.has(key)) return { ok: false, reason: `Two topics would be called "${t.title}".` };
+          titles.add(key);
+        }
+        if (topics.length === 0) return { ok: false, reason: "A syllabus needs at least one topic." };
+        const version = row.version + 1;
+        const changedTopicIds = topics.map((t) => t.id).filter((id) => changed.has(id));
+        tx.insert(syllabusVersions)
+          .values({
+            id: randomUUID(),
+            courseId,
+            version,
+            topics,
+            known: row.known,
+            source: change.source,
+            triggerLessonId: change.triggerLessonId ?? null,
+            reason: change.reason,
+            changedTopicIds,
+            runId: change.runId,
+            createdAt: clock(),
+          })
+          .run();
+        tx.update(courses).set({ updatedAt: clock() }).where(eq(courses.id, courseId)).run();
+        return { ok: true, version, changedTopicIds };
+      });
+    },
+
+    /**
+     * Writes a course's first syllabus at the end of its placement interview, and makes the course active.
+     * Returns false if the course isn't interviewing (its syllabus already exists); later versions come
+     * from Change and adaptive edits, not from this.
+     */
+    writeFirstSyllabus(courseId: string, runId: string | null, input: { topics: Omit<SyllabusTopicRow, "id">[]; known: KnownConceptRow[] }): SyllabusRow | undefined {
+      return db.transaction((tx) => {
+        const course = tx.select().from(courses).where(eq(courses.id, courseId)).get();
+        if (course?.status !== "interviewing") return undefined;
+        const now = clock();
+        const row = {
+          id: randomUUID(),
+          courseId,
+          version: 1,
+          topics: input.topics.map((topic) => ({ id: randomUUID(), ...topic })),
+          known: input.known,
+          source: "interview" as const,
+          triggerLessonId: null,
+          reason: null,
+          changedTopicIds: [],
+          runId,
+          createdAt: now,
+        };
+        tx.insert(syllabusVersions).values(row).run();
+        tx.update(courses).set({ status: "active", updatedAt: now }).where(eq(courses.id, courseId)).run();
+        return row;
+      });
     },
 
     createSession(title?: string): SessionRow {
@@ -422,7 +694,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     },
 
     /** Records the learner's single graded attempt. Throws Conflict if one already exists. */
-    createAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string }): AttemptRow {
+    createAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string | null }): AttemptRow {
       return db.transaction((tx) => {
         if (tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, input.artifactId)).get()) {
           throw new Conflict("This check has already been answered");

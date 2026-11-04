@@ -2,12 +2,14 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { Conversation, ConversationContent, ConversationScrollButton } from "@/components/ai-elements/conversation";
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
-import type { ArtifactView } from "@mivra/protocol";
-import { Brain, MessageSquare, Plus } from "lucide-react";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { api, authHeaders, errorMessage, loadMessages, token } from "./api.js";
+import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
+import { Brain, GraduationCap, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
+import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
+import { LessonPage, TopicList, type LessonSection } from "./Lesson.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
@@ -18,6 +20,7 @@ import { groupSessions } from "./session-groups.js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   Sidebar,
   SidebarContent,
@@ -40,12 +43,15 @@ interface Session {
   id: string;
   title: string;
   updatedAt: string;
+  courseId: string | null;
 }
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeId, setActiveId] = useState<string>();
   const [error, setError] = useState<string>();
+  // The goal of a course just started, sent as its session's first message so the interview begins.
+  const [firstMessage, setFirstMessage] = useState<{ sessionId: string; text: string }>();
 
   const refreshSessions = async () => {
     try {
@@ -74,6 +80,12 @@ export function App() {
     }
   };
 
+  const startedCourse = ({ session, goal }: StartedCourse) => {
+    setSessions((prev) => [session, ...prev]);
+    setFirstMessage({ sessionId: session.id, text: goal });
+    setActiveId(session.id);
+  };
+
   const active = sessions.find((s) => s.id === activeId);
   // Lives here because the mobile sidebar unmounts its content when closed, and the theme must keep following the OS.
   const [theme, setTheme] = useTheme();
@@ -89,6 +101,7 @@ export function App() {
         onThemeChange={setTheme}
         onSelect={setActiveId}
         onNew={newSession}
+        onNewCourse={() => setActiveId(undefined)}
         onOpenMemory={() => setMemoryOpen(true)}
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
@@ -103,9 +116,16 @@ export function App() {
         ) : error ? (
           <Notice error>{error}</Notice>
         ) : activeId ? (
-          <SessionLoader key={activeId} sessionId={activeId} onReply={refreshSessions} />
+          <SessionView
+            key={activeId}
+            sessionId={activeId}
+            course={Boolean(active?.courseId)}
+            firstMessage={firstMessage?.sessionId === activeId ? firstMessage.text : undefined}
+            onFirstMessageSent={() => setFirstMessage(undefined)}
+            onReply={refreshSessions}
+          />
         ) : (
-          <Notice>Start a new session to begin learning.</Notice>
+          <StartCourseForm onStarted={startedCourse} onFreeChat={newSession} />
         )}
       </SidebarInset>
     </SidebarProvider>
@@ -123,6 +143,7 @@ function SessionSidebar({
   onThemeChange,
   onSelect,
   onNew,
+  onNewCourse,
   onOpenMemory,
 }: {
   sessions: Session[];
@@ -131,6 +152,7 @@ function SessionSidebar({
   onThemeChange: (theme: ThemeChoice) => void;
   onSelect: (id: string) => void;
   onNew: () => void;
+  onNewCourse: () => void;
   onOpenMemory: () => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
@@ -162,6 +184,18 @@ function SessionSidebar({
               <span>New session</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="New course"
+              onClick={() => {
+                onNewCourse();
+                closeOnMobile();
+              }}
+            >
+              <GraduationCap />
+              <span>New course</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
@@ -179,7 +213,7 @@ function SessionSidebar({
                       closeOnMobile();
                     }}
                   >
-                    <MessageSquare />
+                    {s.courseId ? <GraduationCap aria-label="Course" /> : <MessageSquare />}
                     <span>{s.title}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -211,7 +245,240 @@ function SessionSidebar({
   );
 }
 
-function SessionLoader({ sessionId, onReply }: { sessionId: string; onReply: () => void }) {
+interface SessionProps {
+  sessionId: string;
+  /** Sent once, as soon as the empty session opens. */
+  firstMessage?: string;
+  onFirstMessageSent: () => void;
+  onReply: () => void;
+  /** Called whenever the chat settles after a reply, e.g. to pick up a syllabus written in it. */
+  onSettled?: () => void;
+  /** The lesson open beside the chat, sent with each message so the tutor knows what the learner sees. */
+  lessonId?: string;
+  /** Text to put in the message box, sent at once if `send`. Applied once; `onPromptUsed` clears it. */
+  prompt?: { text: string; send: boolean; nonce: number };
+  onPromptUsed?: () => void;
+  /** Offers "Add to lesson" on the tutor's replies. */
+  onAddToLesson?: (messageId: string) => Promise<string | undefined>;
+  /** Folds away a course's placement interview, up to and including this reply (the one that wrote the syllabus). */
+  foldThroughMessageId?: string | null;
+  /** The message box's placeholder. */
+  placeholder?: string;
+}
+
+function SessionView({ course, ...props }: SessionProps & { course: boolean }) {
+  return course ? <CourseSession {...props} /> : <SessionLoader {...props} />;
+}
+
+/**
+ * A course's session (ADR-011): the placement interview runs as a chat; once the first lesson starts,
+ * the lesson is the page and the tutor's chat moves into a drawer.
+ */
+function CourseSession(props: SessionProps) {
+  const { sessionId } = props;
+  const [course, setCourse] = useState<CourseView>();
+  const [lessons, setLessons] = useState<CourseLessonsView>();
+  const [selected, setSelected] = useState<string>();
+  const [focusSection, setFocusSection] = useState<string>();
+  const [tutorOpen, setTutorOpen] = useState(false);
+  const [error, setError] = useState<string>();
+  const [prompt, setPrompt] = useState<SessionProps["prompt"]>();
+  const [openLesson, setOpenLesson] = useState<LessonView>();
+  // The section the learner last asked about, where Add to lesson puts the answer.
+  const explained = useRef<{ lessonId: string; section: LessonSection } | undefined>(undefined);
+
+  const refresh = useCallback(async () => {
+    const found = await getCourse(sessionId);
+    if (!found.ok) return setError(found.error);
+    setCourse(found.value);
+    if (found.value.status === "interviewing") return;
+    const list = await listCourseLessons(found.value.id);
+    if (list.ok) setLessons(list.value);
+  }, [sessionId]);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const start = async (topicId: string) => {
+    if (!course) return;
+    const result = await startLesson(course.id, topicId);
+    if (!result.ok) return setError(result.error);
+    setSelected(result.value.lesson.id);
+    await refresh();
+  };
+
+  const lessonId = selected ?? lessons?.currentLessonId ?? undefined;
+  // The lesson the learner is on: the first unfinished one, if any.
+  const current = lessons?.topics.find((t) => t.lesson && t.lesson.id === lessons.currentLessonId && t.lesson.status !== "finished");
+  // Ctrl+K (or ⌘K) opens and closes the tutor beside the lesson.
+  useEffect(() => {
+    if (!lessonId) return;
+    const toggle = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setTutorOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", toggle);
+    return () => window.removeEventListener("keydown", toggle);
+  }, [lessonId]);
+
+  const ask = (text: string, send: boolean) => {
+    setPrompt((p) => ({ text, send, nonce: (p?.nonce ?? 0) + 1 }));
+    setTutorOpen(true);
+  };
+  const addAnswer = async (messageId: string) => {
+    if (!lessonId) return "No lesson is open.";
+    // The section last asked about, if it's still in the open lesson; otherwise the lesson's last section.
+    const asked =
+      explained.current?.lessonId === lessonId && openLesson?.id === lessonId && openLesson.sections.some((s) => s.id === explained.current!.section.id)
+        ? explained.current.section
+        : undefined;
+    const after = asked ?? (openLesson?.id === lessonId ? openLesson.sections.at(-1) : undefined);
+    const result = await addToLesson(lessonId, {
+      messageId,
+      afterSectionId: after?.id ?? null,
+      title: asked ? `More on ${asked.title}`.slice(0, 120) : "From the tutor",
+    });
+    if (!result.ok) return result.error;
+    setOpenLesson(result.value.lesson);
+    return undefined;
+  };
+
+  // Generation can change the syllabus while the learner reads (ADR-011); the lesson view says so.
+  const shownSyllabus = course?.syllabus?.version;
+  const lessonSyllabus = openLesson?.syllabusVersion;
+  useEffect(() => {
+    if (lessonSyllabus && shownSyllabus && lessonSyllabus !== shownSyllabus) void refresh();
+  }, [lessonSyllabus, shownSyllabus, refresh]);
+
+  const undo = async () => {
+    if (!course?.syllabus) return undefined;
+    const result = await undoSyllabusChange(course.id, course.syllabus.version);
+    if (!result.ok) return result.error;
+    await refresh();
+    return undefined;
+  };
+
+  if (error) return <Notice error>{error}</Notice>;
+  if (!course) return null;
+  const next = lessons?.topics.find((t) => t.topicId === lessons.nextTopicId);
+
+  if (!lessonId) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <CourseBar course={course}>
+          {next && (
+            <Button size="sm" onClick={() => void start(next.topicId)}>
+              Start lesson 1
+            </Button>
+          )}
+        </CourseBar>
+        <SessionLoader {...props} onSettled={refresh} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <CourseBar course={course} onUndo={undo}>
+        <Button size="sm" variant="outline" onClick={() => setTutorOpen(true)} data-tutor-trigger>
+          <MessagesSquare aria-hidden /> Tutor
+        </Button>
+      </CourseBar>
+      <div className="flex min-h-0 flex-1">
+        {lessons && (
+          <aside className="hidden w-60 shrink-0 overflow-y-auto border-r p-3 md:block">
+            <TopicList
+              lessons={lessons}
+              selectedId={lessonId}
+              onSelect={(id) => {
+                setFocusSection(undefined);
+                setSelected(id);
+              }}
+            />
+          </aside>
+        )}
+        <div className="min-w-0 flex-1 overflow-y-auto" data-testid="lesson-scroll">
+          {lessons && (
+            <details className="border-b px-4 py-2 md:hidden">
+              <summary className="cursor-pointer text-sm font-medium">Lessons</summary>
+              <div className="pt-2">
+                <TopicList
+                  lessons={lessons}
+                  selectedId={lessonId}
+                  onSelect={(id) => {
+                    setFocusSection(undefined);
+                    setSelected(id);
+                  }}
+                />
+              </div>
+            </details>
+          )}
+          {current && lessonId !== current.lesson!.id && (
+            <div className="bg-muted mx-auto mt-4 flex max-w-3xl flex-wrap items-center gap-2 rounded-lg px-4 py-2 text-sm" role="status">
+              <span>You're looking at an earlier lesson.</span>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => {
+                  setFocusSection(undefined);
+                  setSelected(current.lesson!.id);
+                }}
+              >
+                Back to lesson {lessons!.topics.indexOf(current) + 1}: {current.title}
+              </Button>
+            </div>
+          )}
+          <LessonPage
+            courseComplete={course.status === "complete"}
+            key={lessonId}
+            lessonId={lessonId}
+            nextTopic={next && { id: next.topicId, title: next.title }}
+            onFinished={() => void refresh()}
+            onStartNext={start}
+            onLoaded={setOpenLesson}
+            focusSectionId={focusSection}
+            onOpenSection={(id, sectionId) => {
+              setSelected(id);
+              setFocusSection(sectionId);
+            }}
+            onExplain={(section) => {
+              explained.current = { lessonId, section };
+              ask(`Explain "${section.title}"`, true);
+            }}
+            onChange={(section) => {
+              explained.current = undefined;
+              ask(`Change "${section.title}": `, false);
+            }}
+          />
+        </div>
+      </div>
+      <Sheet open={tutorOpen} onOpenChange={setTutorOpen}>
+        <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
+          <SheetHeader className="border-b">
+            <SheetTitle className="font-heading">Tutor</SheetTitle>
+            <SheetDescription>
+              Ask anything and the lesson stays as it is, or ask for a change. <kbd className="text-xs">Ctrl K</kbd> opens and closes this.
+            </SheetDescription>
+          </SheetHeader>
+          <SessionLoader
+            {...props}
+            onSettled={refresh}
+            lessonId={lessonId}
+            prompt={prompt}
+            onPromptUsed={() => setPrompt(undefined)}
+            foldThroughMessageId={course.interviewMessageId}
+            placeholder="Ask the tutor…"
+            onAddToLesson={openLesson?.status === "ready" ? addAnswer : undefined}
+          />
+        </SheetContent>
+      </Sheet>
+    </div>
+  );
+}
+
+function SessionLoader({ sessionId, onReply, ...props }: SessionProps) {
   const [initial, setInitial] = useState<UIMessage[]>();
   const [error, setError] = useState<string>();
 
@@ -220,18 +487,26 @@ function SessionLoader({ sessionId, onReply }: { sessionId: string; onReply: () 
   }, [sessionId]);
 
   if (error) return <Notice error>Couldn't load this session: {error}</Notice>;
-  return initial ? <Chat sessionId={sessionId} initialMessages={initial} onReply={onReply} /> : null;
+  return initial ? <Chat sessionId={sessionId} initialMessages={initial} onReply={onReply} {...props} /> : null;
 }
 
 function Chat({
   sessionId,
   initialMessages,
+  firstMessage,
+  onFirstMessageSent,
   onReply,
-}: {
-  sessionId: string;
-  initialMessages: UIMessage[];
-  onReply: () => void;
-}) {
+  onSettled,
+  lessonId,
+  prompt,
+  onPromptUsed,
+  onAddToLesson,
+  foldThroughMessageId,
+  placeholder = "What do you want to learn?",
+}: SessionProps & { initialMessages: UIMessage[] }) {
+  const [showInterview, setShowInterview] = useState(false);
+  const lessonRef = useRef(lessonId);
+  lessonRef.current = lessonId;
   const [input, setInput] = useState("");
   const documents = useDocuments(sessionId);
   const documentsRef = useRef(documents);
@@ -262,7 +537,9 @@ function Chat({
       headers: authHeaders,
       prepareReconnectToStreamRequest: () => ({ api: `/api/sessions/${sessionId}/continuation` }),
       // Only files ready when Send is pressed travel with this message; extraction may finish later.
-      prepareSendMessagesRequest: ({ messages, body }) => ({ body: { ...body, message: messages.at(-1) } }),
+      prepareSendMessagesRequest: ({ messages, body }) => ({
+        body: { ...body, message: messages.at(-1), ...(lessonRef.current ? { lessonId: lessonRef.current } : {}) },
+      }),
       fetch: async (url, options) => {
         const expected = generation.current;
         const response = await fetch(url, options);
@@ -300,6 +577,28 @@ function Chat({
       onReply();
     },
   });
+
+  // A prompt from the lesson page: Explain sends at once, Change waits for the learner to finish it.
+  const appliedPrompt = useRef(0);
+  useEffect(() => {
+    if (!prompt || prompt.nonce === appliedPrompt.current) return;
+    appliedPrompt.current = prompt.nonce;
+    onPromptUsed?.();
+    if (prompt.send && !chatState.current.busy) {
+      void sendMessage({ text: prompt.text }, { body: { documentIds: [] } });
+    } else {
+      setInput(prompt.text);
+      requestAnimationFrame(() => messageInput.current?.focus());
+    }
+  }, [prompt, sendMessage, onPromptUsed]);
+
+  const firstSent = useRef(false);
+  useEffect(() => {
+    if (!firstMessage || firstSent.current || initialMessages.length > 0) return;
+    firstSent.current = true;
+    onFirstMessageSent();
+    void sendMessage({ text: firstMessage }, { body: { documentIds: [] } });
+  }, [firstMessage, initialMessages.length, onFirstMessageSent, sendMessage]);
 
   useEffect(() => {
     const scroll = conversation.scrollRef.current;
@@ -352,6 +651,13 @@ function Chat({
   // Focus/visibility deliberately replace a possibly stalled subscription; only the Stop endpoint
   // cancels the server-owned run. There is no idle timer or periodic fallback.
   const busy = status === "submitted" || status === "streaming";
+  // A syllabus is written during a reply, often an automatic one, so tell the course whenever the chat
+  // settles or the transcript is reconciled with the server.
+  const settled = useRef(onSettled);
+  settled.current = onSettled;
+  useEffect(() => {
+    if (!busy) settled.current?.();
+  }, [busy, messages.length]);
   const chatState = useRef({ busy, resumeStream, stop });
   chatState.current = { busy, resumeStream, stop };
   async function reconcile(expected: number) {
@@ -432,6 +738,9 @@ function Chat({
     setInput("");
   };
 
+  // Messages up to the reply that wrote the syllabus are the placement interview (-1: nothing to fold).
+  const interviewEnd = foldThroughMessageId ? messages.findIndex((m) => m.id === foldThroughMessageId) : -1;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Conversation aria-busy={busy} instance={conversation} initial="instant" resize="instant" className="min-h-0 min-w-0">
@@ -445,7 +754,12 @@ function Chat({
             if (e.key !== "Tab" && (e.target as HTMLElement).closest("button, input, [role=region]")) conversation.stopScroll();
           }}>
 
-          {messages.map((m, mi) => (
+          {interviewEnd >= 0 && !showInterview && (
+            <Button variant="ghost" size="sm" className="text-muted-foreground self-center" onClick={() => setShowInterview(true)}>
+              Show the placement interview
+            </Button>
+          )}
+          {messages.map((m, mi) => (!showInterview && mi <= interviewEnd) ? null : (
             <div
               key={m.id}
               data-message-id={m.id}
@@ -489,6 +803,9 @@ function Chat({
                 }
                 return null;
               })}
+              {onAddToLesson && m.role === "assistant" && mi > interviewEnd && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (
+                <AddToLessonButton onAdd={() => onAddToLesson(m.id)} />
+              )}
             </div>
           ))}
           {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
@@ -505,7 +822,7 @@ function Chat({
             ref={messageInput}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="What do you want to learn?"
+            placeholder={placeholder}
             aria-label="Message"
             autoFocus
           />
@@ -533,6 +850,32 @@ function Chat({
           )}
         </div>
       </form>
+    </div>
+  );
+}
+
+/** Keeps one tutor answer as a section of the open lesson. */
+function AddToLessonButton({ onAdd }: { onAdd: () => Promise<string | undefined> }) {
+  const [state, setState] = useState<"idle" | "adding" | "added">("idle");
+  const [error, setError] = useState<string>();
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button
+        variant="outline"
+        size="xs"
+        className="self-start"
+        disabled={state !== "idle"}
+        onClick={async () => {
+          setState("adding");
+          setError(undefined);
+          const failure = await onAdd();
+          setError(failure);
+          setState(failure ? "idle" : "added");
+        }}
+      >
+        <SquarePlus aria-hidden /> {state === "added" ? "Added to lesson" : "Add to lesson"}
+      </Button>
+      {error && <span className="text-destructive text-xs">{error}</span>}
     </div>
   );
 }

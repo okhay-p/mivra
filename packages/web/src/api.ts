@@ -1,4 +1,4 @@
-import { ArtifactView, DocumentView, MemoryView } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryView, type PlacementAnswer } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc } from "hono/client";
@@ -25,9 +25,14 @@ export async function errorMessage(res: Response): Promise<string> {
 export type AttemptResult = { ok: true; view: ArtifactView } | { ok: false; error: string };
 
 /** Submits an answer to a multiple-choice check; the server grades it and returns the updated view. */
-export async function submitMultipleChoice(artifactId: string, optionIndex: number): Promise<AttemptResult> {
+export const submitMultipleChoice = (artifactId: string, optionIndex: number) => submitAnswer(artifactId, { optionIndex });
+
+/** Submits an answer to a placement question: an option, Not sure, or Skip. */
+export const submitPlacement = (artifactId: string, answer: PlacementAnswer) => submitAnswer(artifactId, answer);
+
+async function submitAnswer(artifactId: string, answer: unknown): Promise<AttemptResult> {
   try {
-    const res = await api.artifacts[":id"].attempts.$post({ param: { id: artifactId }, json: { answer: { optionIndex } } });
+    const res = await api.artifacts[":id"].attempts.$post({ param: { id: artifactId }, json: { answer } });
     if (!res.ok) return { ok: false, error: await errorMessage(res) };
     const view = ArtifactView.safeParse(await res.json());
     return view.success ? { ok: true, view: view.data } : { ok: false, error: "The server sent a reply this page can't display." };
@@ -100,4 +105,53 @@ export const deleteDocument = (id: string) =>
   request(
     () => api.documents[":id"].$delete({ param: { id } }),
     () => undefined,
+  );
+
+/** Starts a course for a goal; the server creates its session too. */
+export const startCourse = (goal: string) =>
+  request(
+    () => api.courses.$post({ json: { goal } }),
+    async (res) => {
+      const body = (await res.json()) as { course: unknown; session: { id: string; title: string; updatedAt: string; courseId: string | null } };
+      return { course: CourseView.parse(body.course), session: body.session };
+    },
+  );
+
+export const getCourse = (sessionId: string) =>
+  request(
+    () => api.sessions[":id"].course.$get({ param: { id: sessionId } }),
+    async (res) => CourseView.parse(await res.json()),
+  );
+
+export const listCourseLessons = (courseId: string) =>
+  request(
+    () => api.courses[":id"].lessons.$get({ param: { id: courseId } }),
+    async (res) => CourseLessonsView.parse(await res.json()),
+  );
+
+const readLesson = async (res: Response) => {
+  const body = (await res.json()) as { lesson: unknown; revision: string };
+  return { lesson: LessonView.parse(body.lesson), revision: body.revision };
+};
+
+export const startLesson = (courseId: string, topicId: string) =>
+  request(() => api.courses[":id"].lessons.$post({ param: { id: courseId }, json: { topicId } }), readLesson);
+
+/** The lesson; with `after`, waits on the server for the next change. */
+export const getLesson = (id: string, after?: string, signal?: AbortSignal) =>
+  request(() => api.lessons[":id"].$get({ param: { id }, query: after ? { after } : {} }, { init: { signal } }), readLesson);
+
+export const finishLesson = (id: string) => request(() => api.lessons[":id"].finish.$post({ param: { id } }), readLesson);
+
+export const retryLesson = (id: string) => request(() => api.lessons[":id"].retry.$post({ param: { id } }), readLesson);
+
+/** Keeps one of the tutor's answers as a new section of the lesson (a Change). */
+export const addToLesson = (lessonId: string, body: { messageId: string; afterSectionId: string | null; title: string }) =>
+  request(() => api.lessons[":id"].sections.$post({ param: { id: lessonId }, json: body }), readLesson);
+
+/** Undoes Mivra's automatic change to the syllabus. */
+export const undoSyllabusChange = (courseId: string, version: number) =>
+  request(
+    () => api.courses[":id"].syllabus.undo.$post({ param: { id: courseId }, json: { version } }),
+    async (res) => CourseView.parse(await res.json()),
   );

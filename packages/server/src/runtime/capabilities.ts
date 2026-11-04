@@ -1,6 +1,7 @@
 import { ArtifactView } from "@mivra/protocol";
 import { tool, type Tool, type ToolSet } from "ai";
 import type { ZodType } from "zod";
+import type { LessonStore } from "../store/lesson-store.js";
 import type { AttemptRow, SessionStore } from "../store/session-store.js";
 
 /** What a tool needs to know about the turn it runs in. */
@@ -8,14 +9,17 @@ export interface TurnContext {
   sessionId: string;
   runId: string;
   store: SessionStore;
+  lessons?: LessonStore;
+  /** The lesson the learner had open when they sent this turn, in a course session. */
+  lessonId?: string;
 }
 
 /** A gradable artifact kind (a check). Grading is deterministic (ADR-006). */
 export interface CheckDefinition {
   answer: ZodType;
   grade(spec: unknown, answer: unknown): { correct: boolean; grade: unknown };
-  /** Progress label for this check, if the spec has one. */
-  concept?(spec: unknown): string | undefined;
+  /** Progress label for this attempt, if it counts as evidence. A skipped question returns undefined. */
+  concept?(spec: unknown, answer: unknown): string | undefined;
   /** What the model sees about the learner's attempt (or its absence) on later turns. */
   describeAttempt(spec: unknown, attempt: AttemptRow | undefined): unknown;
 }
@@ -34,6 +38,8 @@ export interface ArtifactKindDefinition {
    */
   toView(artifact: { id: string; createdAt: Date; spec: unknown; attempt?: AttemptRow }): ArtifactView;
   check?: CheckDefinition;
+  /** Whether the model may create this kind in a turn; always, if omitted. Stored artifacts stay readable either way. */
+  availableIn?(ctx: TurnContext): boolean;
 }
 
 export type ToolFactory = (ctx: TurnContext) => Tool;
@@ -43,8 +49,11 @@ export type Capability = "artifactKinds" | "tools";
 
 export interface PluginApi {
   registerArtifactKind(definition: ArtifactKindDefinition): void;
-  /** With keepInTranscript false, calls to the tool are left out of the stored conversation. */
-  registerTool(name: string, factory: ToolFactory, options?: { keepInTranscript?: boolean }): void;
+  /**
+   * With keepInTranscript false, calls to the tool are left out of the stored conversation. With
+   * availableIn, the tool is only offered in turns it returns true for.
+   */
+  registerTool(name: string, factory: ToolFactory, options?: { keepInTranscript?: boolean; availableIn?: (ctx: TurnContext) => boolean }): void;
 }
 
 export interface Plugin {
@@ -66,7 +75,7 @@ export interface TurnTools {
 export function createCapabilityRegistry(plugins: Plugin[]) {
   const kinds = new Map<string, ArtifactKindDefinition>();
   const kindsByTool = new Map<string, ArtifactKindDefinition>();
-  const toolFactories = new Map<string, ToolFactory>();
+  const toolFactories = new Map<string, { factory: ToolFactory; availableIn?: (ctx: TurnContext) => boolean }>();
   const untranscribedTools = new Set<string>();
 
   const claimToolName = (name: string, plugin: string) => {
@@ -91,7 +100,7 @@ export function createCapabilityRegistry(plugins: Plugin[]) {
       registerTool(name, factory, options) {
         require("tools");
         claimToolName(name, plugin.name);
-        toolFactories.set(name, factory);
+        toolFactories.set(name, { factory, availableIn: options?.availableIn });
         if (options?.keepInTranscript === false) untranscribedTools.add(name);
       },
     });
@@ -115,6 +124,7 @@ export function createCapabilityRegistry(plugins: Plugin[]) {
       const viewsByToolCall = new Map<string, ArtifactView>();
       const tools: ToolSet = {};
       for (const definition of kinds.values()) {
+        if (definition.availableIn && !definition.availableIn(ctx)) continue;
         tools[definition.toolName] = tool({
           description: definition.description,
           inputSchema: definition.spec as ZodType<unknown>,
@@ -134,7 +144,9 @@ export function createCapabilityRegistry(plugins: Plugin[]) {
           },
         });
       }
-      for (const [name, factory] of toolFactories) tools[name] = factory(ctx);
+      for (const [name, { factory, availableIn }] of toolFactories) {
+        if (!availableIn || availableIn(ctx)) tools[name] = factory(ctx);
+      }
       return { tools, viewsByToolCall };
     },
   };

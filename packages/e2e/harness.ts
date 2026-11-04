@@ -45,6 +45,14 @@ const check = {
   explanation: "SECRET-EXPLANATION: 3 and 1 swapped once.",
 };
 
+const syllabus = {
+  topics: [
+    { title: "Limits", summary: "What a limit is.", reason: "You weren't sure about limits.", requestedByLearner: false, concepts: ["limit"] },
+    { title: "Chain rule", summary: "Derivatives of compositions.", reason: "The next step after the power rule.", requestedByLearner: false, concepts: ["chain rule"] },
+  ],
+  known: [{ concept: "derivative", source: "test", note: "Answered correctly." }],
+};
+
 const longWord = "calculateMaximumSlidingWindowSumWithoutRecomputingEveryElement";
 // The longest value the trace schema allows.
 const longValue = "calculateMaximumWindowSu";
@@ -479,6 +487,11 @@ const SCRIPTS: Record<string, Step[]> = {
   deepnesting: [{ text: `${">".repeat(2000)} deep\n\n**still fine**`, stream: true }],
   // An inequality with many closed intervals, which is ordinary discrete maths.
   intervals: [{ text: `$a<b$ ${"$[0,1]$ ".repeat(66)}` }],
+  placementcourse: [
+    { tool: "ask_placement_question", input: { concept: "derivative", question: "Is the derivative of $x^2$ equal to $2x$?", options: [{ text: "True" }, { text: "False" }], correctOptionIndex: 0, explanation: "Power rule." } },
+    { tool: "ask_placement_question", input: { concept: "limit", question: "What is the limit of $1/x$ as $x \\to \\infty$?", options: [{ text: "0" }, { text: "1" }, { text: "Infinity" }], correctOptionIndex: 0, explanation: "It shrinks towards 0." } },
+    { text: "Two quick questions first." },
+  ],
   teach: [
     { tool: "show_algorithm_trace", input: trace },
     { tool: "ask_multiple_choice", input: check },
@@ -515,17 +528,62 @@ interface PromptMessage {
   content: unknown;
 }
 
+/** A lesson's generation: the outline, then one section per call (ADR-011). */
+const LESSON_STEPS: Step[] = [
+  {
+    tool: "outline_lesson",
+    input: {
+      title: "What a limit is",
+      sections: [
+        { title: "The idea", kind: "prose", purpose: "Explain limits." },
+        { title: "Quick check", kind: "multiple_choice", purpose: "Check the idea." },
+      ],
+    },
+  },
+  { tool: "write_lesson_text", input: { markdown: "A **limit** is the value $f(x)$ heads towards as $x$ approaches a point." } },
+  { tool: "ask_multiple_choice", input: { concept: "limit", question: "What does $1/x$ approach as $x$ grows?", options: [{ text: "0" }, { text: "1" }], correctOptionIndex: 0, explanation: "It shrinks towards 0." } },
+  { text: "" },
+];
+
 function nextStep(prompt: PromptMessage[]): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
+  if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra lesson request")) {
+    const done = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
+    const system = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");
+    if (!system.includes("previous_lesson")) return LESSON_STEPS[done] ?? { text: "" };
+    // The next lesson revisits the missed idea and, since the learner struggled, adapts the plan once.
+    const revisited = /"sectionId":"([^"]+)","title":"The idea"/.exec(system)?.[1] ?? "missing";
+    const steps: Step[] = [
+      { tool: "adapt_syllabus", input: { reason: "Added a limits refresher: you missed 1 of 1 checks", operation: { op: "insert", afterTopicId: null, title: "Limits refresher", summary: "Limits again, slowly.", concepts: ["limit"] } } },
+      { tool: "outline_lesson", input: { title: "The chain rule", sections: [{ title: "Looking back", kind: "prose", purpose: "Revisit the miss." }, { title: "Check", kind: "multiple_choice", purpose: "Check." }] } },
+      { tool: "write_lesson_text", input: { markdown: "Last time the limit check tripped you up.", revisits: [revisited] } },
+      { tool: "ask_multiple_choice", input: { concept: "chain rule", question: "Is $(f(g(x)))' = f'(g(x))g'(x)$?", options: [{ text: "Yes" }, { text: "No" }], correctOptionIndex: 0, explanation: "That's the rule." } },
+      { text: "" },
+    ];
+    return steps[done] ?? { text: "" };
+  }
   if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra session event")) {
     const history = JSON.stringify(prompt.slice(0, lastUser));
     if (history.includes("continuationstop")) return { controlled: "cancelstream" };
     if (history.includes("continuationbroken")) return { controlled: "continuationFailure" };
     if (history.includes("continuationlive")) return { controlled: "continuationLive" };
+    if (history.includes("placementcourse")) {
+      return prompt.slice(lastUser).some((m) => m.role === "tool")
+        ? { text: "Your syllabus is ready." }
+        : { tool: "write_syllabus", input: syllabus };
+    }
     const result = /learnerResult\\*":\\*"([a-z ]+)/.exec(JSON.stringify(prompt))?.[1];
     return { text: `Lesson continued after ${result ?? "unknown"}.` };
   }
   const text = JSON.stringify(prompt[lastUser]?.content);
+  // The tutor drawer (ADR-011): Explain answers, and Change edits the open lesson by its section id.
+  if (text.includes('Explain \\"The idea\\"')) return { text: "Here is more on the idea." };
+  if (text.includes("changelesson")) {
+    if (prompt.slice(lastUser).some((m) => m.role === "tool")) return { text: "I simplified it." };
+    const system = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");
+    const sectionId = /"sectionId":"([^"]+)","title":"The idea"/.exec(system)?.[1] ?? "missing";
+    return { tool: "change_lesson", input: { reason: "Simpler", operations: [{ op: "rewrite", sectionId, markdown: "Simpler: a limit is where f heads." }] } };
+  }
   if (text.includes("fail")) throw new Error("PROVIDER-SECRET-DETAIL");
   const toolResults = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
   if (text.includes("cancelthinking")) return { controlled: "cancelthinking" };

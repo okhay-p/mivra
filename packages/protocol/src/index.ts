@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { artifactMathInput, checkMathText } from "./artifact-math-input.js";
 import { AlgorithmTraceSpec } from "./algorithm-trace.js";
+import { PlacementAnswer, PlacementGrade, PlacementQuestionPublic, PlacementQuestionSpec } from "./course.js";
 import { GraphSpec } from "./graph.js";
 import { MultipleChoiceAnswer, MultipleChoiceGrade, MultipleChoicePublic, MultipleChoiceSpec } from "./multiple-choice.js";
 import { SetDiagramSpec } from "./set-diagram.js";
@@ -10,6 +11,8 @@ import { WorkedStepsSpec } from "./worked-steps.js";
 export * from "./artifact-math-input.js";
 export * from "./math-text.js";
 export * from "./algorithm-trace.js";
+export * from "./course.js";
+export * from "./lesson.js";
 export * from "./graph.js";
 export * from "./multiple-choice.js";
 export * from "./set-diagram.js";
@@ -50,6 +53,14 @@ export const artifactKinds = {
       "Ask the learner one multiple-choice question to check understanding of a concept you just taught. Exactly one option is correct. Write plausible wrong options that reflect real misconceptions, and give per-option feedback where useful. The learner answers in the UI; the result is reported back to you on the next turn, so do not reveal the answer in your reply.",
     spec: MultipleChoiceSpec,
     input: artifactMathInput(MultipleChoiceSpec, ["question", "options.*.text", "options.*.feedback", "explanation"]),
+  },
+  placement_question: {
+    version: 1,
+    toolName: "ask_placement_question",
+    description:
+      "Course placement interview only: ask the learner one quick question to find out what they already know about one concept, before the syllabus is written. Use multiple choice, true/false or yes/no. The UI always adds \"Not sure\" and \"Skip\", so never include those as options. The learner answers in the UI and the result is reported back to you, so don't reveal the answer.",
+    spec: PlacementQuestionSpec,
+    input: artifactMathInput(PlacementQuestionSpec, ["question", "options.*.text", "explanation"]),
   },
   set_diagram: {
     version: 1,
@@ -92,6 +103,9 @@ export const MultipleChoiceAttempt = z
   .strict();
 export type MultipleChoiceAttempt = z.infer<typeof MultipleChoiceAttempt>;
 
+export const PlacementAttempt = z.object({ answer: PlacementAnswer, grade: PlacementGrade, createdAt: z.string().datetime() }).strict();
+export type PlacementAttempt = z.infer<typeof PlacementAttempt>;
+
 /**
  * An artifact as the client receives it. Checks expose only their public view until answered;
  * after an attempt, the grade (with the correct answer and explanation) is included.
@@ -108,6 +122,15 @@ export const ArtifactView = z.discriminatedUnion("kind", [
       version: z.literal(1),
       spec: MultipleChoicePublic,
       latestAttempt: MultipleChoiceAttempt.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...ArtifactBase,
+      kind: z.literal("placement_question"),
+      version: z.literal(1),
+      spec: PlacementQuestionPublic,
+      latestAttempt: PlacementAttempt.optional(),
     })
     .strict(),
   z.object({ ...ArtifactBase, kind: z.literal("set_diagram"), version: z.literal(1), spec: SetDiagramSpec }).strict(),

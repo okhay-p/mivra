@@ -14,21 +14,26 @@ import {
   type UIMessageChunk,
   type UIMessageStreamOutcome,
 } from "ai";
+import type { LessonStore } from "../store/lesson-store.js";
 import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 import { createContinuationStream } from "./continuation-stream.js";
+import { courseContext } from "./course-context.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
 
+// The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
+/** How replies and artifact fields render; shared with lesson generation. */
+export const RENDERING_RULES = "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Text in artifacts renders $...$ maths but no markdown and no $$...$$, so write everything else in it as plain text; wrap all mathematical symbols in math-enabled artifact fields, including titles and explanations, in $...$ (e.g. $v_0$, never bare v_0). For a large formula, put \\displaystyle INSIDE the dollars, e.g. $\\displaystyle\\sum_{i=1}^{n} i$. In both, write a literal dollar sign as \\$. These artifact fields are plain text with no maths at all: concept names, a trace's values, pointer names, range labels and variables, and a graph's variables.";
 export const INSTRUCTIONS = [
   "You are Mivra, a patient tutor. Explain concepts step by step, check the learner's understanding, and adapt to what they already know.",
   "You have tools that show the learner interactive artifacts inline in the chat. Refer to them as inline cards, not as a panel. After teaching an idea, use ask_multiple_choice to check understanding. Use show_algorithm_trace to watch an algorithm's state change over a sequence, show_graph for graphs, trees and algorithms that move over them, show_set_diagram for operations on up to 3 sets, show_table for truth tables, relation matrices and other tabular working, and show_worked_steps for proofs, induction and combinatorics working.",
   "When you ask a check, don't reveal or hint at the answer in your reply; the learner answers in the UI. Once the reply finishes and all its checks are answered, Mivra invokes you automatically with the graded tool results. Briefly acknowledge the result and carry the lesson forward; do not repeat the explanation already shown on the graded card.",
-  // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
-  "Your replies render as markdown with LaTeX: $...$ for inline maths and $$...$$ for display maths, with no spaces just inside the single dollars. Text in artifacts renders $...$ maths but no markdown and no $$...$$, so write everything else in it as plain text; wrap all mathematical symbols in math-enabled artifact fields, including titles and explanations, in $...$ (e.g. $v_0$, never bare v_0). For a large formula, put \\displaystyle INSIDE the dollars, e.g. $\\displaystyle\\sum_{i=1}^{n} i$. In both, write a literal dollar sign as \\$. These artifact fields are plain text with no maths at all: concept names, a trace's values, pointer names, range labels and variables, and a graph's variables.",
+  RENDERING_RULES,
 ].join("\n\n");
+
 
 /** Upper bound on model steps per turn (a step ends at each round of tool calls). */
 const MAX_STEPS = 5;
@@ -78,13 +83,13 @@ async function replayMessages(conversation: UIMessage[]): Promise<ModelMessage[]
  */
 export type AssembleContext = (
   conversation: UIMessage[],
-  context: { sessionId: string },
+  context: { sessionId: string; lessonId?: string },
 ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
 
 /** The whole transcript, plus the learner's record across sessions and the session's documents. Summaries will plug in here. */
 const defaultAssembleContext =
-  (store: SessionStore, registry: CapabilityRegistry): AssembleContext =>
-  async (conversation, { sessionId }) => {
+  (store: SessionStore, registry: CapabilityRegistry, lessons?: LessonStore): AssembleContext =>
+  async (conversation, { sessionId, lessonId }) => {
     const documents = documentContext(store, sessionId, latestLearnerText(conversation.filter(m => m.id !== "mivra-continuation-event")));
     return {
       messages: withDocumentExcerpts(
@@ -93,6 +98,7 @@ const defaultAssembleContext =
       ),
       instructions: [
         learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
+        courseContext(store, sessionId, lessons && lessonId ? { lessons, lessonId, registry } : undefined),
         documents?.rules,
       ]
         .filter(Boolean)
@@ -104,6 +110,7 @@ export interface TurnRunnerDeps {
   store: SessionStore;
   registry: CapabilityRegistry;
   model: () => LanguageModel;
+  lessons?: LessonStore;
   assembleContext?: AssembleContext;
 }
 
@@ -122,6 +129,8 @@ export interface StartTurnInput {
   message: unknown;
   /** Documents ready when Send was pressed; omitted by older clients. */
   documentIds?: string[];
+  /** The lesson open in a course session when Send was pressed. Ignored unless it belongs to the session's course. */
+  lessonId?: string;
   /** Internal server trigger, never a learner message. */
   continuation?: boolean;
   /** Aborts the model call, e.g. when the client disconnects. */
@@ -139,7 +148,7 @@ function runStatusFor(outcome: UIMessageStreamOutcome): RunStatus {
  * the model boundary, on every step: otherwise the error escapes the UI stream and reaches Hono's
  * response writer. An error part uses the SDK's normal onError/onEnd path and closes SSE cleanly.
  */
-const containStreamErrors: LanguageModelMiddleware = {
+export const containStreamErrors: LanguageModelMiddleware = {
   wrapStream: async ({ doStream, params }) => {
     params.abortSignal?.throwIfAborted();
     const result = await doStream();
@@ -186,7 +195,7 @@ function continuationEvent(): UIMessage {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, assembleContext = defaultAssembleContext(store, registry) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, lessons, assembleContext = defaultAssembleContext(store, registry, lessons) }: TurnRunnerDeps) {
   type ActiveTurn = {
     controller: AbortController;
     stopId: string;
@@ -244,9 +253,12 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       stopped.add(JSON.stringify([sessionId, messageId]));
       if (stopped.size > 256) stopped.delete(stopped.values().next().value!);
     },
-    async startTurn({ sessionId, message: input, documentIds, abortSignal, continuation = false }: StartTurnInput): Promise<StartTurnResult> {
+    async startTurn({ sessionId, message: input, documentIds, lessonId: requestedLesson, abortSignal, continuation = false }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
       if (!session) return { ok: false, error: { kind: "not_found", message: "Session not found" } };
+      // A lesson only counts as context for its own course's session.
+      const course = store.findCourseBySession(sessionId);
+      const lessonId = requestedLesson && course && lessons?.findLesson(requestedLesson)?.courseId === course.id ? requestedLesson : undefined;
 
       const readyDocumentIds = continuation ? [] : documentIds ?? store.listDocuments(sessionId).filter(d => d.messageId === null).map(d => d.id);
 
@@ -307,14 +319,14 @@ export function createTurnRunner({ store, registry, model, assembleContext = def
       let assembled: Awaited<ReturnType<AssembleContext>>;
       try {
         // Plugin code runs here, so any failure must still release the run.
-        turnTools = registry.toolsFor({ sessionId, runId, store });
+        turnTools = registry.toolsFor({ sessionId, runId, store, lessons, lessonId });
         const gradedConversation = withAttemptResults(conversation, registry, store);
         // A model-only session event separates automatic assistant turns and closes the prompt.
         // It is never persisted or presented as a learner bubble. Tool call/result pairs remain intact.
         const context = gradedConversation.flatMap((m, index) =>
           m.role === "assistant" && gradedConversation[index - 1]?.role === "assistant" ? [continuationEvent(), m] : [m]);
         if (continuation) context.push(continuationEvent());
-        assembled = await assembleContext(context, { sessionId });
+        assembled = await assembleContext(context, { sessionId, lessonId });
       } catch (error) {
         if (signal.aborted) return cancelledBeforeStream();
         active.delete(sessionId);

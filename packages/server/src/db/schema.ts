@@ -174,3 +174,123 @@ export const documentChunks = sqliteTable(
   },
   (t) => [uniqueIndex("document_chunks_document_seq_idx").on(t.documentId, t.seq)],
 );
+
+export const courseStatuses = ["interviewing", "active", "complete"] as const;
+
+/**
+ * A course (ADR-011): one learning goal, taught in its own chat session. It starts with a placement
+ * interview and becomes active once the AI has written its syllabus.
+ */
+export const courses = sqliteTable(
+  "courses",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    goal: text("goal").notNull(),
+    status: text("status", { enum: courseStatuses }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("courses_session_idx").on(t.sessionId)],
+);
+
+/**
+ * One immutable version of a course's syllabus. `topics` is the ordered list of topics, each with a
+ * server-assigned id that stays the same across versions, so lessons can refer to their topic.
+ * `known` is what the AI said the learner already knows, labelled by source.
+ */
+export const syllabusVersions = sqliteTable(
+  "syllabus_versions",
+  {
+    id: text("id").primaryKey(),
+    courseId: text("course_id")
+      .notNull()
+      .references(() => courses.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    topics: text("topics", { mode: "json" }).notNull(),
+    known: text("known", { mode: "json" }).notNull(),
+    /** Who made this version: the interview, the tutor on request (Change), or adaptive generation (ADR-011). */
+    source: text("source", { enum: ["interview", "tutor", "adaptive", "undo"] }).notNull().default("interview"),
+    /** For an adaptive change, the finished lesson whose results prompted it: at most one change per lesson. */
+    triggerLessonId: text("trigger_lesson_id"),
+    /** Why it changed, shown to the learner. Null for the first version. */
+    reason: text("reason"),
+    /** Ids of the topics this version added or changed, for highlighting. */
+    changedTopicIds: text("changed_topic_ids", { mode: "json" }).notNull().default(sql`'[]'`),
+    runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("syllabus_versions_course_version_idx").on(t.courseId, t.version)],
+);
+
+export const lessonStatuses = ["generating", "ready", "failed", "finished"] as const;
+
+/**
+ * One lesson per syllabus topic (ADR-011). Generation runs in the lesson's own hidden session, so its
+ * artifacts, attempts and model transcript use the existing tables. A finished lesson is frozen.
+ */
+export const lessons = sqliteTable(
+  "lessons",
+  {
+    id: text("id").primaryKey(),
+    courseId: text("course_id")
+      .notNull()
+      .references(() => courses.id, { onDelete: "cascade" }),
+    topicId: text("topic_id").notNull(),
+    topicTitle: text("topic_title").notNull(),
+    /** The topic's position in the syllabus when the lesson started. */
+    position: integer("position").notNull(),
+    sessionId: text("session_id")
+      .notNull()
+      .references(() => sessions.id, { onDelete: "cascade" }),
+    status: text("status", { enum: lessonStatuses }).notNull(),
+    error: text("error"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
+  },
+  (t) => [uniqueIndex("lessons_course_topic_idx").on(t.courseId, t.topicId), uniqueIndex("lessons_session_idx").on(t.sessionId)],
+);
+
+/** An immutable lesson section: prose, or a reference to an artifact. Versions list sections by id. */
+export const lessonSections = sqliteTable(
+  "lesson_sections",
+  {
+    id: text("id").primaryKey(),
+    lessonId: text("lesson_id")
+      .notNull()
+      .references(() => lessons.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["prose", "artifact"] }).notNull(),
+    title: text("title").notNull(),
+    markdown: text("markdown"),
+    artifactId: text("artifact_id").references(() => artifacts.id, { onDelete: "cascade" }),
+    /** Sections of the previous lesson this one revisits, by id, so the page can link back to them. */
+    revisits: text("revisits", { mode: "json" }).notNull().default(sql`'[]'`),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [index("lesson_sections_lesson_idx").on(t.lessonId), uniqueIndex("lesson_sections_artifact_idx").on(t.artifactId)],
+);
+
+/**
+ * A version of a lesson: its outline and the ordered ids of its sections. Version 1 grows while it is
+ * generated; later versions (Change, ADR-011) are new rows, so attempts stay with what the learner saw.
+ */
+export const lessonVersions = sqliteTable(
+  "lesson_versions",
+  {
+    id: text("id").primaryKey(),
+    lessonId: text("lesson_id")
+      .notNull()
+      .references(() => lessons.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    outline: text("outline", { mode: "json" }).notNull(),
+    sectionIds: text("section_ids", { mode: "json" }).notNull(),
+    /** Ids of the sections this version added or changed, for highlighting. Empty for version 1. */
+    changedSectionIds: text("changed_section_ids", { mode: "json" }).notNull().default(sql`'[]'`),
+    /** Why the tutor changed it. Null for version 1. */
+    reason: text("reason"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("lesson_versions_lesson_version_idx").on(t.lessonId, t.version)],
+);
