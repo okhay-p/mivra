@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures.js";
 
 test("one graded answer continues exactly once without a learner bubble, even after retry and reload", async ({ page, request }) => {
   const title = `teach continuation ${Date.now()}`;

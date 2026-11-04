@@ -647,7 +647,10 @@ const model = new MockLanguageModelV4({
   },
 });
 
-const dataDir = mkdtempSync(join(tmpdir(), "mivra-e2e-"));
+// The test fixture makes the directory, so it can remove it even if this process is killed outright.
+const dataDir = process.env.MIVRA_E2E_DATA_DIR ?? mkdtempSync(join(tmpdir(), "mivra-e2e-"));
+// However the process ends, its database goes with it.
+process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
 const token = loadOrCreateToken(dataDir);
 const db = openDb(join(dataDir, "mivra.db"));
 const app = createApp({
@@ -668,10 +671,26 @@ app.post("/e2e/release", (c) => {
 });
 serveWeb(app, fileURLToPath(new URL("../web/dist", import.meta.url)), token);
 
-serve({ fetch: app.fetch, port: Number(process.argv[2]), hostname: "127.0.0.1" });
-
-// Playwright stops this process with SIGTERM (gracefulShutdown in playwright.config.ts).
-process.on("SIGTERM", () => {
-  rmSync(dataDir, { recursive: true, force: true });
-  process.exit(0);
+const port = Number(process.argv[2]);
+const server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
+  // The test fixture waits for this line from its own child, so it can't mistake another server on the port for it.
+  process.stdout.write(`mivra-e2e-ready ${process.env.MIVRA_E2E_INSTANCE ?? ""}\n`);
 });
+// A port that's already taken fails the start, and the fixture reports why.
+server.on("error", (error) => {
+  process.stderr.write(`${error}\n`);
+  process.exit(1);
+});
+
+// The test fixture stops this process with SIGTERM (stopHarness in fixtures.ts).
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
+
+// The test fixture holds this process's stdin open for as long as it wants the harness. When the Playwright worker
+// that started it dies without stopping it (a crash, an OOM kill), the system closes that pipe, so the harness stops
+// too, and no server is left holding the port and its database.
+if (process.env.MIVRA_E2E_OWNED === "1") {
+  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("close", () => process.exit(0));
+  process.stdin.resume();
+}

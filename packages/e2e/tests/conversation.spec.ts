@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../fixtures.js";
 
 test("scrolling up during streaming stays put and the scroll button resumes following", async ({ page }) => {
   test.setTimeout(60_000);

@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "../fixtures.js";
 
 async function showAt320(page: Page, script: string, reply: string, region: RegExp) {
   await page.goto("/");

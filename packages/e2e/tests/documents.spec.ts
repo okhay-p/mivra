@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "../fixtures.js";
 import { makePdf } from "../../server/test/support/files.js";
 
 async function startSession(page: Page) {
