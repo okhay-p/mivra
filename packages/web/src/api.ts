@@ -1,7 +1,7 @@
 import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryView, type PlacementAnswer } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
-import { hc } from "hono/client";
+import { hc, type InferResponseType } from "hono/client";
 
 /** API token the server (or Vite in dev) embeds in index.html. */
 export const token = document.querySelector<HTMLMetaElement>('meta[name="mivra-token"]')?.content ?? "";
@@ -155,3 +155,17 @@ export const undoSyllabusChange = (courseId: string, version: number) =>
     () => api.courses[":id"].syllabus.undo.$post({ param: { id: courseId }, json: { version } }),
     async (res) => CourseView.parse(await res.json()),
   );
+
+/** The model picker's contents (ADR-012). */
+export type ModelPickerView = InferResponseType<typeof api.models.$get, 200>;
+export type CatalogModel = ModelPickerView["models"][number];
+export type ModelSelection = ModelPickerView["current"];
+export type ReasoningEffort = NonNullable<ModelSelection["effort"]>;
+
+export const getModelPicker = () => request(() => api.models.$get(), async (res) => (await res.json()) as ModelPickerView);
+
+export const selectModel = (selection: ModelSelection) =>
+  request(() => api.settings.model.$put({ json: selection }), async (res) => (await res.json()) as ModelSelection);
+
+export const setPinnedModels = (models: string[]) =>
+  request(() => api.settings["pinned-models"].$put({ json: { models } }), async (res) => ((await res.json()) as { pinned: string[] }).pinned);

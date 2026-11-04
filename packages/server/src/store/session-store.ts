@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
 import { and, asc, desc, eq, inArray, isNull, isNotNull, max, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
+import type { ModelSelection } from "../model.js";
 import { artifacts, attempts, courses, documentChunks, documents, lessons, memories, messages, runs, sessions, syllabusVersions, type RunStatus } from "../db/schema.js";
 
 export type { RunStatus };
@@ -26,6 +27,9 @@ export type SyllabusOperation =
   | { op: "split"; topicId: string; into: { title: string; summary: string; concepts: string[] }[] };
 /** A chunk of a document's text with what's needed to cite it. `documentOrder` is the document's rowid, so its upload order. */
 export type DocumentExcerpt = { documentId: string; filename: string; kind: DocumentRow["kind"]; page: number; seq: number; text: string; documentOrder: number };
+
+/** What a stored reply carries besides its parts. */
+export type ReplyMetadata = { model?: string };
 
 /** A write was refused because it would break an invariant (reused message id, overlapping run). */
 export class Conflict extends Error {}
@@ -357,11 +361,13 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       return db.select().from(sessions).where(eq(sessions.id, id)).get();
     },
 
-    /** Messages in conversation order. */
-    loadMessages(sessionId: string, forModel = false): UIMessage[] {
+    /** Messages in conversation order. A reply's metadata names the model that wrote it, when that was recorded (ADR-012). */
+    loadMessages(sessionId: string, forModel = false): UIMessage<ReplyMetadata>[] {
+      const replyRuns = db.select({ id: runs.assistantMessageId, status: runs.status, model: runs.model }).from(runs)
+        .where(and(eq(runs.sessionId, sessionId), isNotNull(runs.assistantMessageId))).all();
       // Cancelled replies are display-only: never replay truncated turns as complete answers.
-      const cancelled = new Set(forModel ? db.select({ id: runs.assistantMessageId }).from(runs)
-        .where(and(eq(runs.sessionId, sessionId), eq(runs.status, "cancelled"))).all().map((row) => row.id) : []);
+      const cancelled = new Set(forModel ? replyRuns.filter((run) => run.status === "cancelled").map((run) => run.id) : []);
+      const models = new Map(replyRuns.flatMap((run) => (run.model ? [[run.id, run.model] as const] : [])));
       return db
         .select()
         .from(messages)
@@ -369,14 +375,17 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
         .orderBy(asc(messages.seq))
         .all()
         .filter((row) => !cancelled.has(row.id))
-        .map((row) => ({ id: row.id, role: row.role, parts: row.parts as UIMessage["parts"] }));
+        .map((row) => {
+          const model = models.get(row.id);
+          return { id: row.id, role: row.role, parts: row.parts as UIMessage["parts"], ...(model ? { metadata: { model } } : {}) };
+        });
     },
 
     /**
      * Saves the user message and claims the session's single running slot, atomically.
      * Throws Conflict if the message id was used before or a run is already in progress.
      */
-    startRun(session: SessionRow, message: UIMessage): string {
+    startRun(session: SessionRow, message: UIMessage, selection?: ModelSelection): string {
       return db.transaction((tx) => {
         if (tx.select({ id: messages.id }).from(messages).where(eq(messages.id, message.id)).get()) {
           throw new Conflict("This message id has already been used");
@@ -395,7 +404,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
           .run();
         const runId = randomUUID();
         tx.insert(runs)
-          .values({ id: runId, sessionId: session.id, userMessageId: message.id, status: "running", startedAt: now })
+          .values({ id: runId, sessionId: session.id, userMessageId: message.id, status: "running", startedAt: now, model: selection?.model, effort: selection?.effort })
           .run();
 
         const title = seq === 1 && session.title === DEFAULT_TITLE ? firstText(message)?.trim().slice(0, 60) : undefined;
@@ -412,7 +421,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     },
 
     /** Claims an automatic continuation once, only for the latest completed, fully answered quiz reply. */
-    startContinuation(sessionId: string, checkKinds: string[]) {
+    startContinuation(sessionId: string, checkKinds: string[], selection?: ModelSelection) {
       return db.transaction(tx => {
         const latest = tx.select().from(runs).where(eq(runs.sessionId, sessionId)).orderBy(desc(sql`rowid`)).get();
         // Keep failed attempts (and their errors), but transfer their unique logical claim to a
@@ -440,7 +449,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
         if (retry) tx.update(runs).set({ continuationOf: null }).where(eq(runs.id, retry.id)).run();
         if (tx.select({ id: runs.id }).from(runs).where(eq(runs.continuationOf, source.id)).get()) return;
         const row = { id: randomUUID(), sessionId, userMessageId: source.userMessageId,
-          continuationOf: source.id, status: "running" as const, startedAt };
+          continuationOf: source.id, status: "running" as const, startedAt, model: selection?.model, effort: selection?.effort };
         tx.insert(runs).values(row).run();
         return row;
       });

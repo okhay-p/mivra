@@ -24,7 +24,7 @@ export function publicErrorText(error: unknown): string {
   if (LoadAPIKeyError.isInstance(error)) {
     return "The model provider's API key is missing. Set it in .env (see .env.example) and restart the server.";
   }
-  if (NoSuchModelError.isInstance(error)) return "Unknown model or provider. Check MIVRA_MODEL in .env.";
+  if (NoSuchModelError.isInstance(error)) return "Unknown model or provider. Choose another model in the picker under the message box.";
   if (APICallError.isInstance(error)) {
     const hint = error.statusCode ? STATUS_HINTS[error.statusCode] : undefined;
     return hint

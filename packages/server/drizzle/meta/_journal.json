@@ -78,6 +78,13 @@
       "when": 1793692194310,
       "tag": "0010_goofy_thanos",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1793777969761,
+      "tag": "0011_known_katie_power",
+      "breakpoints": true
     }
   ]
 }

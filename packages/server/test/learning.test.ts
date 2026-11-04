@@ -12,6 +12,7 @@ import { createCapabilityRegistry, type Plugin } from "../src/runtime/capabiliti
 import { deriveConceptState } from "../src/runtime/learner-context.js";
 import { createTurnRunner } from "../src/runtime/turn-runner.js";
 import { createSessionStore } from "../src/store/session-store.js";
+import { fixedModel } from "./support/models.js";
 
 const TOKEN = "test-token";
 const auth = { authorization: `Bearer ${TOKEN}` };
@@ -245,7 +246,7 @@ describe("multiple_choice through the agent", () => {
     const store = createSessionStore(db);
     const session = store.createSession();
     const broken = { ...store, listRecentEvidence: () => { throw new Error("disk error"); } };
-    const runner = createTurnRunner({ store: broken, registry: createCapabilityRegistry([coreLearning]), model: () => scriptedModel([]) });
+    const runner = createTurnRunner({ models: fixedModel, store: broken, registry: createCapabilityRegistry([coreLearning]), model: () => scriptedModel([]) });
 
     const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hi") });
     expect(result).toMatchObject({ ok: false, error: { kind: "unavailable", message: "Couldn't start the reply." } });
@@ -446,7 +447,7 @@ describe("fail-closed client output: errors and metadata", () => {
     );
     const { NoSuchModelError } = await import("ai");
     expect(await send(failWith(new NoSuchModelError({ modelId: "x", modelType: "languageModel", message: JSON.stringify(check) })))).toBe(
-      "Unknown model or provider. Check MIVRA_MODEL in .env.",
+      "Unknown model or provider. Choose another model in the picker under the message box.",
     );
     const outOfCredits = new APICallError({
       message: `echoes ${JSON.stringify(check)}`,
@@ -830,7 +831,7 @@ it("recovers interrupted continuations with a durable retry budget and cooldown,
   expect(store.latestRun(id)).toMatchObject({ id: interrupted.id, status: "failed" });
   // Inject only the store clock: streaming and the SDK still use real scheduling.
   const registry = createCapabilityRegistry([coreLearning]);
-  const recovered = createTurnRunner({ store, registry, model: () => restarted.model });
+  const recovered = createTurnRunner({ models: fixedModel, store, registry, model: () => restarted.model });
   const subscribe = () => recovered.subscribeContinuation(id);
   const duringCooldown = await Promise.all(Array.from({ length: 4 }, subscribe));
   expect(duringCooldown.every(r => r.status === 204)).toBe(true);
@@ -862,7 +863,7 @@ it("recovers interrupted continuations with a durable retry budget and cooldown,
       return { stream: simulateReadableStream({ chunks: [{ type: "error", error: new Error("provider unavailable") }] }) };
     },
   });
-  const freshRunner = () => createTurnRunner({
+  const freshRunner = () => createTurnRunner({ models: fixedModel,
     store: createSessionStore(db, () => clock), registry,
     model: () => failingModel,
   });

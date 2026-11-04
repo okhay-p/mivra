@@ -1,7 +1,7 @@
 import { stepCountIs, streamText, tool } from "ai";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { createRegistry, resolveModel } from "../src/model.js";
+import { createRegistry, providerOptionsFor, resolveModel } from "../src/model.js";
 
 const chunk = (delta: object, finish: string | null, extra: object = {}) =>
     `data: ${JSON.stringify({
@@ -74,15 +74,16 @@ describe("openrouter provider", () => {
     expect(request?.body.stream).toBe(true);
   });
 
-  it("sends the reasoning effort on every step, and none by default", async () => {
+  it("sends the selected reasoning effort on every step, and none by default", async () => {
     const bodies: Record<string, unknown>[] = [];
     const fakeFetch: typeof fetch = async (_input, init) => {
       bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       return sse(bodies.length === 1 ? toolCallStream("ask_check", { question: "q?" }) : chatCompletionStream("done"));
     };
-    const run = (reasoningEffort?: "medium") =>
+    const run = (effort: "medium" | null = null) =>
       streamText({
-        model: resolveModel("openrouter:vendor/model", createRegistry({ openrouterApiKey: "k", fetch: fakeFetch, reasoningEffort })),
+        model: resolveModel("openrouter:vendor/model", createRegistry({ openrouterApiKey: "k", fetch: fakeFetch })),
+        providerOptions: providerOptionsFor({ model: "openrouter:vendor/model", effort }),
         prompt: "quiz me",
         tools: { ask_check: tool({ inputSchema: z.object({ question: z.string() }), execute: async () => "ok" }) },
         stopWhen: stepCountIs(2),

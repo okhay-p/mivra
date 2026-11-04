@@ -14,6 +14,7 @@ import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
+import { ModelPicker, shortModelName, useModelPicker } from "./ModelPicker.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
@@ -509,6 +510,7 @@ function Chat({
   lessonRef.current = lessonId;
   const [input, setInput] = useState("");
   const documents = useDocuments(sessionId);
+  const modelPicker = useModelPicker();
   const documentsRef = useRef(documents);
   documentsRef.current = documents;
   // Views the learner changed locally (e.g. a graded check), by artifact id. They win over the view in
@@ -803,6 +805,11 @@ function Chat({
                 }
                 return null;
               })}
+              {m.role === "assistant" && typeof (m.metadata as { model?: unknown } | undefined)?.model === "string" && (
+                <p className="text-muted-foreground text-xs" data-reply-model>
+                  {shortModelName((m.metadata as { model: string }).model, modelPicker.view?.models)}
+                </p>
+              )}
               {onAddToLesson && m.role === "assistant" && mi > interviewEnd && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (
                 <AddToLessonButton onAdd={() => onAddToLesson(m.id)} />
               )}
@@ -848,6 +855,9 @@ function Chat({
           ) : (
             <Button type="submit" disabled={!input.trim()}>Send</Button>
           )}
+        </div>
+        <div className="mx-auto flex max-w-3xl px-3 pb-2">
+          <ModelPicker state={modelPicker} />
         </div>
       </form>
     </div>

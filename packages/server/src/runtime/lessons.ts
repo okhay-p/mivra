@@ -10,6 +10,8 @@ import {
   type LessonView,
 } from "@mivra/protocol";
 import { convertToModelMessages, stepCountIs, streamText, tool, wrapLanguageModel, type LanguageModel, type Tool, type UIMessage } from "ai";
+import { providerOptionsFor, type ModelSelection } from "../model.js";
+import type { ModelSettings } from "../models/selection.js";
 import type { LessonRow, LessonStore } from "../store/lesson-store.js";
 import type { SessionStore } from "../store/session-store.js";
 import { artifactView } from "./artifacts.js";
@@ -46,11 +48,13 @@ export interface LessonDeps {
   store: SessionStore;
   lessons: LessonStore;
   registry: CapabilityRegistry;
-  model: () => LanguageModel;
+  model: (selection: ModelSelection) => LanguageModel;
+  /** The app-wide model selection (ADR-012): lessons are written with the same model as chat. */
+  models: Pick<ModelSettings, "forRun">;
 }
 
 /** A lesson as the client sees it; artifact sections carry their public views. */
-export function lessonView(lesson: LessonRow, { store, lessons, registry }: Omit<LessonDeps, "model">): LessonView {
+export function lessonView(lesson: LessonRow, { store, lessons, registry }: Omit<LessonDeps, "model" | "models">): LessonView {
   const version = lessons.latestVersion(lesson.id);
   const sections = lessons.sections(version?.sectionIds ?? []).flatMap((section): LessonView["sections"] => {
     if (section.kind === "prose") {
@@ -92,7 +96,7 @@ function revisitLinks(ids: string[], lessons: LessonStore) {
 }
 
 /** How the learner did on a finished lesson's checks, for the next lesson to build on (ADR-011). */
-export function lessonResults(lesson: LessonRow, { store, lessons, registry }: Omit<LessonDeps, "model">) {
+export function lessonResults(lesson: LessonRow, { store, lessons, registry }: Omit<LessonDeps, "model" | "models">) {
   const version = lessons.latestVersion(lesson.id);
   const sections = lessons.sections(version?.sectionIds ?? []);
   const checks = sections.flatMap((section) => {
@@ -153,7 +157,7 @@ export function reconcileCompletion(courseId: string, deps: Pick<LessonDeps, "st
 }
 
 /** Generates lessons, one at a time per lesson, and lets clients wait for the next change. */
-export function createLessonGenerator({ store, lessons, registry, model }: LessonDeps) {
+export function createLessonGenerator({ store, lessons, registry, model, models }: LessonDeps) {
   const active = new Set<string>();
   const waiters = new Map<string, Set<() => void>>();
   const changed = (lessonId: string) => {
@@ -329,14 +333,16 @@ export function createLessonGenerator({ store, lessons, registry, model }: Lesso
     };
     let runId: string | undefined;
     try {
-      const languageModel = model();
-      runId = store.startRun(session, message);
+      const selection = models.forRun();
+      const languageModel = model(selection);
+      runId = store.startRun(session, message, selection);
       let streamError: unknown;
       const result = streamText({
         model: typeof languageModel === "string" ? languageModel : wrapLanguageModel({ model: languageModel, middleware: containStreamErrors }),
         instructions: instructionsFor(lesson),
         messages: await convertToModelMessages([message]),
         tools: toolsFor(lesson, runId),
+        providerOptions: providerOptionsFor(selection),
         stopWhen: stepCountIs(LESSON_MAX_STEPS),
         onError: ({ error }) => {
           streamError ??= error;

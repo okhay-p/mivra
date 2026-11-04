@@ -48,6 +48,10 @@ export const runs = sqliteTable(
     continuationOf: text("continuation_of"),
     assistantMessageId: text("assistant_message_id").references(() => messages.id, { onDelete: "set null" }),
     status: text("status", { enum: runStatuses }).notNull(),
+    /** The model that ran, as "<provider>:<model-id>" (ADR-012). Null for runs before it was recorded. */
+    model: text("model"),
+    /** The reasoning effort it ran with; null leaves it to the model's default. */
+    effort: text("effort"),
     error: text("error"),
     startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
     endedAt: integer("ended_at", { mode: "timestamp_ms" }),
@@ -294,3 +298,10 @@ export const lessonVersions = sqliteTable(
   },
   (t) => [uniqueIndex("lesson_versions_lesson_version_idx").on(t.lessonId, t.version)],
 );
+
+/** App-wide settings as JSON values by key, such as the current model selection (ADR-012). */
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value", { mode: "json" }).notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+});
