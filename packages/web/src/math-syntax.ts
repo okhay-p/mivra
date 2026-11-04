@@ -340,8 +340,9 @@ const PLAIN: TexState = { depth: 0, uncertain: false };
 // Commands after which literal text, and so dollars, can run to a delimiter this scan can't find: `\verb` takes any
 // delimiter, and a macro defined with `\def` and its relatives can take an argument up to any text at all.
 // Internal commands (any name with `@`, such as `\@ifnextchar`), conditionals (`\if…`) and expansion control
-// consume the tokens after them, dollars included, so they're uncertain too.
-const UNCERTAIN_COMMANDS = new Set(["verb", "def", "gdef", "edef", "xdef", "let", "futurelet", "newcommand", "renewcommand", "providecommand", "catcode", "csname", "expandafter", "noexpand"]);
+// consume the tokens after them, dollars included, so they're uncertain too. `\includegraphics` takes a raw optional
+// `[…]` argument, which can hold dollars too.
+const UNCERTAIN_COMMANDS = new Set(["verb", "def", "gdef", "edef", "xdef", "let", "futurelet", "newcommand", "renewcommand", "providecommand", "catcode", "csname", "expandafter", "noexpand", "includegraphics"]);
 
 /** Reads more of a display block's TeX. A `%` comment can hide the dollars and text after it, so it is uncertain too. */
 function readTex(state: TexState, text: string): TexState {

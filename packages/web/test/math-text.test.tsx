@@ -321,6 +321,9 @@ describe("MathText display fences in lists and quotes", () => {
     // Round 4: KaTeX allows `@` in command names, and a conditional consumes the tokens after it, dollars included.
     ["dollars a \\@ifnextchar reads", "$$\n\\@ifnextchar$$ {} x\n$$", { math: ["\\@ifnextchar$$ {} x"], unchanged: true }],
     ["dollars a \\@ifnextchar on an earlier line reads", "$$\n\\@ifnextchar\n$$ {} x\n$$", { math: ["\\@ifnextchar\n$$ {} x"], unchanged: true }],
+    // Round 5: \includegraphics's optional argument is raw text, dollars included.
+    ["dollars in \\includegraphics's raw option", "$$\n\\includegraphics[alt=a$$ b]{https://example.com/x.png}\n$$", { math: ["\\includegraphics[alt=a$$ b]{https://example.com/x.png}"], unchanged: true }],
+    ["dollars in \\includegraphics's option across lines", "$$\n\\includegraphics[alt=a\nb$$ c]{https://example.com/x.png}\n$$", { math: ["\\includegraphics[alt=a\nb$$ c]{https://example.com/x.png}"], unchanged: true }],
     ["a formula in a quote", "> $$\n> x$$ tail", { unchanged: true, error: true }],
     ["a formula on a list marker line", "- $$ x + y\n  = z\n  $$ after", { unchanged: true, error: true }],
     ["a formula in an ordered item", "1. $$\n   x$$ tail\n2. b", { text: ["b"], unchanged: true, error: true }],
