@@ -80,7 +80,8 @@ describe("ModelPicker", () => {
     expect(list.querySelectorAll("[role=option]")).toHaveLength(50);
     fireEvent.change(screen.getByRole("combobox", { name: "Choose a model" }), { target: { value: "nothing like this" } });
     expect(await within(list).findByText("No models match.")).toBeTruthy();
-  });
+    // Renders 50 rows: about 2 s alone, and far more when every suite runs at once.
+  }, 20_000);
 
   it("keeps the effort when the new model supports it, and falls back to the default when it doesn't", async () => {
     const puts = serve(picker({ current: { model: sonnet.id, effort: "high" } }));

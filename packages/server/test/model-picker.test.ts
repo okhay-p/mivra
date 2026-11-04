@@ -236,6 +236,10 @@ describe("replaying replies after a model switch", () => {
       { type: "step-start", providerMetadata: { openrouter: { reasoning_details: ["SIGNED"] } } } as UIMessage["parts"][number],
       { type: "reasoning", text: "thinking", providerMetadata: { anthropic: { signature: "SIG" } } },
       { type: "text", text: "Answer.", providerMetadata: { openrouter: { private: "X" } } },
+      {
+        type: "tool-ask_multiple_choice", toolCallId: "c", state: "output-error", input: {}, errorText: "bad",
+        callProviderMetadata: { openrouter: { call: "CALLMETA" } }, resultProviderMetadata: { openrouter: { result: "RESULTMETA" } },
+      } as unknown as UIMessage["parts"][number],
     ],
   };
 
@@ -245,7 +249,7 @@ describe("replaying replies after a model switch", () => {
     expect(same).toContain("SIG");
     const other = JSON.stringify(await replayMessages([reply], "openrouter:vendor/b"));
     expect(other).toContain("Answer.");
-    expect(other).not.toMatch(/SIGNED|SIG|thinking|private/);
+    expect(other).not.toMatch(/SIGNED|SIG|thinking|private|CALLMETA|RESULTMETA/);
     // A reply from before models were recorded counts as another model's.
     const unrecorded = JSON.stringify(await replayMessages([{ ...reply, metadata: undefined }], "openrouter:vendor/a"));
     expect(unrecorded).not.toMatch(/SIGNED|SIG/);

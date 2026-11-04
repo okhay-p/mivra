@@ -48,7 +48,8 @@ type PrivateStepStart = Extract<UIMessage["parts"][number], { type: "step-start"
 
 /** A part without the provider details attached to it, for a model that didn't produce them. */
 function withoutProviderDetails(part: UIMessage["parts"][number]): UIMessage["parts"][number] {
-  const { providerMetadata: _, callProviderMetadata: __, ...rest } = part as { providerMetadata?: unknown; callProviderMetadata?: unknown };
+  const { providerMetadata: _, callProviderMetadata: __, resultProviderMetadata: ___, ...rest } =
+    part as { providerMetadata?: unknown; callProviderMetadata?: unknown; resultProviderMetadata?: unknown };
   return rest as UIMessage["parts"][number];
 }
 
