@@ -11,7 +11,7 @@ date: 4 November 2026
 
 **Decision:** (B). (D) is a later improvement; (C) is not planned.
 
-- **One selection.** A `settings` table (key → JSON) holds the current `{ model, effort }`. Chat turns, syllabus generation and lesson generation all use it. Until the learner picks a model in the UI, the env vars decide it, so fixing `.env` after a failed first run still works; once they pick, the env vars no longer apply. `PUT /api/settings/model` validates the model against the catalog and the effort against the levels that model supports.
+- **One selection.** A `settings` table (key → JSON) holds the current `{ model, effort }`. Chat turns, syllabus generation and lesson generation all use it. There are no model env vars: `MIVRA_MODEL` and `MIVRA_REASONING_EFFORT` are retired (the server warns if they're set), so setup needs only `OPENROUTER_API_KEY` and nobody has to know a model id. Until the learner picks, a built-in default applies: Claude Sonnet 5.5 through OpenRouter, effort left to the model. `PUT /api/settings/model` validates the model against the catalog and the effort against the levels that model supports.
 - **Effort per call.** Effort moves from the provider's `extraBody` to each call's `providerOptions`, so changing it needs no restart. A change applies from the next run; a run already streaming keeps its model.
 - **Runs record their model.** `runs` gains `model` and `effort`. On replay, provider metadata and signed reasoning are sent back only for replies from the same model; replies from another model replay as text.
 - **Catalog.** `GET /api/models` serves OpenRouter's public model list (`/api/v1/models`) filtered to models whose `supported_parameters` include `tools`, since the learning tools need tool calling (batch variants are left out: they can't stream). Each entry carries id, name, context length, price and, when it supports `reasoning`, the effort levels it lists (`supported_efforts`) and its default. The server caches it in memory for about an hour and falls back to the last good copy when offline.
@@ -22,6 +22,6 @@ date: 4 November 2026
 
 **Build order:**
 
-1. OpenRouter: settings table, catalog endpoint, per-call effort, run provenance and the same-model replay rule, the picker, and the model label on replies.
-2. Direct providers: the catalog groups by provider and lists only providers whose API key is set (OpenRouter, Anthropic, OpenAI). A per-provider mapping turns the effort level into each provider's option, such as Anthropic's thinking setting or OpenAI's `reasoningEffort`.
+1. OpenRouter: retire the model env vars for a built-in default, settings table, catalog endpoint, per-call effort, run provenance and the same-model replay rule, the picker, and the model label on replies.
+2. Direct providers: the catalog groups by provider and lists only providers whose API key is set (OpenRouter, Anthropic, OpenAI). Until then, direct Anthropic and OpenAI keys aren't used. A per-provider mapping turns the effort level into each provider's option, such as Anthropic's thinking setting or OpenAI's `reasoningEffort`.
 3. Later: sign-in with a ChatGPT subscription via OAuth. First confirm that OpenAI permits third-party apps to use subscription credentials; this needs its own ADR. Also later: a model per job (D).

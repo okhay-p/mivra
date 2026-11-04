@@ -447,7 +447,7 @@ describe("fail-closed client output: errors and metadata", () => {
     );
     const { NoSuchModelError } = await import("ai");
     expect(await send(failWith(new NoSuchModelError({ modelId: "x", modelType: "languageModel", message: JSON.stringify(check) })))).toBe(
-      "Unknown model or provider. Check MIVRA_MODEL in .env.",
+      "Unknown model or provider. Choose another model in the picker under the message box.",
     );
     const outOfCredits = new APICallError({
       message: `echoes ${JSON.stringify(check)}`,

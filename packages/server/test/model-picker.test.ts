@@ -6,7 +6,8 @@ import { openDb } from "../src/db/client.js";
 import { runs } from "../src/db/schema.js";
 import type { ModelSelection } from "../src/model.js";
 import { createOpenRouterCatalog, parseOpenRouterModels, staticCatalog, type CatalogModel } from "../src/models/catalog.js";
-import { createModelSettings } from "../src/models/selection.js";
+import { DEFAULT_SELECTION, createModelSettings } from "../src/models/selection.js";
+import { loadConfig } from "../src/config.js";
 import { replayMessages } from "../src/runtime/turn-runner.js";
 import { createSettingsStore } from "../src/store/settings-store.js";
 
@@ -208,17 +209,21 @@ describe("model picker API", () => {
   });
 });
 
-describe("the configured default", () => {
-  it("applies until the learner picks a model, so fixing .env after a failed first run works", async () => {
+describe("the built-in default", () => {
+  it("runs a new install on Claude Sonnet via OpenRouter until the learner picks a model", async () => {
     const settings = createSettingsStore(openDb(":memory:"));
-    const catalog = staticCatalog([thinker, plain]);
-    const withDefault = (model: string) => createModelSettings({ settings, catalog, defaults: { model, effort: null } });
-    expect(withDefault("anthropic:no-key").forRun().model).toBe("anthropic:no-key");
-    // A restart with a corrected MIVRA_MODEL.
-    expect(withDefault(plain.id).current()).toEqual({ model: plain.id, effort: null });
-    expect((await withDefault(plain.id).select({ model: thinker.id, effort: "low" })).ok).toBe(true);
-    // Once the learner has picked, the picker decides.
-    expect(withDefault("anthropic:other").current()).toEqual({ model: thinker.id, effort: "low" });
+    const models = createModelSettings({ settings, catalog: staticCatalog([thinker, plain]) });
+    expect(models.forRun()).toEqual(DEFAULT_SELECTION);
+    expect(DEFAULT_SELECTION.model).toBe("openrouter:anthropic/claude-sonnet-5.5");
+    // Listed even before the catalog loads, so the picker can always go back to it.
+    expect((await models.picker()).models[0]?.id).toBe(DEFAULT_SELECTION.model);
+    expect((await models.select({ model: thinker.id, effort: "low" })).ok).toBe(true);
+    expect(createModelSettings({ settings, catalog: staticCatalog([thinker]) }).current()).toEqual({ model: thinker.id, effort: "low" });
+  });
+
+  it("no longer reads the model from the environment, but says so when it's still set", () => {
+    expect(loadConfig({ MIVRA_MODEL: "openrouter:vendor/a", MIVRA_REASONING_EFFORT: "high" }).ignored).toEqual(["MIVRA_MODEL", "MIVRA_REASONING_EFFORT"]);
+    expect(loadConfig({}).ignored).toEqual([]);
   });
 });
 

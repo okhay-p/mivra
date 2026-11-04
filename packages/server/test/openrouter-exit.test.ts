@@ -61,7 +61,7 @@ it("survives an OpenRouter socket failure after client disconnect and completes 
     `);
     child = spawn(process.execPath, ["--unhandled-rejections=strict", "--import", preload, "dist/main.js"], {
       cwd: root, stdio: ["ignore", "pipe", "pipe"],
-      env: { PATH: process.env.PATH, MIVRA_PORT: "0", MIVRA_MODEL: "openrouter:fake", MIVRA_DATA_DIR: join(root, "data"), OPENROUTER_API_KEY: "fake-local-only" },
+      env: { PATH: process.env.PATH, MIVRA_PORT: "0", MIVRA_DATA_DIR: join(root, "data"), OPENROUTER_API_KEY: "fake-local-only" },
     });
     child.stderr!.on("data", (data) => (stderr += data));
     const exited = once(child, "exit");

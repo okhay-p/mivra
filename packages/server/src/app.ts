@@ -24,7 +24,7 @@ export interface AppDeps {
   db: Db;
   /** Resolves the selected model. Tests may ignore the selection and return a mock. */
   model: (selection: ModelSelection) => LanguageModel;
-  /** The model picker (ADR-012). Without a catalog, the default model is the only choice. */
+  /** The model picker (ADR-012). Without a catalog, the default model is the only choice; `defaults` replaces the built-in one. */
   models?: { defaults?: ModelSelection; catalog?: ModelCatalog; suggested?: string[] };
   security: SecurityConfig;
   /** Defaults to the first-party core-learning, core-memory and core-course plugins. */
@@ -473,7 +473,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, plug
   const models = createModelSettings({
     settings: createSettingsStore(db),
     catalog: modelOptions.catalog ?? staticCatalog([]),
-    defaults: modelOptions.defaults ?? { model: "anthropic:claude-sonnet-5-5", effort: null },
+    defaults: modelOptions.defaults,
     suggested: modelOptions.suggested,
   });
   store.recoverInterruptedRuns();

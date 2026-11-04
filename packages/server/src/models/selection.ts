@@ -15,6 +15,9 @@ export const SUGGESTED_MODELS = [
   "openrouter:moonshotai/kimi-k3.1-pro",
 ];
 
+/** The model a new install uses until the learner picks one (ADR-012). Needs only OPENROUTER_API_KEY. */
+export const DEFAULT_SELECTION: ModelSelection = { model: "openrouter:anthropic/claude-sonnet-5.5", effort: null };
+
 const MAX_RECENT = 5;
 export const MAX_PINNED = 20;
 /** Once recent and pinned hold this many models, suggestions stop showing. */
@@ -42,13 +45,13 @@ export type SelectResult =
 export interface ModelSettingsDeps {
   settings: SettingsStore;
   catalog: ModelCatalog;
-  /** Used until the learner picks a model: MIVRA_MODEL and MIVRA_REASONING_EFFORT. */
-  defaults: ModelSelection;
+  /** Used until the learner picks a model. Defaults to DEFAULT_SELECTION; tests pass their own. */
+  defaults?: ModelSelection;
   suggested?: string[];
 }
 
 /** The app-wide model selection, with the learner's recent and pinned models (ADR-012). */
-export function createModelSettings({ settings, catalog, defaults, suggested = SUGGESTED_MODELS }: ModelSettingsDeps) {
+export function createModelSettings({ settings, catalog, defaults = DEFAULT_SELECTION, suggested = SUGGESTED_MODELS }: ModelSettingsDeps) {
   const read = <T>(key: string, schema: z.ZodType<T>, fallback: T): T => {
     const parsed = schema.safeParse(settings.get(key));
     return parsed.success ? parsed.data : fallback;
@@ -57,7 +60,7 @@ export function createModelSettings({ settings, catalog, defaults, suggested = S
   const recent = () => read(KEYS.recent, Ids, []);
   const pinned = () => read(KEYS.pinned, Ids, []);
 
-  /** The catalog, plus the configured default when the catalog doesn't list it (e.g. a direct Anthropic id). */
+  /** The catalog, plus the default when the catalog doesn't list it (offline, or a test's scripted model). */
   async function models() {
     const { models, state } = await catalog.list();
     const all = models.some((m) => m.id === defaults.model)
