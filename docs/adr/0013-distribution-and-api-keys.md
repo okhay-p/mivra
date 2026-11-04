@@ -17,9 +17,9 @@ date: 5 November 2026
 ### Distribution
 
 - **npm is the main install.** One public package, `mivra`, built from `pnpm build`: the server, the built web assets, and `@mivra/protocol` bundled in, since that package stays private. `npx mivra` (or a global install) starts the server and opens the browser, which suits learners who never configure a server. It runs in the foreground and stops with Ctrl+C; `mivra --detach` starts it in the background (pid and log files in the data dir) and `mivra stop` ends it. If port 4096 is taken, it tries the following ports and prints the URL it got. When `MIVRA_PORT` is set explicitly, a taken port is an error instead, so scripts and e2e get the port they asked for. It needs Node ≥ 22.14; the `mivra` binary checks the version first and prints a clear message instead of a stack trace. A failed `better-sqlite3` load points the user to the Docker image.
-- **Docker is the second install,** for home servers, NAS and VPS hosts (the remote-access case in ADR-001), platforms without a `better-sqlite3` prebuild, and users who don't want Node. The image installs the same npm build on `node:22-slim`. Data lives in a `/data` volume (`MIVRA_DATA_DIR=/data`). The documented `docker run` publishes the port on `127.0.0.1` only. Keys come in as env vars, or through the CLI with `docker exec`.
+- **Docker is the second install,** for home servers, NAS and VPS hosts (the remote-access case in ADR-001), platforms without a `better-sqlite3` prebuild, and users who don't want Node. The image installs the same npm build on `node:22-slim` and is published to GitHub Container Registry as `ghcr.io/okhay-p/mivra`: no separate account, no anonymous pull limits, and it's linked from the repo. A Docker Hub mirror can follow if users ask for it. Data lives in a `/data` volume (`MIVRA_DATA_DIR=/data`). The documented `docker run` publishes the port on `127.0.0.1` only. Keys come in as env vars, or through the CLI with `docker exec`.
 - **Electron (ADR-003) is still the long-term app** and will wrap the same server build.
-- **Releases are manual,** because there's no CI (tests run in the review gate). A release checklist in `README.md` covers the version bump, the build, `pnpm publish` and pushing the image.
+- **Releases start manual.** A release checklist in `README.md` covers the version bump, the build, `pnpm publish` and pushing the image. Once that checklist has been through a release or two, a GitHub Actions release workflow takes it over: on a version tag it builds, publishes to npm and pushes the image. That workflow only builds and publishes. Tests still run in the review gate, not in CI.
 
 ### API keys
 
@@ -30,9 +30,9 @@ date: 5 November 2026
 - **Base URLs stay env-only.** Anyone who can change `ANTHROPIC_BASE_URL` or `OPENAI_BASE_URL` can send the key to their own server, so the UI never edits them.
 - **CLI: `mivra auth`.** `mivra auth set <provider>` reads the key from a hidden prompt (or from stdin when it isn't a TTY), never from an argument, so it doesn't end up in shell history or `ps`. `mivra auth status` prints the same view as the UI, and `mivra auth remove <provider>` deletes a stored key. The CLI writes the file directly, and a running server picks the change up on the next run.
 
-**Consequences:** Mivra becomes installable without a clone, and setting a key is something a learner does in the app rather than in a config file. Upgrades now reach strangers' databases, so migrations must run safely on startup. That makes the open "SQLite operations" question (backups, schema versioning) more urgent: a pre-migration backup of `mivra.db` is the minimum before the first release. Keys sit in plain text on disk, protected by file permissions only, as with `gh` and `npm`. We keep a Dockerfile and a manual release process. Platforms with neither a Node prebuild nor Docker aren't supported.
+**Consequences:** Mivra becomes installable without a clone, and setting a key is something a learner does in the app rather than in a config file. Upgrades now reach strangers' databases, so migrations must run safely on startup. That makes the open "SQLite operations" question (backups, schema versioning) more urgent: a pre-migration backup of `mivra.db` is the minimum before the first release. Keys sit in plain text on disk, protected by file permissions only, as with `gh` and `npm`. We keep a Dockerfile and, until the release workflow lands, a manual release process. Platforms with neither a Node prebuild nor Docker aren't supported.
 
-**Still open within this decision:** update notices; image registry (GHCR or Docker Hub) and multi-arch builds.
+**Still open within this decision:** update notices; multi-arch images (amd64 and arm64).
 
 **Build order:**
 
@@ -40,4 +40,5 @@ date: 5 November 2026
 2. Settings → Model providers page, first-run onboarding and the loopback-only write rule.
 3. Publishable `mivra` package with the `mivra` binary (foreground start with port fallback, `--detach` and `stop`, browser open, Node version check) and `mivra auth`.
 4. Pre-migration backup, then the first npm release.
-5. Dockerfile and image, plus the release checklist in `README.md`.
+5. Dockerfile and image on GHCR, plus the release checklist in `README.md`.
+6. GitHub Actions release workflow on version tags, once the checklist has been used for a real release.
