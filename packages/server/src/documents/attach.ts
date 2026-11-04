@@ -1,10 +1,10 @@
 import { Conflict, type DocumentRow, type SessionStore } from "../store/session-store.js";
 import { chunkPages } from "./chunk.js";
-import { extractInWorker, type Extract } from "./extract-in-worker.js";
+import { extractInChild, type Extract } from "./extract-in-child.js";
 import { DocumentError } from "./extract.js";
 import { readUpload, sanitizeFilename, type UploadRequest } from "./upload.js";
 
-/** Each extraction holds a file in memory and takes a thread. */
+/** Each extraction holds a file in memory and runs a subprocess. */
 const MAX_CONCURRENT_UPLOADS = 2;
 const MAX_DOCUMENTS_PER_SESSION = 20;
 const TOO_MANY = `A session can have at most ${MAX_DOCUMENTS_PER_SESSION} documents.`;
@@ -22,7 +22,7 @@ const errorKinds: Record<DocumentError["code"], AttachError["kind"]> = {
   failed: "bad_request",
 };
 
-export function createDocumentAttacher({ store, extract = extractInWorker, readTimeoutMs }: { store: SessionStore; extract?: Extract; readTimeoutMs?: number }) {
+export function createDocumentAttacher({ store, extract = extractInChild, readTimeoutMs }: { store: SessionStore; extract?: Extract; readTimeoutMs?: number }) {
   let uploading = 0;
   return async (sessionId: string, upload: UploadRequest, signal?: AbortSignal): Promise<{ ok: true; document: DocumentRow } | { ok: false; error: AttachError }> => {
     const refuse = (kind: AttachError["kind"], message: string) => {

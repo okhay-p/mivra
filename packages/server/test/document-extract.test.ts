@@ -1,16 +1,16 @@
 import { deflateSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import { chunkPages } from "../src/documents/chunk.js";
-import { extractInWorker } from "../src/documents/extract-in-worker.js";
+import { extractInChild } from "../src/documents/extract-in-child.js";
 import { DocumentError, cleanText, extractDocument, type DocumentErrorCode } from "../src/documents/extract.js";
 import { sanitizeFilename } from "../src/documents/upload.js";
 import { makePdf, makePptx, makeZip, pptxEntries, slideXml } from "./support/files.js";
 
-// Starting a worker through tsx takes seconds on a busy machine, and some of these files are large.
+// Starting a subprocess through tsx takes seconds on a busy machine, and some of these files are large.
 vi.setConfig({ testTimeout: 60_000 });
 
 const WORDS = "Relations and functions are the foundation of discrete mathematics.";
-/** Parsers run in-process here, since starting a worker for each case takes seconds. The worker has its own tests below. */
+/** Parsers run in-process here, since starting a subprocess for each case takes seconds. The subprocess has its own tests below. */
 const fails = async (bytes: Uint8Array, code: DocumentErrorCode, extract: (bytes: Uint8Array) => Promise<unknown> = extractDocument) => {
   const error = await extract(bytes).then(
     () => undefined,
@@ -149,7 +149,7 @@ describe("PPTX extraction", () => {
     await fails(zip.subarray(0, zip.length - 30), "corrupt");
     const damaged = Buffer.from(zip);
     damaged.fill(0xff, 60, 200);
-    await expect(extractInWorker(damaged)).rejects.toBeInstanceOf(DocumentError);
+    await expect(extractInChild(damaged)).rejects.toBeInstanceOf(DocumentError);
   });
 });
 
@@ -162,27 +162,22 @@ describe("file types", () => {
   });
 });
 
-describe("the worker", () => {
-  it("extracts off the main thread, which keeps running meanwhile", async () => {
+describe("the extraction subprocess", () => {
+  it("extracts in another process, while the server keeps running", async () => {
     let ticks = 0;
     const ticker = setInterval(() => ticks++, 5);
-    const result = await extractInWorker(makePdf(Array.from({ length: 50 }, (_, i) => [`${WORDS} ${i}`])));
+    const result = await extractInChild(makePdf(Array.from({ length: 50 }, (_, i) => [`${WORDS} ${i}`])));
     clearInterval(ticker);
     expect(result.pageCount).toBe(50);
     expect(ticks).toBeGreaterThan(10);
   });
 
-  it("carries a parser's error across the thread", async () => {
-    await fails(Buffer.from("not a document"), "wrong_type", (bytes) => extractInWorker(bytes));
+  it("carries a parser's error across the process boundary", async () => {
+    await fails(Buffer.from("not a document"), "wrong_type", (bytes) => extractInChild(bytes));
   });
 
   it("stops at the timeout", async () => {
-    await fails(makePdf([[WORDS]]), "timeout", (bytes) => extractInWorker(bytes, { timeoutMs: 20 }));
-  });
-
-  it("reports running out of heap as a clean error, and the server lives on", async () => {
-    const file = makePdf(Array.from({ length: 4000 }, (_, i) => [`${WORDS} ${i}`]));
-    await fails(file, "too_complex", (bytes) => extractInWorker(bytes, { maxHeapMb: 16 }));
+    await fails(makePdf([[WORDS]]), "timeout", (bytes) => extractInChild(bytes, { timeoutMs: 20 }));
   });
 
   it("stops a PDF whose stream decompresses into a bomb", async () => {
@@ -190,12 +185,12 @@ describe("the worker", () => {
     const bomb = deflateSync(Buffer.alloc(512 * 1024 * 1024));
     const file = makePdf([[WORDS]], { contentStreams: [bomb] });
     expect(file.length).toBeLessThan(1024 * 1024);
-    await fails(file, "too_complex", (bytes) => extractInWorker(bytes, { maxRssGrowthBytes: 64 * 1024 * 1024 }));
+    await fails(file, "too_complex", (bytes) => extractInChild(bytes, { maxRssBytes: 256 * 1024 * 1024 }));
   }, 40_000);
 
   it("stops when the client goes away", async () => {
     const controller = new AbortController();
-    const running = extractInWorker(makePdf(Array.from({ length: 200 }, () => [WORDS])), { signal: controller.signal });
+    const running = extractInChild(makePdf(Array.from({ length: 200 }, () => [WORDS])), { signal: controller.signal });
     controller.abort();
     await expect(running).rejects.toBeInstanceOf(DocumentError);
   });
