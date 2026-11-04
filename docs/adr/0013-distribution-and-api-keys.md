@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 5 November 2026
 ---
 

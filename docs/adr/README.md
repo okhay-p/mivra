@@ -18,9 +18,6 @@ Files use four digits (`0010-*.md`); the code cites them as `ADR-010`. The next 
 - [ADR-010](0010-uploaded-documents-local-text-extraction.md): uploaded documents: local text extraction
 - [ADR-011](0011-courses-syllabus-and-lessons.md): courses, syllabus and lessons: syllabus up front, lessons just in time, frozen once finished
 - [ADR-012](0012-model-picker.md): model picker: one app-wide model and effort chosen in the UI, with run provenance
-
-## Proposed
-
 - [ADR-013](0013-distribution-and-api-keys.md): distribution through npm (main) and Docker; API keys set in the UI or with `mivra auth`, kept out of the database
 
 ## Project scope
