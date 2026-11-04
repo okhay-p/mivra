@@ -648,6 +648,8 @@ const model = new MockLanguageModelV4({
 });
 
 const dataDir = mkdtempSync(join(tmpdir(), "mivra-e2e-"));
+// However the process ends, its database goes with it.
+process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
 const token = loadOrCreateToken(dataDir);
 const db = openDb(join(dataDir, "mivra.db"));
 const app = createApp({
@@ -668,10 +670,30 @@ app.post("/e2e/release", (c) => {
 });
 serveWeb(app, fileURLToPath(new URL("../web/dist", import.meta.url)), token);
 
-serve({ fetch: app.fetch, port: Number(process.argv[2]), hostname: "127.0.0.1" });
+const port = Number(process.argv[2]);
+const server = serve({ fetch: app.fetch, port, hostname: "127.0.0.1" }, () => {
+  // The test fixture waits for this line from its own child, so it can't mistake another server on the port for it.
+  process.stdout.write(`mivra-e2e-ready ${process.env.MIVRA_E2E_INSTANCE ?? ""}\n`);
+});
+// A port that's already taken fails the start, and the fixture reports why.
+server.on("error", (error) => {
+  process.stderr.write(`${error}\n`);
+  process.exit(1);
+});
 
 // The test fixture stops this process with SIGTERM (stopHarness in fixtures.ts).
-process.on("SIGTERM", () => {
-  rmSync(dataDir, { recursive: true, force: true });
-  process.exit(0);
-});
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
+
+// If the Playwright worker that started this dies without stopping it (a crash, an OOM kill), stop anyway, so no
+// server is left holding the port and its database.
+const owner = Number(process.env.MIVRA_E2E_OWNER_PID);
+if (owner) {
+  setInterval(() => {
+    try {
+      process.kill(owner, 0);
+    } catch {
+      process.exit(0);
+    }
+  }, 1_000).unref();
+}

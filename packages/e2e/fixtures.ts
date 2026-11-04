@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
 
@@ -10,33 +11,49 @@ const BASE_PORT = Number(process.env.MIVRA_E2E_PORT ?? 4198);
 const here = fileURLToPath(new URL(".", import.meta.url));
 const tsx = fileURLToPath(new URL("node_modules/tsx/dist/cli.mjs", import.meta.url));
 
-/** Starts the harness (the real server and built UI with a scripted model) and waits until it answers. */
+/**
+ * Starts the harness (the real server and built UI with a scripted model) and waits for it to say it is listening.
+ * Readiness comes from this child's own output, carrying an id made for this start, so a server someone else left on
+ * the port can't be mistaken for it. A port that's taken makes the harness exit, which fails the start.
+ */
 async function startHarness(port: number): Promise<ChildProcess> {
-  // Its own process group, so stopping it also stops the process tsx starts for the script.
+  const instance = randomUUID();
+  // Its own process group, so stopping it also stops the process tsx starts for the script. The harness also stops
+  // itself if this worker dies without stopping it (MIVRA_E2E_OWNER_PID).
   const child = spawn(process.execPath, [tsx, "--conditions=@mivra/source", "harness.ts", String(port)], {
     cwd: here,
     detached: true,
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, MIVRA_E2E_INSTANCE: instance, MIVRA_E2E_OWNER_PID: String(process.pid) },
   });
+  let stdout = "";
   let stderr = "";
   child.stderr?.on("data", (chunk) => (stderr += chunk));
-  const deadline = Date.now() + 60_000;
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`The e2e harness on port ${port} exited: ${stderr}`);
-    try {
-      if ((await fetch(`http://127.0.0.1:${port}/api/health`)).ok) return child;
-    } catch {
-      // Not listening yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`didn't start within 60 s`)), 60_000);
+      child.stdout?.on("data", (chunk) => {
+        stdout += chunk;
+        if (stdout.includes(`mivra-e2e-ready ${instance}\n`)) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timer);
+        reject(new Error(`exited before it was ready (${signal ?? `code ${code}`})`));
+      });
+    });
+  } catch (error) {
+    await stopHarness(child);
+    throw new Error(`The e2e harness on port ${port} ${(error as Error).message}: ${stderr.trim()}`);
   }
-  stopHarness(child);
-  throw new Error(`The e2e harness on port ${port} didn't start within 60 s: ${stderr}`);
+  return child;
 }
 
 /** SIGTERM lets the harness delete its data directory; SIGKILL follows if it hangs. */
 async function stopHarness(child: ChildProcess) {
-  if (child.exitCode !== null || !child.pid) return;
+  if (child.exitCode !== null || child.signalCode !== null || !child.pid) return;
   const exited = new Promise((resolve) => child.once("exit", resolve));
   try {
     process.kill(-child.pid, "SIGTERM");
