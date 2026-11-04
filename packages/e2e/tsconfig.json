@@ -4,5 +4,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["harness.ts", "playwright.config.ts", "tests"]
+  "include": ["harness.ts", "fixtures.ts", "global-setup.ts", "playwright.config.ts", "tests"]
 }

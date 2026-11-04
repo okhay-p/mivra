@@ -670,7 +670,7 @@ serveWeb(app, fileURLToPath(new URL("../web/dist", import.meta.url)), token);
 
 serve({ fetch: app.fetch, port: Number(process.argv[2]), hostname: "127.0.0.1" });
 
-// Playwright stops this process with SIGTERM (gracefulShutdown in playwright.config.ts).
+// The test fixture stops this process with SIGTERM (stopHarness in fixtures.ts).
 process.on("SIGTERM", () => {
   rmSync(dataDir, { recursive: true, force: true });
   process.exit(0);

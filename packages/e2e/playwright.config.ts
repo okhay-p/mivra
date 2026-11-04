@@ -1,25 +1,21 @@
+import { availableParallelism } from "node:os";
 import { defineConfig, devices } from "@playwright/test";
 
-// Override to run alongside another checkout.
-const port = Number(process.env.MIVRA_E2E_PORT ?? 4198);
+// Each worker runs its own harness and database (see fixtures.ts), on ports from MIVRA_E2E_PORT upwards.
+const workers = Number(process.env.MIVRA_E2E_WORKERS ?? Math.max(1, Math.min(4, Math.floor(availableParallelism() / 3))));
 
 export default defineConfig({
   testDir: "tests",
-  workers: 1,
+  globalSetup: "./global-setup.ts",
+  workers,
+  // Tests are spread across workers one by one, so one long file doesn't hold up the rest.
+  fullyParallel: true,
   reporter: "list",
-  use: { baseURL: `http://127.0.0.1:${port}`, trace: "retain-on-failure" },
+  use: { trace: "retain-on-failure" },
   projects: [
     { name: "chromium", use: devices["Desktop Chrome"] },
     // The graph's labels are positioned HTML over an SVG, so it's checked where engines differ on that.
     { name: "firefox", testMatch: "graph.spec.ts", use: devices["Desktop Firefox"] },
     { name: "webkit", testMatch: "graph.spec.ts", use: devices["Desktop Safari"] },
   ],
-  webServer: {
-    // The real server and built UI, with only the model replaced (see harness.ts).
-    command: `pnpm --filter @mivra/web build && pnpm exec tsx --conditions=@mivra/source harness.ts ${port}`,
-    url: `http://127.0.0.1:${port}/api/health`,
-    reuseExistingServer: false,
-    timeout: 120_000,
-    gracefulShutdown: { signal: "SIGTERM", timeout: 5_000 },
-  },
 });

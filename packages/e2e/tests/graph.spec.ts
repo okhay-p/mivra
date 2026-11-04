@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "../fixtures.js";
 
 /** Runs a graph script. The timestamp names the session uniquely, since tests share a database. */
 async function showGraph(page: Page, script: string) {
