@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defaultClientConditions, defineConfig, type Plugin } from "vite";
+import { forwardingHeaders } from "./dev-proxy.js";
 
 const serverPort = Number(process.env.MIVRA_PORT ?? 4096);
 const dataDir = process.env.MIVRA_DATA_DIR ?? join(homedir(), ".mivra");
@@ -43,13 +44,10 @@ export default defineConfig({
         target: `http://127.0.0.1:${serverPort}`,
         // changeOrigin makes proxied requests arrive with a loopback Host, which the server accepts.
         changeOrigin: true,
-        // That hides where a request came from, so pass on a non-loopback Host (a tailnet name, say): the
-        // server then treats the request as remote and won't let it change API keys (ADR-013).
+        // That hides where a request came from, so say so for requests from elsewhere (see dev-proxy.ts).
         configure: (proxy) => {
           proxy.on("proxyReq", (proxyReq, req) => {
-            const host = req.headers.host ?? "";
-            const hostname = host.replace(/:\d+$/, "").toLowerCase();
-            if (!["localhost", "127.0.0.1", "[::1]"].includes(hostname)) proxyReq.setHeader("x-forwarded-host", host);
+            for (const [name, value] of Object.entries(forwardingHeaders(req.headers.host, req.socket.remoteAddress))) proxyReq.setHeader(name, value);
           });
         },
       },
