@@ -6,7 +6,9 @@ import { openDb } from "../src/db/client.js";
 import { runs } from "../src/db/schema.js";
 import type { ModelSelection } from "../src/model.js";
 import { createOpenRouterCatalog, parseOpenRouterModels, staticCatalog, type CatalogModel } from "../src/models/catalog.js";
+import { createModelSettings } from "../src/models/selection.js";
 import { replayMessages } from "../src/runtime/turn-runner.js";
+import { createSettingsStore } from "../src/store/settings-store.js";
 
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -203,6 +205,20 @@ describe("model picker API", () => {
     view = await picker();
     // Pins that left the catalog are hidden.
     expect(view.pinned).toEqual([extras[0]!.id, extras[1]!.id]);
+  });
+});
+
+describe("the configured default", () => {
+  it("applies until the learner picks a model, so fixing .env after a failed first run works", async () => {
+    const settings = createSettingsStore(openDb(":memory:"));
+    const catalog = staticCatalog([thinker, plain]);
+    const withDefault = (model: string) => createModelSettings({ settings, catalog, defaults: { model, effort: null } });
+    expect(withDefault("anthropic:no-key").forRun().model).toBe("anthropic:no-key");
+    // A restart with a corrected MIVRA_MODEL.
+    expect(withDefault(plain.id).current()).toEqual({ model: plain.id, effort: null });
+    expect((await withDefault(plain.id).select({ model: thinker.id, effort: "low" })).ok).toBe(true);
+    // Once the learner has picked, the picker decides.
+    expect(withDefault("anthropic:other").current()).toEqual({ model: thinker.id, effort: "low" });
   });
 });
 
