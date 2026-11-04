@@ -19,7 +19,7 @@ pnpm install
 cp .env.example .env   # add your OPENROUTER_API_KEY
 ```
 
-Models run through [OpenRouter](https://openrouter.ai), so `OPENROUTER_API_KEY` is the only setting needed. A new install uses Claude Sonnet 5.5 until you choose another model (ADR-012); direct Anthropic and OpenAI keys come later. `MIVRA_MODEL` and `MIVRA_REASONING_EFFORT` are no longer read, and the server warns at startup if they're still set.
+Models run through [OpenRouter](https://openrouter.ai), so `OPENROUTER_API_KEY` is the only setting needed. A new install uses GPT-6 Luna at high effort until you choose another model (ADR-012); direct Anthropic and OpenAI keys come later. `MIVRA_MODEL` and `MIVRA_REASONING_EFFORT` are no longer read, and the server warns at startup if they're still set.
 
 The picker under the message box chooses the model and reasoning effort for every later reply, syllabus and lesson; a reply already streaming keeps its model. It lists OpenRouter's models that can call tools, which Mivra's learning tools need (from OpenRouter's public list, refreshed hourly; a saved copy is used offline), plus the default model. Opened, it shows your pinned and recent models and a few suggestions; typing searches the whole list. The star pins the current model. The effort menu shows only the levels the selected model supports. Each reply names the model that wrote it, and each run records its model and effort. Reasoning details from earlier replies go back only to the model that wrote them, so after a switch the new model sees earlier replies as text.
 

@@ -5,6 +5,7 @@ import type { CatalogModel, CatalogState, ModelCatalog } from "./catalog.js";
 
 /** Tool-capable OpenRouter models offered before the learner has picked enough of their own (ADR-012). */
 export const SUGGESTED_MODELS = [
+  "openrouter:openai/gpt-6-luna",
   "openrouter:anthropic/claude-sonnet-5.5",
   "openrouter:anthropic/claude-opus-5.5",
   "openrouter:anthropic/claude-haiku-5.5",
@@ -16,7 +17,7 @@ export const SUGGESTED_MODELS = [
 ];
 
 /** The model a new install uses until the learner picks one (ADR-012). Needs only OPENROUTER_API_KEY. */
-export const DEFAULT_SELECTION: ModelSelection = { model: "openrouter:anthropic/claude-sonnet-5.5", effort: null };
+export const DEFAULT_SELECTION: ModelSelection = { model: "openrouter:openai/gpt-6-luna", effort: "high" };
 
 const MAX_RECENT = 5;
 export const MAX_PINNED = 20;

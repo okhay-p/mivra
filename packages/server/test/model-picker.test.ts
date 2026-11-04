@@ -210,11 +210,12 @@ describe("model picker API", () => {
 });
 
 describe("the built-in default", () => {
-  it("runs a new install on Claude Sonnet via OpenRouter until the learner picks a model", async () => {
+  it("runs a new install on GPT-6 Luna at high effort via OpenRouter until the learner picks a model", async () => {
     const settings = createSettingsStore(openDb(":memory:"));
     const models = createModelSettings({ settings, catalog: staticCatalog([thinker, plain]) });
     expect(models.forRun()).toEqual(DEFAULT_SELECTION);
-    expect(DEFAULT_SELECTION.model).toBe("openrouter:anthropic/claude-sonnet-5.5");
+    expect(DEFAULT_SELECTION.model).toEqual("openrouter:openai/gpt-6-luna");
+    expect(DEFAULT_SELECTION.effort).toBe("high");
     // Listed even before the catalog loads, so the picker can always go back to it.
     expect((await models.picker()).models[0]?.id).toBe(DEFAULT_SELECTION.model);
     expect((await models.select({ model: thinker.id, effort: "low" })).ok).toBe(true);
