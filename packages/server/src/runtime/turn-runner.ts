@@ -15,7 +15,9 @@ import {
   type UIMessageStreamOutcome,
 } from "ai";
 import type { LessonStore } from "../store/lesson-store.js";
-import { Conflict, type RunStatus, type SessionStore } from "../store/session-store.js";
+import { providerOptionsFor, type ModelSelection } from "../model.js";
+import type { ModelSettings } from "../models/selection.js";
+import { Conflict, type ReplyMetadata, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 import { createContinuationStream } from "./continuation-stream.js";
@@ -44,12 +46,27 @@ type PrivateStepStart = Extract<UIMessage["parts"][number], { type: "step-start"
   providerMetadata?: ProviderMetadata;
 };
 
-/** Restore each step's message-level options, including reasoning with no text part. */
-async function replayMessages(conversation: UIMessage[]): Promise<ModelMessage[]> {
+/** A part without the provider details attached to it, for a model that didn't produce them. */
+function withoutProviderDetails(part: UIMessage["parts"][number]): UIMessage["parts"][number] {
+  const { providerMetadata: _, callProviderMetadata: __, ...rest } = part as { providerMetadata?: unknown; callProviderMetadata?: unknown };
+  return rest as UIMessage["parts"][number];
+}
+
+/**
+ * Restore each step's message-level options, including reasoning with no text part. Provider details
+ * (reasoning signatures, encrypted reasoning) go back only to the model that wrote the reply (ADR-012):
+ * another model can't read them and some providers reject them. Such a reply replays as text and tool calls.
+ */
+export async function replayMessages(conversation: UIMessage[], model?: string): Promise<ModelMessage[]> {
   const result: ModelMessage[] = [];
   for (const message of conversation) {
     if (message.role !== "assistant") {
       result.push(...await convertToModelMessages([message]));
+      continue;
+    }
+    if (model !== undefined && (message.metadata as ReplyMetadata | undefined)?.model !== model) {
+      const parts = message.parts.filter((part) => part.type !== "reasoning").map(withoutProviderDetails);
+      result.push(...await convertToModelMessages([{ ...message, parts }]));
       continue;
     }
     let parts: UIMessage["parts"] = [];
@@ -83,17 +100,17 @@ async function replayMessages(conversation: UIMessage[]): Promise<ModelMessage[]
  */
 export type AssembleContext = (
   conversation: UIMessage[],
-  context: { sessionId: string; lessonId?: string },
+  context: { sessionId: string; lessonId?: string; selection: ModelSelection },
 ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
 
 /** The whole transcript, plus the learner's record across sessions and the session's documents. Summaries will plug in here. */
 const defaultAssembleContext =
   (store: SessionStore, registry: CapabilityRegistry, lessons?: LessonStore): AssembleContext =>
-  async (conversation, { sessionId, lessonId }) => {
+  async (conversation, { sessionId, lessonId, selection }) => {
     const documents = documentContext(store, sessionId, latestLearnerText(conversation.filter(m => m.id !== "mivra-continuation-event")));
     return {
       messages: withDocumentExcerpts(
-        await replayMessages(conversation),
+        await replayMessages(conversation, selection.model),
         documents?.excerpts,
       ),
       instructions: [
@@ -109,7 +126,9 @@ const defaultAssembleContext =
 export interface TurnRunnerDeps {
   store: SessionStore;
   registry: CapabilityRegistry;
-  model: () => LanguageModel;
+  model: (selection: ModelSelection) => LanguageModel;
+  /** The app-wide model selection (ADR-012). */
+  models: Pick<ModelSettings, "forRun">;
   lessons?: LessonStore;
   assembleContext?: AssembleContext;
 }
@@ -195,7 +214,7 @@ function continuationEvent(): UIMessage {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, lessons, assembleContext = defaultAssembleContext(store, registry, lessons) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, models, lessons, assembleContext = defaultAssembleContext(store, registry, lessons) }: TurnRunnerDeps) {
   type ActiveTurn = {
     controller: AbortController;
     stopId: string;
@@ -264,8 +283,10 @@ export function createTurnRunner({ store, registry, model, lessons, assembleCont
 
       let runId!: string;
       let message: UIMessage;
+      // Read once: the whole run uses this model, even if the learner switches while it streams.
+      const selection = models.forRun();
       if (continuation) {
-        const claimed = store.startContinuation(sessionId, registry.checkKinds());
+        const claimed = store.startContinuation(sessionId, registry.checkKinds(), selection);
         if (!claimed) return { ok: false, error: { kind: "conflict", message: "No continuation is pending" } };
         runId = claimed.id;
         message = { id: claimed.userMessageId, role: "user", parts: [] };
@@ -278,14 +299,14 @@ export function createTurnRunner({ store, registry, model, lessons, assembleCont
 
       let languageModel: LanguageModel;
       try {
-        languageModel = model();
+        languageModel = model(selection);
       } catch (error) {
         if (continuation) store.finishRun(runId!, sessionId, "failed", undefined, errorText(error));
         return { ok: false, error: { kind: "unavailable", message: publicErrorText(error) } };
       }
 
       if (!continuation) try {
-        runId = store.startRun(session, message);
+        runId = store.startRun(session, message, selection);
       } catch (error) {
         if (error instanceof Conflict) return { ok: false, error: { kind: "conflict", message: error.message } };
         throw error;
@@ -326,7 +347,7 @@ export function createTurnRunner({ store, registry, model, lessons, assembleCont
         const context = gradedConversation.flatMap((m, index) =>
           m.role === "assistant" && gradedConversation[index - 1]?.role === "assistant" ? [continuationEvent(), m] : [m]);
         if (continuation) context.push(continuationEvent());
-        assembled = await assembleContext(context, { sessionId, lessonId });
+        assembled = await assembleContext(context, { sessionId, lessonId, selection });
       } catch (error) {
         if (signal.aborted) return cancelledBeforeStream();
         active.delete(sessionId);
@@ -352,6 +373,7 @@ export function createTurnRunner({ store, registry, model, lessons, assembleCont
         instructions: assembled.instructions ? `${INSTRUCTIONS}\n\n${assembled.instructions}` : INSTRUCTIONS,
         messages: assembled.messages,
         tools: turnTools.tools,
+        providerOptions: providerOptionsFor(selection),
         stopWhen: stepCountIs(MAX_STEPS),
         abortSignal: signal,
         onStepEnd: ({ providerMetadata }) => { stepMetadata.push(providerMetadata); },
@@ -371,6 +393,8 @@ export function createTurnRunner({ store, registry, model, lessons, assembleCont
         sendSources: false,
         originalMessages: continuation ? [] : conversation,
         generateMessageId: randomUUID,
+        // The UI labels the reply with its model; redaction passes only this.
+        messageMetadata: ({ part }) => (part.type === "start" ? { model: selection.model } : undefined),
         onEnd: ({ responseMessage, outcome }) => {
           active.delete(sessionId);
           if (outcome.status === "completed" && !hasOutput()) streamError ??= emptyReplyError;

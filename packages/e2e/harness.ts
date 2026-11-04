@@ -6,6 +6,7 @@ import { serve } from "@hono/node-server";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { createApp } from "../server/src/app.js";
+import { staticCatalog } from "../server/src/models/catalog.js";
 import { runs, memories } from "../server/src/db/schema.js";
 import { openDb } from "../server/src/db/client.js";
 import { loadOrCreateToken } from "../server/src/security.js";
@@ -545,7 +546,7 @@ const LESSON_STEPS: Step[] = [
   { text: "" },
 ];
 
-function nextStep(prompt: PromptMessage[]): Step {
+function nextStep(prompt: PromptMessage[], effort?: string): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
   if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra lesson request")) {
     const done = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
@@ -591,6 +592,8 @@ function nextStep(prompt: PromptMessage[]): Step {
     ? { tool: "remember", input: { kind: "goal", text: "Pending cancellation memory" } }
     : { controlled: "cancelstream" };
   if (text.includes("liveThinking")) return { controlled: "liveThinking" };
+  // Reports the reasoning effort the selected model was asked for (ADR-012).
+  if (text.includes("whateffort")) return { text: `Effort reached me: ${effort ?? "default"}.` };
   // Asks a check on a concept named by the test, so its evidence is the test's own.
   const practise = /practise (\w+)/.exec(text)?.[1];
   if (practise) {
@@ -629,8 +632,8 @@ function nextStep(prompt: PromptMessage[]): Step {
 let modelAborts = 0;
 let controlledStarts = 0;
 const model = new MockLanguageModelV4({
-  doStream: async ({ prompt, abortSignal }) => {
-    const step = nextStep(prompt as PromptMessage[]);
+  doStream: async ({ prompt, abortSignal, providerOptions }) => {
+    const step = nextStep(prompt as PromptMessage[], (providerOptions?.openrouter?.reasoning as { effort?: string } | undefined)?.effort);
     if ("controlled" in step) {
       controlledStarts++;
       if (step.controlled === "cancelthinking") {
@@ -713,12 +716,22 @@ const token = loadOrCreateToken(dataDir);
 const db = openDb(join(dataDir, "mivra.db"));
 const app = createApp({
   db,
+  // Every selection runs the scripted model; the catalog only gives the picker something to offer.
   model: () => model,
+  models: {
+    defaults: { model: "mivra:scripted", effort: null },
+    catalog: staticCatalog([
+      { id: "openrouter:e2e/thinker", name: "E2E: Thinker", contextLength: 200000, price: { input: 3, output: 15 },
+        reasoning: { efforts: ["low", "medium", "high"], defaultEffort: "medium" } },
+      { id: "openrouter:e2e/plain", name: "E2E: Plain", contextLength: null, price: null, reasoning: null },
+    ]),
+    suggested: ["openrouter:e2e/thinker", "openrouter:e2e/plain"],
+  },
   security: { token, allowedHosts: [] },
 });
 // Test-only observability: no credentials or private provider details.
 app.get("/e2e/state", (c) => c.json({
-  runs: db.select({ sessionId: runs.sessionId, status: runs.status }).from(runs).all(),
+  runs: db.select({ sessionId: runs.sessionId, status: runs.status, model: runs.model, effort: runs.effort }).from(runs).all(),
   pendingMemories: db.select({ status: memories.status }).from(memories).all().filter((m) => m.status === "pending").length,
   modelAborts, controlledStarts,
 }));

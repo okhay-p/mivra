@@ -5,8 +5,9 @@ import { reasoningEfforts, type ReasoningEffort } from "./model.js";
 export interface Config {
   port: number;
   dataDir: string;
+  /** The first-run default model (MIVRA_MODEL); the learner changes it in the UI (ADR-012). */
   model: string;
-  /** How hard OpenRouter models think (MIVRA_REASONING_EFFORT). */
+  /** How hard OpenRouter models think (MIVRA_REASONING_EFFORT). With `model`, only the first-run default (ADR-012). */
   reasoningEffort?: ReasoningEffort;
   /** Extra Host names the server accepts besides loopback (comma-separated MIVRA_ALLOWED_HOSTS). */
   allowedHosts: string[];

@@ -19,7 +19,9 @@ pnpm install
 cp .env.example .env   # add a provider key and set MIVRA_MODEL
 ```
 
-`MIVRA_MODEL` is `<provider>:<model-id>`. Providers: `anthropic`, `openai`, and `openrouter` (set `OPENROUTER_API_KEY`, then use an id from [openrouter.ai/models](https://openrouter.ai/models), e.g. `openrouter:<vendor>/<model>`). Mivra's learning tools need tool calling, so pick a model that lists tool support; many free models don't. For OpenRouter models, `MIVRA_REASONING_EFFORT` sets how hard the model thinks (`none`, `minimal`, `low`, `medium`, `high` or `xhigh`); unset uses the model's default.
+`MIVRA_MODEL` is `<provider>:<model-id>`. Providers: `anthropic`, `openai`, and `openrouter` (set `OPENROUTER_API_KEY`, then use an id from [openrouter.ai/models](https://openrouter.ai/models), e.g. `openrouter:<vendor>/<model>`). Mivra's learning tools need tool calling, so pick a model that lists tool support; many free models don't. For OpenRouter models, `MIVRA_REASONING_EFFORT` sets how hard the model thinks (`none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max`; each model supports some of them); unset uses the model's default.
+
+Both are only the first-run default (ADR-012). The picker under the message box changes the model and effort for every later reply, syllabus and lesson; a reply already streaming keeps its model. It lists OpenRouter's models that can call tools (from OpenRouter's public list, refreshed hourly; a saved copy is used offline) plus the default model. Opened, it shows your pinned and recent models and a few suggestions; typing searches the whole list. The star pins the current model. The effort menu shows only the levels the selected model supports. Each reply names the model that wrote it, and each run records its model and effort. Reasoning details from earlier replies go back only to the model that wrote them, so after a switch the new model sees earlier replies as text.
 
 ## Native dependency
 

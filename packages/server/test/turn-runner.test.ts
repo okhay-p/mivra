@@ -6,6 +6,7 @@ import { coreLearning } from "../src/plugins/core-learning.js";
 import { createCapabilityRegistry } from "../src/runtime/capabilities.js";
 import { createTurnRunner } from "../src/runtime/turn-runner.js";
 import { createSessionStore } from "../src/store/session-store.js";
+import { fixedModel } from "./support/models.js";
 
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
@@ -42,7 +43,7 @@ describe("TurnRunner, used without HTTP", () => {
       ],
       instructions: "SUPPLEMENT: learner prefers short answers",
     }));
-    const runner = createTurnRunner({ store, registry, model: () => llm, assembleContext });
+    const runner = createTurnRunner({ models: fixedModel, store, registry, model: () => llm, assembleContext });
 
     const result = await runner.startTurn({ sessionId: session.id, message: userMessage("hello") });
     expect(result.ok).toBe(true);
@@ -60,7 +61,7 @@ describe("TurnRunner, used without HTTP", () => {
 
   it("reports domain errors instead of HTTP statuses", async () => {
     const store = createSessionStore(openDb(":memory:"));
-    const runner = createTurnRunner({ store, registry, model: mockModel });
+    const runner = createTurnRunner({ models: fixedModel, store, registry, model: mockModel });
     const session = store.createSession();
 
     expect(await runner.startTurn({ sessionId: "missing", message: userMessage("hi") })).toEqual({
@@ -76,7 +77,7 @@ describe("TurnRunner, used without HTTP", () => {
     const session = store.createSession();
     const document = store.createDocument({ sessionId: session.id, filename: "notes.pdf", kind: "pdf", byteSize: 1, textChars: 4, pageCount: 1, pagesWithText: 1 }, [{ page: 1, seq: 0, text: "note" }], 20);
     for (const failure of ["invalid", "unavailable", "context", "conflict"]) {
-      const runner = createTurnRunner({ store, registry,
+      const runner = createTurnRunner({ models: fixedModel, store, registry,
         model: () => { if (failure === "unavailable") throw new Error("unavailable"); return mockModel(); },
         ...(failure === "context" ? { assembleContext: async () => { throw new Error("context failed"); } } : {}),
       });
@@ -92,7 +93,7 @@ describe("TurnRunner, used without HTTP", () => {
     const db = openDb(":memory:");
     const store = createSessionStore(db);
     const session = store.createSession();
-    const runner = createTurnRunner({
+    const runner = createTurnRunner({ models: fixedModel,
       store,
       registry,
       model: mockModel,

@@ -3,6 +3,9 @@ import type { LanguageModel } from "ai";
 import { AddToLesson, ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
 import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
+import { reasoningEfforts, type ModelSelection } from "./model.js";
+import { staticCatalog, type ModelCatalog } from "./models/catalog.js";
+import { MAX_PINNED, ModelId, SelectionInput, createModelSettings } from "./models/selection.js";
 import type { Extract } from "./documents/extract-in-child.js";
 import { coreCourse } from "./plugins/core-course.js";
 import { coreLearning } from "./plugins/core-learning.js";
@@ -14,11 +17,15 @@ import { courseLessons, createLessonGenerator, lessonRevision, lessonView, recon
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, tokenGuard, type SecurityConfig } from "./security.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
+import { createSettingsStore } from "./store/settings-store.js";
 import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
 
 export interface AppDeps {
   db: Db;
-  model: () => LanguageModel;
+  /** Resolves the selected model. Tests may ignore the selection and return a mock. */
+  model: (selection: ModelSelection) => LanguageModel;
+  /** The model picker (ADR-012). Without a catalog, the default model is the only choice. */
+  models?: { defaults?: ModelSelection; catalog?: ModelCatalog; suggested?: string[] };
   security: SecurityConfig;
   /** Defaults to the first-party core-learning, core-memory and core-course plugins. */
   plugins?: Plugin[];
@@ -45,6 +52,27 @@ const Message = z
     parts: z.array(z.record(z.string(), z.unknown())),
   })
   .openapi("UIMessage");
+
+const Selection = z.object({ model: z.string(), effort: z.enum(reasoningEfforts).nullable() }).openapi("ModelSelection");
+const CatalogModel = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    contextLength: z.number().nullable(),
+    price: z.object({ input: z.number(), output: z.number() }).nullable().openapi({ description: "US dollars per million tokens" }),
+    reasoning: z.object({ efforts: z.array(z.enum(reasoningEfforts)), defaultEffort: z.enum(reasoningEfforts).nullable() }).nullable(),
+  })
+  .openapi("CatalogModel");
+const ModelPicker = z
+  .object({
+    current: Selection,
+    recent: z.array(z.string()),
+    pinned: z.array(z.string()),
+    suggested: z.array(z.string()),
+    models: z.array(CatalogModel),
+    catalog: z.enum(["fresh", "stale", "unavailable"]),
+  })
+  .openapi("ModelPicker");
 
 const SessionParams = z.object({ id: z.string() });
 const ErrorBody = z.object({ error: z.string() });
@@ -184,6 +212,34 @@ const undoSyllabusChange = createRoute({
     404: errorResponse("Unknown course"),
     409: errorResponse("Not the latest version, not an automatic change, or one of its lessons has started"),
   },
+});
+
+const listModels = createRoute({
+  method: "get",
+  path: "/models",
+  description:
+    "The model picker (ADR-012): the current selection, the learner's recent and pinned models, suggestions, and every model that can call tools. `catalog` says whether the list is fresh, a stale copy, or couldn't be loaded.",
+  responses: { 200: { description: "The picker's contents", content: { "application/json": { schema: ModelPicker } } } },
+});
+
+const selectModel = createRoute({
+  method: "put",
+  path: "/settings/model",
+  description: "Choose the model and reasoning effort for every later run: chat, syllabus and lessons. A null effort uses the model's default. A run already streaming keeps its model.",
+  request: { body: { content: { "application/json": { schema: SelectionInput } } } },
+  responses: {
+    200: { description: "The saved selection", content: { "application/json": { schema: Selection } } },
+    400: errorResponse("Unknown model, or an effort it doesn't support"),
+    503: errorResponse("The model list couldn't be loaded"),
+  },
+});
+
+const setPinnedModels = createRoute({
+  method: "put",
+  path: "/settings/pinned-models",
+  description: "Replace the models the learner pinned in the picker, in order.",
+  request: { body: { content: { "application/json": { schema: z.object({ models: z.array(ModelId).max(MAX_PINNED) }) } } } },
+  responses: { 200: { description: "The pinned models", content: { "application/json": { schema: z.object({ pinned: z.array(z.string()) }) } } } },
 });
 
 /** How long a client waiting on a lesson is held before it asks again. */
@@ -412,14 +468,20 @@ function toDocumentJson(row: DocumentRow): DocumentView {
   };
 }
 
-export function createApp({ db, model, security, plugins = [coreLearning, coreMemory, coreCourse], extractDocument }: AppDeps) {
+export function createApp({ db, model, models: modelOptions = {}, security, plugins = [coreLearning, coreMemory, coreCourse], extractDocument }: AppDeps) {
   const store = createSessionStore(db);
+  const models = createModelSettings({
+    settings: createSettingsStore(db),
+    catalog: modelOptions.catalog ?? staticCatalog([]),
+    defaults: modelOptions.defaults ?? { model: "anthropic:claude-sonnet-5-5", effort: null },
+    suggested: modelOptions.suggested,
+  });
   store.recoverInterruptedRuns();
   const lessons = createLessonStore(db);
   lessons.recoverInterrupted();
   const registry = createCapabilityRegistry(plugins);
-  const turns = createTurnRunner({ store, registry, model, lessons });
-  const generator = createLessonGenerator({ store, lessons, registry, model });
+  const turns = createTurnRunner({ store, registry, model, models, lessons });
+  const generator = createLessonGenerator({ store, lessons, registry, model, models });
   lessons.onChange(generator.changed);
   const lessonJson = (id: string) => {
     const row = lessons.findLesson(id);
@@ -567,6 +629,13 @@ export function createApp({ db, model, security, plugins = [coreLearning, coreMe
       // Cast for the same reason as messages: hono's JSON typing recurses too deeply on the view type.
       return c.json(result.view as never, 201);
     })
+    .openapi(listModels, async (c) => c.json(await models.picker(), 200))
+    .openapi(selectModel, async (c) => {
+      const result = await models.select(c.req.valid("json"));
+      if (!result.ok) return c.json({ error: result.message }, result.kind === "invalid" ? 400 : 503);
+      return c.json(result.selection, 200);
+    })
+    .openapi(setPinnedModels, (c) => c.json({ pinned: models.setPinned(c.req.valid("json").models) }, 200))
     .openapi(listMemories, (c) => c.json(store.listMemoriesForLearner(registry.checkKinds()).map(toMemoryJson), 200))
     .openapi(editMemory, (c) => {
       const result = store.editMemory(c.req.valid("param").id, c.req.valid("json").text, registry.checkKinds());

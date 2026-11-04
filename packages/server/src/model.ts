@@ -1,25 +1,31 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { openai } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { createProviderRegistry, type LanguageModel } from "ai";
+import { createProviderRegistry, type LanguageModel, type streamText } from "ai";
 
-export const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]["providerOptions"]>;
+
+/** Every effort level OpenRouter accepts. Each model supports a subset, listed in the catalog. */
+export const reasoningEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ReasoningEffort = (typeof reasoningEfforts)[number];
+
+/** The model a run uses (ADR-012). A null effort leaves it to the model's default. */
+export interface ModelSelection {
+  model: string;
+  effort: ReasoningEffort | null;
+}
 
 export interface RegistryOptions {
   /** Defaults to the OPENROUTER_API_KEY environment variable. */
   openrouterApiKey?: string;
   /** Override fetch, for tests. */
   fetch?: typeof fetch;
-  /** How hard OpenRouter models think. Unset leaves it to the model's default. */
-  reasoningEffort?: ReasoningEffort;
 }
 
 export function createRegistry(options: RegistryOptions = {}) {
   const openrouter = createOpenRouter({
     apiKey: options.openrouterApiKey,
     fetch: options.fetch,
-    ...(options.reasoningEffort && { extraBody: { reasoning: { effort: options.reasoningEffort } } }),
     // "strict" is the setting OpenRouter recommends when talking to its own API.
     compatibility: "strict",
     // Shown in the OpenRouter dashboard's app attribution.
@@ -46,4 +52,10 @@ type ModelId = `anthropic:${string}` | `openai:${string}` | `openrouter:${string
  */
 export function resolveModel(id: string, registry = defaultRegistry): LanguageModel {
   return registry.languageModel(id as ModelId);
+}
+
+/** Per-call options for a selection. Effort reaches OpenRouter models only for now (ADR-012 build step 2 adds the others). */
+export function providerOptionsFor(selection: ModelSelection): ProviderOptions | undefined {
+  if (!selection.effort || !selection.model.startsWith("openrouter:")) return undefined;
+  return { openrouter: { reasoning: { effort: selection.effort } } };
 }

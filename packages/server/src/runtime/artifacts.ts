@@ -41,7 +41,11 @@ const FINISH_REASONS = new Set(["stop", "length", "content-filter", "tool-calls"
 function clientChunk(chunk: UIMessageChunk, textId: (providerId: string) => string): UIMessageChunk | undefined {
   switch (chunk.type) {
     case "start":
-      return { type: "start", ...(chunk.messageId ? { messageId: chunk.messageId } : {}) };
+      return {
+        type: "start",
+        ...(chunk.messageId ? { messageId: chunk.messageId } : {}),
+        ...(clientMetadata(chunk.messageMetadata) ? { messageMetadata: clientMetadata(chunk.messageMetadata) } : {}),
+      };
     case "finish":
       return { type: "finish", ...(chunk.finishReason && FINISH_REASONS.has(chunk.finishReason) ? { finishReason: chunk.finishReason } : {}) };
     case "abort":
@@ -94,7 +98,10 @@ export function artifactView(artifactId: string, registry: CapabilityRegistry, s
  */
 export function presentMessages(messages: UIMessage[], registry: CapabilityRegistry, store: SessionStore): UIMessage[] {
   return messages.map((message) => ({
-    ...message,
+    id: message.id,
+    role: message.role,
+    // Only the model's id, which the UI shows on the reply (ADR-012).
+    ...(clientMetadata(message.metadata) ? { metadata: clientMetadata(message.metadata) } : {}),
     parts: message.parts.flatMap((part) => {
       const safe = clientPart(part);
       if (safe) return [safe];
@@ -103,6 +110,12 @@ export function presentMessages(messages: UIMessage[], registry: CapabilityRegis
       return view ? [dataPart(view)] : [];
     }),
   }));
+}
+
+/** The metadata a client may see on a reply: the model that wrote it. */
+export function clientMetadata(metadata: unknown): { model: string } | undefined {
+  const model = (metadata as { model?: unknown } | undefined)?.model;
+  return typeof model === "string" ? { model } : undefined;
 }
 
 /**
