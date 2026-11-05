@@ -122,7 +122,8 @@ async function startForeground(command: Start, base: Config, env: NodeJS.Process
     }
     throw error;
   }
-  writeState(config.dataDir, { pid: process.pid, port: server.port, url: server.url, startedAt: new Date().toISOString() });
+  // Keep the claim's start time: it tells this run's record from a previous run's with the same pid.
+  writeState(config.dataDir, { pid: process.pid, port: server.port, url: server.url, startedAt: readState(config.dataDir)?.startedAt ?? new Date().toISOString() });
   if (server.port !== config.port) err(`Port ${config.port} is in use, so Mivra is on ${server.port}.`);
   out(`Mivra is running at ${server.url}`);
   out(env.MIVRA_DETACHED === "1" ? `Data: ${config.dataDir}` : `Data: ${config.dataDir}. Press Ctrl+C to stop.`);

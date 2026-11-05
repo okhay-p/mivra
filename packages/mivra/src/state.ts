@@ -70,10 +70,16 @@ export async function answers(url: string, timeoutMs = 2000): Promise<boolean> {
   }
 }
 
+/** When this process claimed the data dir, to tell its own record from a previous run's with the same pid. */
+let ownStart: string | undefined;
+
 /** A record nobody holds any more: its process is gone, or it never got as far as listening. */
 function isStale(state: RunState | undefined, now = Date.now()): boolean {
   if (!state) return true;
   if (!isAlive(state.pid)) return true;
+  // Our own pid in a record we didn't write is a previous run's: in a container Mivra is always pid 1, so a container
+  // killed without a clean stop leaves a record that names the next one.
+  if (state.pid === process.pid && state.startedAt !== ownStart) return true;
   return !state.url && now - Date.parse(state.startedAt) > STARTING_LIMIT_MS;
 }
 
@@ -99,7 +105,8 @@ export type Claim = { ok: true } | { ok: false; holder: RunState };
  */
 export function claim(dataDir: string, pid = process.pid): Claim {
   mkdirSync(dataDir, { recursive: true });
-  const record = `${JSON.stringify({ pid, startedAt: new Date().toISOString() } satisfies RunState)}\n`;
+  ownStart = new Date().toISOString();
+  const record = `${JSON.stringify({ pid, startedAt: ownStart } satisfies RunState)}\n`;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const fd = openSync(statePath(dataDir), "wx", 0o600);
