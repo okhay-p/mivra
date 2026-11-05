@@ -1,6 +1,7 @@
 import { Check, ChevronsUpDown, Star } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  PROVIDERS_CHANGED,
   getModelPicker,
   selectModel,
   setPinnedModels,
@@ -85,6 +86,10 @@ export function useModelPicker() {
   }, []);
   useEffect(() => {
     void refresh();
+    // A key saved or removed in settings changes which models are listed, and maybe the default.
+    const reload = () => void refresh();
+    window.addEventListener(PROVIDERS_CHANGED, reload);
+    return () => window.removeEventListener(PROVIDERS_CHANGED, reload);
   }, [refresh]);
 
   const choose = useCallback(

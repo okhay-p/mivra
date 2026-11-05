@@ -1,6 +1,8 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { getConnInfo } from "@hono/node-server/conninfo";
+import type { Context } from "hono";
 import { createMiddleware } from "hono/factory";
 
 export interface SecurityConfig {
@@ -56,4 +58,25 @@ export function tokenGuard(token: string) {
     }
     await next();
   });
+}
+
+/**
+ * Whether a request comes from this machine (ADR-013). The peer address must be loopback, which a client can't
+ * fake. That alone isn't enough: a proxy on this machine, such as `tailscale serve`, connects from loopback on
+ * behalf of other devices. Those requests carry the proxy's Host (an allowed name, not a loopback one) or a
+ * forwarding header, so either makes a request remote. Requests that didn't arrive over a socket (such as
+ * `app.request` in tests) don't count as local.
+ */
+export function isLoopbackPeer(c: Context): boolean {
+  let address: string | undefined;
+  try {
+    address = getConnInfo(c).remote.address;
+  } catch {
+    return false;
+  }
+  if (!address) return false;
+  const v4 = address.startsWith("::ffff:") ? address.slice(7) : address;
+  if (address !== "::1" && !/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v4)) return false;
+  if (!LOOPBACK_HOSTS.includes(new URL(c.req.url).hostname.toLowerCase())) return false;
+  return !["forwarded", "x-forwarded-for", "x-forwarded-host", "x-real-ip"].some((name) => c.req.header(name) !== undefined);
 }

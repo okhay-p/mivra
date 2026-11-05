@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defaultClientConditions, defineConfig, type Plugin } from "vite";
+import { forwardingHeaders } from "./dev-proxy.js";
 
 const serverPort = Number(process.env.MIVRA_PORT ?? 4096);
 const dataDir = process.env.MIVRA_DATA_DIR ?? join(homedir(), ".mivra");
@@ -38,7 +39,18 @@ export default defineConfig({
     // binding all interfaces; set MIVRA_DEV_HOST only if you understand the exposure.
     host: process.env.MIVRA_DEV_HOST ?? "127.0.0.1",
     allowedHosts: [".ts.net"],
-    // changeOrigin makes proxied requests arrive with a loopback Host, which the server accepts.
-    proxy: { "/api": { target: `http://127.0.0.1:${serverPort}`, changeOrigin: true } },
+    proxy: {
+      "/api": {
+        target: `http://127.0.0.1:${serverPort}`,
+        // changeOrigin makes proxied requests arrive with a loopback Host, which the server accepts.
+        changeOrigin: true,
+        // That hides where a request came from, so say so for requests from elsewhere (see dev-proxy.ts).
+        configure: (proxy) => {
+          proxy.on("proxyReq", (proxyReq, req) => {
+            for (const [name, value] of Object.entries(forwardingHeaders(req.headers.host, req.socket.remoteAddress))) proxyReq.setHeader(name, value);
+          });
+        },
+      },
+    },
   },
 });

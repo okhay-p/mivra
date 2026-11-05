@@ -3,9 +3,9 @@ import { Conversation, ConversationContent, ConversationScrollButton } from "@/c
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
-import { Brain, GraduationCap, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
+import { Brain, GraduationCap, KeyRound, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
+import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
@@ -15,6 +15,7 @@ import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfTho
 import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ModelPicker, modelLabel, useModelPicker } from "./ModelPicker.js";
+import { ProvidersPanel, hasAnyKey } from "./ProvidersPanel.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
@@ -92,6 +93,18 @@ export function App() {
   const [theme, setTheme] = useTheme();
   // Lives here for the same reason: it has to stay open after the mobile sidebar closes.
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [providersOpen, setProvidersOpen] = useState(false);
+  // With no API key anywhere, the providers panel opens as first-run setup (ADR-013).
+  const [firstRun, setFirstRun] = useState(false);
+  useEffect(() => {
+    if (!token) return;
+    void getProviderKeys().then((result) => {
+      if (result.ok && !hasAnyKey(result.value)) {
+        setFirstRun(true);
+        setProvidersOpen(true);
+      }
+    });
+  }, []);
 
   return (
     <SidebarProvider>
@@ -104,8 +117,10 @@ export function App() {
         onNew={newSession}
         onNewCourse={() => setActiveId(undefined)}
         onOpenMemory={() => setMemoryOpen(true)}
+        onOpenProviders={() => setProvidersOpen(true)}
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
+      <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
         <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
@@ -146,6 +161,7 @@ function SessionSidebar({
   onNew,
   onNewCourse,
   onOpenMemory,
+  onOpenProviders,
 }: {
   sessions: Session[];
   activeId: string | undefined;
@@ -155,6 +171,7 @@ function SessionSidebar({
   onNew: () => void;
   onNewCourse: () => void;
   onOpenMemory: () => void;
+  onOpenProviders: () => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
   // On mobile the sidebar is an overlay, so close it once the choice is made.
@@ -236,6 +253,19 @@ function SessionSidebar({
             >
               <Brain />
               <span>Memory</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Model providers"
+              data-providers-trigger
+              onClick={() => {
+                onOpenProviders();
+                closeOnMobile();
+              }}
+            >
+              <KeyRound />
+              <span>Model providers</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
