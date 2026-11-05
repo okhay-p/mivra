@@ -1,6 +1,8 @@
 // Builds the publishable `mivra` package (ADR-013): the CLI with the server bundled in, the extraction child,
 // the migrations and the built web UI. Run `pnpm build` at the repo root first so web/dist exists.
-import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { builtinModules } from "node:module";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -60,4 +62,30 @@ for (const [from, to] of [["../server/drizzle", "./drizzle"], ["../web/dist", ".
   rmSync(here(to), { recursive: true, force: true });
   cpSync(here(from), here(to), { recursive: true });
 }
+// The package is MIT (the repo's LICENSE). Code from other packages is bundled into dist/ and web/, so their
+// notices ship with it: every production dependency of the web UI, plus the server packages inlined above.
+// Packages npm installs as dependencies carry their own.
+cpSync(here("../../LICENSE"), here("./LICENSE"));
+writeFileSync(here("./THIRD_PARTY_NOTICES.md"), thirdPartyNotices());
+
+function thirdPartyNotices() {
+  const listed = (filter) =>
+    Object.entries(JSON.parse(execFileSync("pnpm", ["licenses", "list", "--prod", "--json", "--filter", filter], { cwd: here("../.."), encoding: "utf8" })))
+      .flatMap(([license, entries]) => entries.map((entry) => ({ ...entry, license })));
+  const web = listed("@mivra/web");
+  const inlined = listed("@mivra/server").filter((e) => BUNDLED.some((re) => re.test(e.name)));
+  const byName = new Map();
+  for (const e of [...web, ...inlined]) if (!e.name.startsWith("@mivra/") && !byName.has(e.name)) byName.set(e.name, e);
+  const included = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const text = (dir) => {
+    const file = existsSync(dir) ? readdirSync(dir).find((f) => /^(licen[cs]e|copying)(\.|$)/i.test(f)) : undefined;
+    return file ? readFileSync(join(dir, file), "utf8").trim() : undefined;
+  };
+  const sections = included.map((e) => {
+    const body = e.paths.map(text).find(Boolean);
+    return `## ${e.name} ${e.versions.join(", ")}\n\nLicense: ${e.license}${e.homepage ? ` (${e.homepage})` : ""}\n${body ? `\n\`\`\`\n${body}\n\`\`\`\n` : ""}`;
+  });
+  return `# Third-party notices\n\nMivra is MIT-licensed (see LICENSE). It bundles code from these packages, under their own licenses.\n\n${sections.join("\n")}`;
+}
+
 console.log(`Built mivra ${pkg.version}: dist/, drizzle/, web/ (${externals.size} external packages).`);

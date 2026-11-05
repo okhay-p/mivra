@@ -8,7 +8,7 @@ An open-source, local-first AI agent harness for learning. Decisions live in [`d
 |---|---|
 | `packages/server` | Hono API server (Node.js). Owns the agent runtime, the SQLite database (Drizzle + better-sqlite3) and model access (Vercel AI SDK). Binds to `127.0.0.1` only. |
 | `packages/web` | React + Vite web UI (shadcn/ui on Tailwind v4). Talks to the server only through its API. |
-| `packages/mivra` | The installable `mivra` package and command (ADR-013): the server, protocol and built UI bundled into one npm package, with `start`, `stop`, `status` and `auth`. Not published yet. |
+| `packages/mivra` | The installable `mivra` package and command (ADR-013): the server, protocol and built UI bundled into one npm package, with `start`, `stop`, `status` and `auth`. |
 | `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `set_diagram`, `graph`, `multiple_choice`, `table`, `worked_steps`), their tool definitions and the deterministic grader. Shared by server and web. |
 
 ## Setup
@@ -35,7 +35,7 @@ The picker under the message box chooses the model and reasoning effort for ever
 | `mivra auth set <provider>` | Saves an API key to `credentials.json`, read from a hidden prompt or a pipe, never from an argument, then checks it with the provider (`--no-check` skips that). Providers: `openrouter`, `anthropic`, `openai` |
 | `mivra auth status` / `mivra auth remove <provider>` | Lists where each key comes from, or removes a saved one. A running Mivra picks changes up from the next reply |
 
-Before applying new migrations to a database that already has data, the server copies it to `backups/mivra-<time>.db` next to it (`VACUUM INTO`, so the copy is consistent) and keeps the newest 5. If the copy fails, nothing is migrated. A database last migrated by a newer Mivra is refused with a message instead of being opened, since older code can't safely use it; restore a backup or update Mivra. `bin/mivra.js` checks for Node 22.14+ before loading anything else, and a `better-sqlite3` that can't load points to the Docker image. The package stays `private` until the project has a license.
+Before applying new migrations to a database that already has data, the server copies it to `backups/mivra-<time>.db` next to it (`VACUUM INTO`, so the copy is consistent) and keeps the newest 5. If the copy fails, nothing is migrated. A database last migrated by a newer Mivra is refused with a message instead of being opened, since older code can't safely use it; restore a backup or update Mivra. `bin/mivra.js` checks for Node 22.14+ before loading anything else, and a `better-sqlite3` that can't load points to the Docker image. `pnpm build` also copies `LICENSE` into the package and writes `THIRD_PARTY_NOTICES.md` from the licenses of the code bundled into it (the web UI's production dependencies and the inlined server packages).
 
 ## Native dependency
 
@@ -133,3 +133,7 @@ The agent shows interactive artifacts through tool calls (ADR-006): `show_algori
 Concept labels, a trace's cell values, pointer names, range labels and variables, and a graph's variables and edge weights aren't passed through `MathText`, and learner messages stay plain.
 
 A `$...$` is maths only if there's no whitespace just inside its dollars, no digit just after the closing one, and no backtick between them, and the first dollar after the opening one decides. So "costs $5 and $10" isn't a formula. In `block` mode, code and `\$` take precedence over a dollar. Raw HTML shows as text, images show their alt text and never load, and only `http`, `https` and `mailto` links work. A reply is rendered block by block, so a streamed delta only re-renders its last block; a block over 50,000 characters, or with absurdly deep nesting at its line starts or a run of more than 32 `[` outside code, shows as plain text with its code still in a box, and so does a block that fails to render. Other hostile nesting, such as `[a [a [a ` repeated thousands of times, isn't detected and renders slowly.
+
+## License
+
+MIT, see [`LICENSE`](LICENSE). The published package also lists the licenses of the code it bundles in `THIRD_PARTY_NOTICES.md`.
