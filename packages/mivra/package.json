@@ -1,0 +1,58 @@
+{
+  "name": "mivra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A local-first AI tutor that teaches with interactive visualizations, checks and courses.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/okhay-p/mivra.git",
+    "directory": "packages/mivra"
+  },
+  "homepage": "https://github.com/okhay-p/mivra#readme",
+  "bin": {
+    "mivra": "bin/mivra.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "drizzle",
+    "web",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.14"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepack": "node build.mjs"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.91",
+    "@ai-sdk/openai": "^4.0.104",
+    "@hono/node-server": "^2.1.5",
+    "@hono/zod-openapi": "^1.6.3",
+    "ai": "^7.0.156",
+    "better-sqlite3": "^13.0.3",
+    "busboy": "^1.6.0",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.14",
+    "unpdf": "^2.1.0",
+    "yauzl": "^3.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@mivra/protocol": "workspace:*",
+    "@mivra/server": "workspace:*",
+    "@openrouter/ai-sdk-provider": "^3.1.0",
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

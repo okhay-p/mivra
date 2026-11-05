@@ -8,6 +8,7 @@ An open-source, local-first AI agent harness for learning. Decisions live in [`d
 |---|---|
 | `packages/server` | Hono API server (Node.js). Owns the agent runtime, the SQLite database (Drizzle + better-sqlite3) and model access (Vercel AI SDK). Binds to `127.0.0.1` only. |
 | `packages/web` | React + Vite web UI (shadcn/ui on Tailwind v4). Talks to the server only through its API. |
+| `packages/mivra` | The installable `mivra` package and command (ADR-013): the server, protocol and built UI bundled into one npm package, with `start`, `stop`, `status` and `auth`. Not published yet. |
 | `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `set_diagram`, `graph`, `multiple_choice`, `table`, `worked_steps`), their tool definitions and the deterministic grader. Shared by server and web. |
 
 ## Setup
@@ -21,6 +22,20 @@ pnpm install
 Models run through [OpenRouter](https://openrouter.ai), Anthropic or OpenAI, so one API key is the only setting needed: an OpenRouter key reaches every model, while Anthropic and OpenAI keys call those providers directly. Add a key in the app under **Model providers** in the sidebar, which opens by itself while no key is set. Keys saved there go in `credentials.json` in the data dir (mode 0600), never in the database, and are never sent back to the browser; **Check** asks the provider whether it accepts the key, without spending tokens. Only a browser on the computer running Mivra can change keys: requests through a proxy such as `tailscale serve` see them read-only (ADR-013). `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` in the environment or `.env` (see `.env.example`) still work and take precedence over saved keys. A new or removed key applies from the next reply, without a restart. Until you choose a model, a new install uses GPT-6 Luna at high effort: through OpenRouter if its key is set, otherwise through OpenAI. With only an Anthropic key, it uses Claude Sonnet 5.5 (ADR-012). `MIVRA_MODEL` and `MIVRA_REASONING_EFFORT` are no longer read, and the server warns at startup if they're still set.
 
 The picker under the message box chooses the model and reasoning effort for every later reply, syllabus and lesson; a reply already streaming keeps its model. It lists the models that can call tools, which Mivra's learning tools need, from each provider whose key is set, plus the default model. OpenRouter's public list describes every model (name, price, effort levels and tool support), so Anthropic's and OpenAI's own models appear only when OpenRouter lists their counterpart. The lists refresh hourly, and a saved copy is used offline. Search results are grouped by provider, and a model called directly shows its provider next to its name. Opened, it shows your pinned and recent models and a few suggestions; typing searches the whole list. The star pins the current model. The effort menu shows only the levels the selected model supports. Each reply names the model that wrote it, and each run records its model and effort. Reasoning details from earlier replies go back only to the model that wrote them, so after a switch the new model sees earlier replies as text.
+
+## The `mivra` command
+
+`packages/mivra` builds the package people install with `npx mivra` (ADR-013). `pnpm build` at the root builds it last: esbuild bundles the CLI with the server, `@mivra/protocol` and the patched OpenRouter provider into `dist/`, and copies the migrations and built UI next to it. The build fails if the bundle imports a package that isn't in its `dependencies`, or lists one it never imports. Try it from the repo with `node packages/mivra/bin/mivra.js`, or test the real install with `npm pack` in `packages/mivra` and `npm install ./mivra-<version>.tgz` in an empty folder.
+
+| Command | What it does |
+|---|---|
+| `mivra` / `mivra start` | Starts Mivra in the foreground (Ctrl+C stops it) and opens the browser. Port 4096, or the next free one up to 4115 when it's taken. `--port <n>` (or `MIVRA_PORT`) asks for one port and fails if it's taken. `--no-open` skips the browser. Says so and opens the browser if Mivra is already running |
+| `mivra start --detach` | Runs it in the background, logging to `mivra.log` in the data dir, and returns once it answers |
+| `mivra stop` / `mivra status` | Stops the Mivra recorded in `mivra.pid` (after checking it answers as Mivra, so a reused pid is never signalled), or says where it runs |
+| `mivra auth set <provider>` | Saves an API key to `credentials.json`, read from a hidden prompt or a pipe, never from an argument, then checks it with the provider (`--no-check` skips that). Providers: `openrouter`, `anthropic`, `openai` |
+| `mivra auth status` / `mivra auth remove <provider>` | Lists where each key comes from, or removes a saved one. A running Mivra picks changes up from the next reply |
+
+`bin/mivra.js` checks for Node 22.14+ before loading anything else, and a `better-sqlite3` that can't load points to the Docker image. The package stays `private` until the pre-migration backup is in (ADR-013 build step 4) and the project has a license.
 
 ## Native dependency
 
@@ -49,7 +64,7 @@ This worked on Debian 12 with g++ 12, taking over ten minutes, and failed on Ubu
 | Command | What it does |
 |---|---|
 | `pnpm dev` | Server on :4096 with reload, plus Vite on :5173 proxying `/api` to it |
-| `pnpm build && pnpm start` | Production: the server serves the built web UI on :4096 |
+| `pnpm build && pnpm start` | Production: the server serves the built web UI on :4096 (no port fallback; the `mivra` command has one) |
 | `pnpm test` | Protocol, server API (mock model, no API key needed) and web component tests (Vitest + jsdom) |
 | `pnpm test:e2e` | Chromium browser tests: built UI and real server with a scripted model; no API key. Install with `pnpm --filter @mivra/e2e exec playwright install chromium`. Runs on up to 4 workers (`MIVRA_E2E_WORKERS`), each with its own server and database. A run uses the ports from `MIVRA_E2E_PORT` (default 4198) to that plus the worker count minus one, so give concurrent runs separate blocks |
 | `pnpm test:e2e:all` | Full browser suite, including graph tests in Firefox and WebKit. Required for graph, layout, font or keyboard changes. Install with `pnpm --filter @mivra/e2e exec playwright install chromium firefox webkit` |

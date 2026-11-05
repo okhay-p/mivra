@@ -6,10 +6,13 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import * as schema from "./schema.js";
 
-const migrationsFolder = fileURLToPath(new URL("../../drizzle", import.meta.url));
+const defaultMigrations = fileURLToPath(new URL("../../drizzle", import.meta.url));
 
-/** Opens (or creates) the SQLite database and applies pending migrations. Pass ":memory:" for tests. */
-export function openDb(path: string) {
+/**
+ * Opens (or creates) the SQLite database and applies pending migrations. Pass ":memory:" for tests. A bundled
+ * build (the `mivra` package) passes where it ships the migrations.
+ */
+export function openDb(path: string, migrationsFolder = defaultMigrations) {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const sqlite = new Database(path);
   sqlite.pragma("journal_mode = WAL");

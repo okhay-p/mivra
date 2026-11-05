@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 export interface Config {
   port: number;
+  /** Whether MIVRA_PORT chose the port. Then a taken port is an error, never a different port (ADR-013). */
+  portExplicit: boolean;
   dataDir: string;
   /** Extra Host names the server accepts besides loopback (comma-separated MIVRA_ALLOWED_HOSTS). */
   allowedHosts: string[];
@@ -15,6 +17,7 @@ const RETIRED = ["MIVRA_MODEL", "MIVRA_REASONING_EFFORT"];
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     port: Number(env.MIVRA_PORT ?? 4096),
+    portExplicit: env.MIVRA_PORT !== undefined && env.MIVRA_PORT !== "",
     dataDir: env.MIVRA_DATA_DIR ?? join(homedir(), ".mivra"),
     allowedHosts: (env.MIVRA_ALLOWED_HOSTS ?? "")
       .split(",")
