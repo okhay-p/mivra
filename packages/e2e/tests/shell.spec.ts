@@ -147,6 +147,8 @@ test.describe("markdown and maths", () => {
     expect(sizes[0]!).toBeLessThan(sizes[1]!);
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // A short formula has nothing to scroll, even where KaTeX draws a subscript or root a few px past its box.
+    expect(await reply.locator("p").first().locator(".katex").evaluateAll((all) => all.map((k) => k.scrollWidth - k.clientWidth))).toEqual([0, 0, 0]);
     for (const box of [reply.locator(".katex-display"), reply.locator("p .katex").last()]) {
       const fit = await box.evaluate((e) => ({ scrolls: e.scrollWidth > e.clientWidth, right: e.getBoundingClientRect().right }));
       expect(fit.scrolls).toBe(true);

@@ -228,6 +228,18 @@ div.math-text > * + *,
   overflow-wrap: normal;
   vertical-align: baseline;
 }
+/*
+ * KaTeX ends each subscript or root stack with an empty 2px cell, pulled back by a -2px margin. The cell
+ * still counts as overflow, so every formula with a subscript became a 2px scroller with a scrollbar. Without
+ * it nothing moves (checked in Chromium, Firefox and WebKit) and only the formula's real ink is measured.
+ */
+.math-text .katex .vlist-t2 {
+  margin-right: 0;
+}
+.math-text .katex .vlist-s {
+  width: 0;
+  min-width: 0;
+}
 .math-text :is(th, td) .katex {
   white-space: nowrap;
 }

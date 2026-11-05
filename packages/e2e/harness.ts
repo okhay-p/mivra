@@ -502,7 +502,7 @@ const SCRIPTS: Record<string, Step[]> = {
   slow: [{ tool: "ask_multiple_choice", input: check }, { text: "Take your time.", hold: true }],
   maths: [
     {
-      text: `This is **really bold**, with $x^2$ inline, and it costs $5 and $10.\n\n$$\\left(${longFormula}\\right)$$\n\nInline too: $\\left(${longFormula}\\right)$`,
+      text: `This is **really bold**, with $x^2$ inline, short ones like $n \\ge n_0$ and $\\sqrt{x}$, and it costs $5 and $10.\n\n$$\\left(${longFormula}\\right)$$\n\nInline too: $\\left(${longFormula}\\right)$`,
     },
   ],
   // Long replies that arrive in many small deltas, like a real model's.
