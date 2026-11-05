@@ -1,6 +1,6 @@
 {
   "name": "@okhay-p/mivra",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A local-first AI tutor that teaches with interactive visualizations, checks and courses.",
   "license": "MIT",
   "type": "module",

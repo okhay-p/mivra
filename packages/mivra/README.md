@@ -28,4 +28,10 @@ Options: `--port <n>` to use one port only, `--no-open` to skip the browser. `MI
 
 Only a browser on the same computer can change API keys. Mivra listens on `127.0.0.1` only.
 
+Or run it with Docker, keeping data in a volume:
+
+```sh
+docker run -d -p 127.0.0.1:4096:4096 -v mivra-data:/data -e OPENROUTER_API_KEY=sk-or-... ghcr.io/okhay-p/mivra
+```
+
 Source, issues and design decisions: <https://github.com/okhay-p/mivra>

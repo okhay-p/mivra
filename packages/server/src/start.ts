@@ -42,8 +42,8 @@ export class PortInUseError extends Error {
   }
 }
 
-/** Listens on the first free port from `first` (only `first` when `attempts` is 1), on loopback only. */
-export async function listenOnFreePort(server: Server, first: number, attempts: number): Promise<number> {
+/** Listens on the first free port from `first` (only `first` when `attempts` is 1), on `host` (loopback by default). */
+export async function listenOnFreePort(server: Server, first: number, attempts: number, host = "127.0.0.1"): Promise<number> {
   for (let port = first; port < first + attempts; port++) {
     try {
       await new Promise<void>((resolve, reject) => {
@@ -57,8 +57,8 @@ export async function listenOnFreePort(server: Server, first: number, attempts: 
         };
         server.once("error", onError);
         server.once("listening", onListening);
-        // Bind to loopback only: remote access must be an explicit opt-in (ADR-001).
-        server.listen(port, "127.0.0.1");
+        // Loopback unless MIVRA_HOST opts in: remote access must be explicit (ADR-001).
+        server.listen(port, host);
       });
       return (server.address() as AddressInfo).port;
     } catch (error) {
@@ -121,7 +121,7 @@ export async function startServer({ config, webDist, migrationsFolder, portFallb
   serveWeb(app, webDist, token);
 
   const server = createAdaptorServer({ fetch: app.fetch }) as Server;
-  const port = await listenOnFreePort(server, config.port, portFallback && !config.portExplicit ? PORT_ATTEMPTS : 1);
+  const port = await listenOnFreePort(server, config.port, portFallback && !config.portExplicit ? PORT_ATTEMPTS : 1, config.host);
   return {
     port,
     url: `http://127.0.0.1:${port}`,

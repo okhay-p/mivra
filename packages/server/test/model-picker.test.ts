@@ -313,6 +313,9 @@ describe("the built-in default", () => {
   it("no longer reads the model from the environment, but says so when it's still set", () => {
     expect(loadConfig({ MIVRA_MODEL: "openrouter:vendor/a", MIVRA_REASONING_EFFORT: "high" }).ignored).toEqual(["MIVRA_MODEL", "MIVRA_REASONING_EFFORT"]);
     expect(loadConfig({}).ignored).toEqual([]);
+    // Loopback unless MIVRA_HOST opts in, as the Docker image does (ADR-001, ADR-013).
+    expect(loadConfig({}).host).toBe("127.0.0.1");
+    expect(loadConfig({ MIVRA_HOST: "0.0.0.0" }).host).toBe("0.0.0.0");
   });
 });
 

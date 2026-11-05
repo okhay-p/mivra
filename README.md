@@ -37,6 +37,38 @@ The picker under the message box chooses the model and reasoning effort for ever
 
 Before applying new migrations to a database that already has data, the server copies it to `backups/mivra-<time>.db` next to it (`VACUUM INTO`, so the copy is consistent) and keeps the newest 5. If the copy fails, nothing is migrated. A database last migrated by a newer Mivra is refused with a message instead of being opened, since older code can't safely use it; restore a backup or update Mivra. `bin/mivra.js` checks for Node 22.14+ before loading anything else, and a `better-sqlite3` that can't load points to the Docker image. `pnpm build` also copies `LICENSE` into the package and writes `THIRD_PARTY_NOTICES.md` from the licenses of the code bundled into it (the web UI's production dependencies and the inlined server packages).
 
+## Docker
+
+`docker/Dockerfile` builds an image of the published npm package on `node:22-bookworm-slim`. It runs as the unprivileged `node` user, keeps its data in the `/data` volume and has a health check. It's published to GitHub Container Registry as `ghcr.io/okhay-p/mivra`:
+
+```sh
+docker run -d --name mivra --restart unless-stopped \
+  -p 127.0.0.1:4096:4096 -v mivra-data:/data \
+  -e OPENROUTER_API_KEY=sk-or-... \
+  ghcr.io/okhay-p/mivra
+```
+
+Then open <http://127.0.0.1:4096>. Inside the container the server listens on all interfaces (`MIVRA_HOST=0.0.0.0`), since a published port can't reach the container's loopback. `-p 127.0.0.1:…` keeps it on the host's loopback. Expose it beyond that only on purpose, with `MIVRA_ALLOWED_HOSTS` for the name it's reached by. The browser can't change API keys here: it reaches the container through Docker's network, so Mivra treats it as remote (ADR-013). Pass keys with `-e`, or save one with `docker exec -i mivra mivra auth set openrouter`, which reads it from stdin. A container killed without a clean stop restarts normally.
+
+To try the image before a release, run `npm pack` in `packages/mivra` with `--pack-destination ../../docker`, then `docker build -t mivra:test --build-arg MIVRA_PACKAGE=/tmp/context/okhay-p-mivra-<version>.tgz docker`.
+
+## Releasing
+
+Releases are manual for now (ADR-013; a workflow on version tags comes later).
+
+1. Bump `version` in `packages/mivra/package.json` in a PR, through the review gate, and merge it.
+2. From a clean, up-to-date `main`: `pnpm install --frozen-lockfile && pnpm build`, then `npm publish` in `packages/mivra`. The owner's npm account confirms with a passkey: run it in a terminal, and npm prints a link to approve. Check it with `npm view @okhay-p/mivra version` (a new version can take a minute to show).
+3. Tag the release: `git tag v<version> && git push origin v<version>`.
+4. Build and push the image from the published package:
+   ```sh
+   docker build -t ghcr.io/okhay-p/mivra:<version> -t ghcr.io/okhay-p/mivra:latest \
+     --build-arg MIVRA_PACKAGE=@okhay-p/mivra@<version> docker
+   gh auth token | docker login ghcr.io -u okhay-p --password-stdin   # needs the write:packages scope
+   docker push ghcr.io/okhay-p/mivra:<version> && docker push ghcr.io/okhay-p/mivra:latest
+   ```
+   The `gh` token needs `write:packages` once: `gh auth refresh -s write:packages`. A new GHCR package starts private. Make it public once in the package's settings on GitHub.
+5. Smoke-test both: `npx @okhay-p/mivra@<version> --version` in an empty folder, and `docker run --rm ghcr.io/okhay-p/mivra:<version> mivra --version`.
+
 ## Native dependency
 
 `better-sqlite3` ships prebuilt Node-API binaries inside its npm package, so `pnpm install` needs no compiler or Python and the binary doesn't depend on the exact Node version. `pnpm-workspace.yaml` ignores the package's install step, which would only run `node-gyp` and fail where it isn't installed.
