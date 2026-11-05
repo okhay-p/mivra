@@ -1,6 +1,6 @@
 # Developing Mivra
 
-How to run Mivra from source, test it, and how its parts work. For installing and using Mivra, see the [README](../README.md). Releases are covered in [`releasing.md`](releasing.md), design decisions in [`adr/`](adr/README.md), and longer design docs and the backlog in the [Mivra Project HQ](https://app.notion.com/p/408fb102b9b68185823dc5c90dc17f7f) Notion space.
+How to run Mivra from source, test it, and how its parts work. For installing and using Mivra, see the [README](../README.md). Releases are covered in [`releasing.md`](releasing.md), and design decisions in [`adr/`](adr/README.md).
 
 ## Layout
 
