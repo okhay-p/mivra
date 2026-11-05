@@ -8,7 +8,7 @@ An open-source, local-first AI agent harness for learning. Decisions live in [`d
 |---|---|
 | `packages/server` | Hono API server (Node.js). Owns the agent runtime, the SQLite database (Drizzle + better-sqlite3) and model access (Vercel AI SDK). Binds to `127.0.0.1` only. |
 | `packages/web` | React + Vite web UI (shadcn/ui on Tailwind v4). Talks to the server only through its API. |
-| `packages/mivra` | The installable `mivra` package and command (ADR-013): the server, protocol and built UI bundled into one npm package, with `start`, `stop`, `status` and `auth`. |
+| `packages/mivra` | The installable `@okhay-p/mivra` package and its `mivra` command (ADR-013): the server, protocol and built UI bundled into one npm package, with `start`, `stop`, `status` and `auth`. |
 | `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `set_diagram`, `graph`, `multiple_choice`, `table`, `worked_steps`), their tool definitions and the deterministic grader. Shared by server and web. |
 
 ## Setup
@@ -25,7 +25,7 @@ The picker under the message box chooses the model and reasoning effort for ever
 
 ## The `mivra` command
 
-`packages/mivra` builds the package people install with `npx mivra` (ADR-013). `pnpm build` at the root builds it last: esbuild bundles the CLI with the server, `@mivra/protocol` and the patched OpenRouter provider into `dist/`, and copies the migrations and built UI next to it. The build fails if the bundle imports a package that isn't in its `dependencies`, or lists one it never imports. Try it from the repo with `node packages/mivra/bin/mivra.js`, or test the real install with `npm pack` in `packages/mivra` and `npm install ./mivra-<version>.tgz` in an empty folder.
+`packages/mivra` builds `@okhay-p/mivra`, the package people install with `npx @okhay-p/mivra` (ADR-013). npm refused the unscoped name `mivra` as too similar to `micro`; the command it installs is still `mivra`. `pnpm build` at the root builds it last: esbuild bundles the CLI with the server, `@mivra/protocol` and the patched OpenRouter provider into `dist/`, and copies the migrations and built UI next to it. The build fails if the bundle imports a package that isn't in its `dependencies`, or lists one it never imports. Try it from the repo with `node packages/mivra/bin/mivra.js`, or test the real install with `npm pack` in `packages/mivra` and `npm install ./okhay-p-mivra-<version>.tgz` in an empty folder.
 
 | Command | What it does |
 |---|---|

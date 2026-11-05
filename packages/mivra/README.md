@@ -7,8 +7,10 @@ A local-first AI tutor that teaches with interactive visualizations, checks and 
 Needs [Node.js](https://nodejs.org) 22.14 or newer.
 
 ```sh
-npx mivra
+npx @okhay-p/mivra
 ```
+
+Or install it once with `npm install -g @okhay-p/mivra`, then run `mivra`.
 
 This starts Mivra and opens it in your browser. The first time, it asks for an API key from [OpenRouter](https://openrouter.ai/keys) (one key reaches every model), Anthropic or OpenAI.
 

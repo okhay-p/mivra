@@ -1,4 +1,4 @@
-// Builds the publishable `mivra` package (ADR-013): the CLI with the server bundled in, the extraction child,
+// Builds the publishable `@okhay-p/mivra` package (ADR-013): the CLI with the server bundled in, the extraction child,
 // the migrations and the built web UI. Run `pnpm build` at the repo root first so web/dist exists.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -49,7 +49,7 @@ await build({
   ],
 });
 
-// Every package the bundle still imports must be a dependency, or `npx mivra` fails at start.
+// Every package the bundle still imports must be a dependency, or `npx @okhay-p/mivra` fails at start.
 const missing = [...externals].filter((name) => !pkg.dependencies[name]);
 const unused = Object.keys(pkg.dependencies).filter((name) => !externals.has(name));
 if (missing.length || unused.length) {

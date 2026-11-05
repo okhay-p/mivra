@@ -55,7 +55,7 @@ function backupBeforeMigrating(sqlite: Database.Database, path: string, migratio
 }
 
 export interface OpenDbOptions {
-  /** Where the migrations are; a bundled build (the `mivra` package) passes where it ships them. */
+  /** Where the migrations are; a bundled build (the `@okhay-p/mivra` package) passes where it ships them. */
   migrationsFolder?: string;
   /** Told the backup's path when one is made before migrating. */
   onBackup?: (path: string) => void;

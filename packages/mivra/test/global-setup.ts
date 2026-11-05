@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-/** The tests run the built package, as `npx mivra` would; build it (and the web UI it ships, if missing) first. */
+/** The tests run the built package, as `npx @okhay-p/mivra` would; build it (and the web UI it ships, if missing) first. */
 export default function setup() {
   const at = (path: string) => fileURLToPath(new URL(path, import.meta.url));
   if (!existsSync(at("../../web/dist/index.html"))) {
