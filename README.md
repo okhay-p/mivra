@@ -35,7 +35,7 @@ The picker under the message box chooses the model and reasoning effort for ever
 | `mivra auth set <provider>` | Saves an API key to `credentials.json`, read from a hidden prompt or a pipe, never from an argument, then checks it with the provider (`--no-check` skips that). Providers: `openrouter`, `anthropic`, `openai` |
 | `mivra auth status` / `mivra auth remove <provider>` | Lists where each key comes from, or removes a saved one. A running Mivra picks changes up from the next reply |
 
-`bin/mivra.js` checks for Node 22.14+ before loading anything else, and a `better-sqlite3` that can't load points to the Docker image. The package stays `private` until the pre-migration backup is in (ADR-013 build step 4) and the project has a license.
+Before applying new migrations to a database that already has data, the server copies it to `backups/mivra-<time>.db` next to it (`VACUUM INTO`, so the copy is consistent) and keeps the newest 5. If the copy fails, nothing is migrated. A database last migrated by a newer Mivra is refused with a message instead of being opened, since older code can't safely use it; restore a backup or update Mivra. `bin/mivra.js` checks for Node 22.14+ before loading anything else, and a `better-sqlite3` that can't load points to the Docker image. The package stays `private` until the project has a license.
 
 ## Native dependency
 

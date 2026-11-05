@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { openDb } from "../../server/src/db/client.js";
 import { PortInUseError, listenOnFreePort } from "../../server/src/start.js";
 import { makePdf } from "../../server/test/support/files.js";
 
@@ -175,6 +176,18 @@ describe("mivra", () => {
 
     expect(run(dir, ["stop"]).stdout).toContain("Mivra stopped.");
     expect([await answering(a), await answering(b)]).toEqual([false, false]);
+  });
+
+  it("refuses a database from a newer Mivra with a clear message", async () => {
+    const dir = dataDir();
+    const db = openDb(join(dir, "mivra.db"));
+    db.$client.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES ('future', 9999999999999)").run();
+    db.$client.close();
+    const result = run(dir, ["--no-open", "--port", String(await freePort())]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("newer version of Mivra");
+    expect(result.stderr).not.toContain("    at ");
+    expect(existsSync(join(dir, "mivra.pid"))).toBe(false);
   });
 
   it("fails on a taken port it was told to use", async () => {
