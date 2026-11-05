@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 # Mivra in a container (ADR-013): the published npm package, run as the unprivileged `node` user.
 #
-#   docker build -t ghcr.io/okhay-p/mivra:0.1.1 --build-arg MIVRA_PACKAGE=@okhay-p/mivra@0.1.1 docker
+#   docker build -t ghcr.io/okhay-p/mivra:0.1.2 --build-arg MIVRA_PACKAGE=@okhay-p/mivra@0.1.2 docker
 #
 # To try an unreleased build, `npm pack` packages/mivra into docker/ and pass the tarball instead:
-#   --build-arg MIVRA_PACKAGE=/tmp/context/okhay-p-mivra-0.1.1.tgz
+#   --build-arg MIVRA_PACKAGE=/tmp/context/okhay-p-mivra-0.1.2.tgz
 FROM node:22-bookworm-slim
 
 ARG MIVRA_PACKAGE=@okhay-p/mivra@latest
