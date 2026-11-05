@@ -126,6 +126,57 @@ describe("mivra", () => {
     expect(existsSync(join(dir, "mivra.pid"))).toBe(false);
   });
 
+  it("exits on Ctrl+C even while background work holds the process", async () => {
+    // Stands in for lesson generation still waiting on a provider: something that keeps Node's event loop busy.
+    const busy = `data:text/javascript,${encodeURIComponent("setInterval(() => {}, 1000);")}`;
+    const dir = dataDir();
+    const port = await freePort();
+    const child = spawn(process.execPath, ["--import", busy, bin, "--no-open", "--port", String(port)], { env: envFor(dir), stdio: ["ignore", "pipe", "pipe"] });
+    cleanups.push(() => void child.kill("SIGKILL"));
+    await new Promise<void>((resolve, reject) => {
+      let stdout = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+        if (stdout.includes("Press Ctrl+C")) resolve();
+      });
+      child.once("exit", () => reject(new Error(`exited early: ${stdout}`)));
+    });
+    const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
+    child.kill("SIGINT");
+    const code = await Promise.race([exited, new Promise<string>((r) => setTimeout(() => r("still running"), 10_000))]);
+    expect(code).toBe(0);
+    expect(existsSync(join(dir, "mivra.pid"))).toBe(false);
+  });
+
+  it("runs one Mivra per data dir when two start at once", async () => {
+    const dir = dataDir();
+    const [a, b] = [await freePort(), await freePort()];
+    const launch = (port: number) =>
+      new Promise<{ code: number | null; stdout: string }>((resolve) => {
+        const child = spawn(process.execPath, [bin, "start", "--detach", "--no-open", "--port", String(port)], { env: envFor(dir), stdio: ["ignore", "pipe", "pipe"] });
+        let stdout = "";
+        child.stdout.on("data", (chunk) => (stdout += chunk));
+        child.once("exit", (code) => resolve({ code, stdout }));
+      });
+    const results = await Promise.all([launch(a), launch(b)]);
+    const { pid, url } = state(dir);
+    cleanups.push(() => {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Already stopped.
+      }
+    });
+    expect(results.map((r) => r.code)).toEqual([0, 0]);
+    expect(results.filter((r) => r.stdout.includes("already running"))).toHaveLength(1);
+    const answering = async (port: number) => (await fetch(`http://127.0.0.1:${port}/api/health`).then((r) => r.ok, () => false));
+    expect([await answering(a), await answering(b)].filter(Boolean)).toHaveLength(1);
+    expect([`http://127.0.0.1:${a}`, `http://127.0.0.1:${b}`]).toContain(url);
+
+    expect(run(dir, ["stop"]).stdout).toContain("Mivra stopped.");
+    expect([await answering(a), await answering(b)]).toEqual([false, false]);
+  });
+
   it("fails on a taken port it was told to use", async () => {
     const dir = dataDir();
     const blocker = createServer().listen(0, "127.0.0.1");

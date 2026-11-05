@@ -7,7 +7,7 @@ import { ApiKey, CREDENTIALS_FILE, PROVIDER_ENV, PROVIDER_LABELS, createCredenti
 import { checkProviderKey } from "../../server/src/models/key-check.js";
 import { PortInUseError, startServer } from "../../server/src/start.js";
 import { USAGE, UsageError, parseCommand, type Command } from "./args.js";
-import { LOG_FILE, clearState, isAlive, readState, running, writeState } from "./state.js";
+import { LOG_FILE, STATE_FILE, claim, clearState, isAlive, readState, running, waitForHolder, writeState } from "./state.js";
 import { openBrowser, readSecret } from "./terminal.js";
 
 /** The package root: dist/ or src/ sits one level below it. */
@@ -81,13 +81,32 @@ async function alreadyRunning(dataDir: string, open: boolean): Promise<boolean> 
   return true;
 }
 
+/** How long a start waits for another Mivra that's still starting in the same data dir. */
+const HOLDER_WAIT_MS = 60_000;
+
 async function startForeground(command: Start, base: Config, env: NodeJS.ProcessEnv): Promise<number> {
   const config = configFor(command, base);
-  if (await alreadyRunning(config.dataDir, command.open)) return 0;
+  // Claim the data dir before opening the database: one Mivra per data dir, even when two start at once.
+  let claimed = claim(config.dataDir);
+  if (!claimed.ok) {
+    const holder = await waitForHolder(config.dataDir, HOLDER_WAIT_MS);
+    if (holder?.url) {
+      out(`Mivra is already running at ${holder.url}`);
+      if (command.open) openBrowser(holder.url);
+      return 0;
+    }
+    // The other start gave up or died while we waited; try once more.
+    claimed = claim(config.dataDir);
+    if (!claimed.ok) {
+      err(`Another Mivra (process ${claimed.holder.pid}) holds ${join(config.dataDir, STATE_FILE)} but doesn't answer. If it isn't running, delete that file.`);
+      return 1;
+    }
+  }
   let server;
   try {
     server = await startServer({ config, env, webDist: webDist(), migrationsFolder: migrations(), portFallback: true, log: err });
   } catch (error) {
+    clearState(config.dataDir, process.pid);
     if (error instanceof PortInUseError) {
       err(config.portExplicit ? `${error.message} Choose another with --port or MIVRA_PORT.` : `${error.message} Choose a port with --port.`);
       return 1;
@@ -98,23 +117,26 @@ async function startForeground(command: Start, base: Config, env: NodeJS.Process
     }
     throw error;
   }
-  const state = { pid: process.pid, port: server.port, url: server.url, startedAt: new Date().toISOString() };
-  writeState(config.dataDir, state);
+  writeState(config.dataDir, { pid: process.pid, port: server.port, url: server.url, startedAt: new Date().toISOString() });
   if (server.port !== config.port) err(`Port ${config.port} is in use, so Mivra is on ${server.port}.`);
   out(`Mivra is running at ${server.url}`);
   out(env.MIVRA_DETACHED === "1" ? `Data: ${config.dataDir}` : `Data: ${config.dataDir}. Press Ctrl+C to stop.`);
   if (command.open) openBrowser(server.url);
 
-  return new Promise((resolve) => {
+  return new Promise(() => {
     let stopping = false;
     const shutdown = () => {
       if (stopping) return;
       stopping = true;
-      clearState(config.dataDir, process.pid);
-      // A stuck connection mustn't keep Mivra from stopping.
-      const force = setTimeout(() => resolve(0), 5000);
-      force.unref();
-      void server.close().then(() => resolve(0));
+      // Exit for real, even with lesson generation or a reply still running: stopping must stop the spending.
+      // Runs cut short are marked interrupted and recovered at the next start. The record goes last, so
+      // `mivra stop` and a new start see this process until it's gone.
+      const exit = () => {
+        clearState(config.dataDir, process.pid);
+        process.exit(0);
+      };
+      setTimeout(exit, 5000).unref();
+      void server.close().then(exit, exit);
     };
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
@@ -145,11 +167,18 @@ async function startDetached(command: Start, config: Config, env: NodeJS.Process
   const deadline = Date.now() + DETACH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (exited !== undefined) {
+      // A child that found another Mivra already running says so and exits cleanly.
+      const other = exited === 0 ? await running(config.dataDir) : undefined;
+      if (other?.url) {
+        out(`Mivra is already running at ${other.url}`);
+        if (command.open) openBrowser(other.url);
+        return 0;
+      }
       err(`Mivra stopped while starting (exit code ${exited}). From ${logPath}:\n\n${tail(logPath)}`);
       return 1;
     }
     const state = await running(config.dataDir);
-    if (state && state.pid === child.pid) {
+    if (state?.url && state.pid === child.pid) {
       out(`Mivra is running in the background at ${state.url}`);
       out(`Stop it with \`mivra stop\`. Log: ${logPath}`);
       if (command.open) openBrowser(state.url);
@@ -178,6 +207,10 @@ async function stop(dataDir: string): Promise<number> {
     if (state) clearState(dataDir, state.pid);
     out("Mivra isn't running.");
     return 0;
+  }
+  if (!state.url) {
+    err(`Mivra (process ${state.pid}) is still starting. Try again in a moment.`);
+    return 1;
   }
   // The pid could have been reused by another program since; only signal it if Mivra answers on its port.
   if (!(await running(dataDir))) {
