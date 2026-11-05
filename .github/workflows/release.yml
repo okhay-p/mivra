@@ -1,0 +1,157 @@
+# Releases a version tag to npm and GHCR (ADR-013 step 6). It only builds and publishes: tests run in the review gate
+# before a PR merges, not here.
+#
+# Push a tag `v<version>` matching packages/mivra/package.json on a commit that's on main. npm accepts the publish through
+# trusted publishing (OIDC), so no npm token is stored anywhere, and each release gets a provenance statement. Run it by
+# hand with dry-run to check everything up to the publish and the push.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Build and check everything, but don't publish to npm or push the image
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  PACKAGE: "@okhay-p/mivra"
+  IMAGE: ghcr.io/okhay-p/mivra
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+
+jobs:
+  npm:
+    name: Publish to npm
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the tag and version
+        id: version
+        run: |
+          version=$(node -p 'require("./packages/mivra/package.json").version')
+          if [ "$GITHUB_REF_TYPE" != tag ] && [ "$DRY_RUN" != true ]; then
+            echo "::error::Only a version tag publishes. Run by hand with dry-run, or push the tag v$version."
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match packages/mivra/package.json version $version."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA isn't on main. Release only reviewed, merged commits."
+            exit 1
+          fi
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version (prerelease: $prerelease, dry run: $DRY_RUN)"
+
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer; Node 22 ships npm 10.
+      - run: npm install --global npm@11.21.2
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: Publish
+        working-directory: packages/mivra
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          # A prerelease never becomes `latest`.
+          tag=latest; [ "$PRERELEASE" = true ] && tag=next
+          if npm view "$PACKAGE@$VERSION" version >/dev/null 2>&1; then
+            echo "$PACKAGE@$VERSION is already on npm; skipping the publish."
+          elif [ "$DRY_RUN" = true ]; then
+            npm publish --dry-run --tag "$tag"
+          else
+            npm publish --tag "$tag"
+          fi
+
+  image:
+    name: Push the image to GHCR
+    needs: npm
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.npm.outputs.version }}
+      PRERELEASE: ${{ needs.npm.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The image installs the published package, so wait until npm serves it. A dry run builds from the latest one.
+      - name: Wait for npm
+        id: package
+        run: |
+          if [ "$DRY_RUN" = true ]; then
+            echo "spec=$PACKAGE@latest" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # An overall deadline, and short single requests, so a struggling registry can't stretch it.
+          deadline=$((SECONDS + 600))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if [ "$(npm view "$PACKAGE@$VERSION" version --prefer-online --fetch-timeout=20000 --fetch-retries=0 2>/dev/null)" = "$VERSION" ]; then
+              echo "spec=$PACKAGE@$VERSION" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$PACKAGE@$VERSION didn't appear on npm within 10 minutes."
+          exit 1
+
+      - name: Choose tags
+        id: tags
+        run: |
+          tags="$IMAGE:$VERSION"
+          [ "$PRERELEASE" = false ] && tags="$tags,$IMAGE:latest"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        if: env.DRY_RUN != 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: docker
+          platforms: linux/amd64
+          build-args: MIVRA_PACKAGE=${{ steps.package.outputs.spec }}
+          labels: org.opencontainers.image.version=${{ env.VERSION }}
+          tags: ${{ steps.tags.outputs.tags }}
+          push: ${{ env.DRY_RUN != 'true' }}
+
+      - name: Smoke test
+        if: env.DRY_RUN != 'true'
+        run: |
+          docker run --rm "$IMAGE:$VERSION" mivra --version | grep -Fx "$VERSION"
