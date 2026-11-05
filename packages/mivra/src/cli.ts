@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { loadConfig, type Config } from "../../server/src/config.js";
 import { ApiKey, CREDENTIALS_FILE, PROVIDER_ENV, PROVIDER_LABELS, createCredentialStore, type ProviderId } from "../../server/src/credentials.js";
 import { checkProviderKey } from "../../server/src/models/key-check.js";
+import { NewerDatabaseError } from "../../server/src/db/client.js";
 import { PortInUseError, startServer } from "../../server/src/start.js";
 import { USAGE, UsageError, parseCommand, type Command } from "./args.js";
 import { LOG_FILE, STATE_FILE, claim, clearState, isAlive, readState, running, waitForHolder, writeState } from "./state.js";
@@ -109,6 +110,10 @@ async function startForeground(command: Start, base: Config, env: NodeJS.Process
     clearState(config.dataDir, process.pid);
     if (error instanceof PortInUseError) {
       err(config.portExplicit ? `${error.message} Choose another with --port or MIVRA_PORT.` : `${error.message} Choose a port with --port.`);
+      return 1;
+    }
+    if (error instanceof NewerDatabaseError) {
+      err(error.message);
       return 1;
     }
     if (isNativeLoadError(error)) {

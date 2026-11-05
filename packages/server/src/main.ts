@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
+import { NewerDatabaseError } from "./db/client.js";
 import { PortInUseError, startServer } from "./start.js";
 
 // Run from the repo (`pnpm start`, `pnpm dev`). Installed copies start through the `mivra` command instead.
@@ -9,7 +10,7 @@ try {
   const server = await startServer({ config, webDist: fileURLToPath(new URL("../../web/dist", import.meta.url)) });
   console.log(`Mivra server listening on ${server.url} (data: ${config.dataDir})`);
 } catch (error) {
-  if (!(error instanceof PortInUseError)) throw error;
-  console.error(`${error.message} Stop whatever is using it, or set MIVRA_PORT.`);
+  if (!(error instanceof PortInUseError) && !(error instanceof NewerDatabaseError)) throw error;
+  console.error(error instanceof PortInUseError ? `${error.message} Stop whatever is using it, or set MIVRA_PORT.` : error.message);
   process.exit(1);
 }

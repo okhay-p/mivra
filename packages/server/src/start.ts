@@ -70,7 +70,10 @@ export async function listenOnFreePort(server: Server, first: number, attempts: 
 
 /** Opens the database and starts the server with the built UI (ADR-001, ADR-013). */
 export async function startServer({ config, webDist, migrationsFolder, portFallback = false, env = process.env, log = console.warn }: StartOptions): Promise<RunningServer> {
-  const db = openDb(join(config.dataDir, "mivra.db"), migrationsFolder);
+  const db = openDb(join(config.dataDir, "mivra.db"), {
+    migrationsFolder,
+    onBackup: (path) => log(`Updating the database. A copy from before the update is in ${path}.`),
+  });
   const token = loadOrCreateToken(config.dataDir);
   const settings = createSettingsStore(db);
   // Keys come from the environment or the credentials file, read fresh so a key saved in settings or with
