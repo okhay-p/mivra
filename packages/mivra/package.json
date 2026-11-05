@@ -1,9 +1,8 @@
 {
   "name": "mivra",
   "version": "0.1.0",
-  "private": true,
   "description": "A local-first AI tutor that teaches with interactive visualizations, checks and courses.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
@@ -19,7 +18,9 @@
     "dist",
     "drizzle",
     "web",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "node": ">=22.14"
