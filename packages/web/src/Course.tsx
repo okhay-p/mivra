@@ -1,9 +1,11 @@
 import { MAX_GOAL_CHARS, type CourseView, type KnownSource } from "@mivra/protocol";
 import { ChevronDown, GraduationCap } from "lucide-react";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { startCourse } from "./api.js";
@@ -15,6 +17,7 @@ export interface StartedCourse {
 
 /** The first screen: one question, which starts a course (ADR-011). */
 export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started: StartedCourse) => void; onFreeChat: () => void }) {
+  const goalId = useId();
   const [goal, setGoal] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -34,23 +37,29 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
   return (
     <form onSubmit={submit} className="m-auto flex w-full max-w-xl flex-col gap-4 p-6">
       <h2 className="font-heading text-center text-2xl font-semibold">What do you want to learn?</h2>
-      <p className="text-muted-foreground text-center text-sm">
+      <FieldDescription id={`${goalId}-description`} className="text-center">
         Mivra asks a few quick questions to see what you already know, then plans a course of short lessons.
-      </p>
-      <div className="flex gap-2">
-        <Input
-          value={goal}
-          onChange={(e) => setGoal(e.target.value)}
-          maxLength={MAX_GOAL_CHARS}
-          placeholder="e.g. Calculus for machine learning"
-          aria-label="Learning goal"
-          autoFocus
-        />
-        <Button type="submit" disabled={!goal.trim() || busy}>
-          {busy ? "Starting…" : "Start"}
-        </Button>
-      </div>
-      {error && <p className="text-destructive text-center text-sm">{error}</p>}
+      </FieldDescription>
+      <Field data-invalid={Boolean(error)}>
+        <FieldLabel htmlFor={goalId}>Learning goal</FieldLabel>
+        <div className="flex gap-2">
+          <Input
+            id={goalId}
+            aria-describedby={`${goalId}-description${error ? ` ${goalId}-error` : ""}`}
+            aria-invalid={Boolean(error)}
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
+            maxLength={MAX_GOAL_CHARS}
+            placeholder="e.g. Calculus for machine learning"
+            autoFocus
+          />
+          <Button type="submit" disabled={!goal.trim() || busy}>
+            {busy && <Spinner aria-hidden="true" />}
+            {busy ? "Starting…" : "Start"}
+          </Button>
+        </div>
+        {error && <FieldError id={`${goalId}-error`} role="alert">{error}</FieldError>}
+      </Field>
       <Button type="button" variant="link" className="text-muted-foreground self-center" onClick={onFreeChat}>
         Or just chat
       </Button>

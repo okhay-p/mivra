@@ -1,6 +1,8 @@
 import { ExternalLink } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
+import { Field, FieldLabel, FieldDescription, FieldError } from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { checkProviderKey, getProviderKeys, removeProviderKey, saveProviderKey, type ProviderId, type ProviderKey, type ProviderKeysView } from "./api.js";
@@ -62,7 +64,8 @@ export function ProvidersPanel({
           </SheetDescription>
         </SheetHeader>
         <div className="flex flex-col gap-4 px-4 pb-4" aria-live="polite">
-          {error && <p className="text-destructive text-sm">{error}</p>}
+          {error && <p className="text-destructive text-sm" role="alert">{error}</p>}
+          {!view && !error && <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status"><Spinner aria-hidden="true" /> Loading providers…</p>}
           {view && !view.canEdit && (
             <p className="text-muted-foreground text-sm">
               Keys can only be changed on the computer running Mivra. There, open this panel or run <code>mivra auth set &lt;provider&gt;</code>.
@@ -84,10 +87,12 @@ function ProviderRow({ provider, canEdit, onChange }: { provider: ProviderKey; c
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [activity, setActivity] = useState("");
   const [status, setStatus] = useState<Status>();
   const inputId = `provider-key-${provider.id}`;
 
   const check = async () => {
+    setActivity("Checking the key…");
     setBusy(true);
     setStatus(undefined);
     const result = await checkProviderKey(provider.id);
@@ -99,6 +104,7 @@ function ProviderRow({ provider, canEdit, onChange }: { provider: ProviderKey; c
   const save = async (e: FormEvent) => {
     e.preventDefault();
     if (!draft.trim()) return;
+    setActivity("Saving the key…");
     setBusy(true);
     setStatus(undefined);
     const result = await saveProviderKey(provider.id, draft);
@@ -112,6 +118,7 @@ function ProviderRow({ provider, canEdit, onChange }: { provider: ProviderKey; c
   };
 
   const remove = async () => {
+    setActivity("Removing the key…");
     setBusy(true);
     setStatus(undefined);
     const result = await removeProviderKey(provider.id);
@@ -138,7 +145,7 @@ function ProviderRow({ provider, canEdit, onChange }: { provider: ProviderKey; c
           Get a key <ExternalLink className="size-3" aria-hidden />
         </a>
       </div>
-      <p className="text-muted-foreground text-xs">
+      <p id={`${inputId}-source`} className="text-muted-foreground text-xs">
         {provider.source === "env"
           ? `Set by ${details.env}${hint}. Change it there.`
           : provider.source === "saved"
@@ -146,28 +153,35 @@ function ProviderRow({ provider, canEdit, onChange }: { provider: ProviderKey; c
             : `Not set. ${details.note}`}
       </p>
       {showForm ? (
-        <form onSubmit={save} className="flex gap-2">
-          <label htmlFor={inputId} className="sr-only">
-            {provider.label} API key
-          </label>
-          <Input
-            id={inputId}
-            type="password"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="Paste your API key"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            disabled={busy}
-          />
-          <Button type="submit" disabled={busy || !draft.trim()}>
-            Save
-          </Button>
-          {editing && (
-            <Button type="button" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>
-              Cancel
-            </Button>
-          )}
+        <form onSubmit={save}>
+          <Field data-invalid={status?.kind === "error"}>
+            <FieldLabel htmlFor={inputId}>{provider.label} API key</FieldLabel>
+            <FieldDescription id={`${inputId}-description`}>Paste a key from your {provider.label} account.</FieldDescription>
+            <div className="flex flex-wrap gap-2">
+              <Input
+                className="min-w-0 flex-[1_1_10rem]"
+                aria-describedby={`${inputId}-source ${inputId}-description${status ? ` ${inputId}-status` : ""}`}
+                aria-invalid={status?.kind === "error"}
+                id={inputId}
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="Paste your API key"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                disabled={busy}
+              />
+              <Button type="submit" disabled={busy || !draft.trim()}>
+                {busy ? "Saving…" : "Save"}
+              </Button>
+              {editing && (
+                <Button type="button" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>
+                  Cancel
+                </Button>
+              )}
+            </div>
+            {status?.kind === "error" && <FieldError id={`${inputId}-status`}>{status.text}</FieldError>}
+          </Field>
         </form>
       ) : (
         provider.source !== null && (
@@ -188,7 +202,8 @@ function ProviderRow({ provider, canEdit, onChange }: { provider: ProviderKey; c
           </div>
         )
       )}
-      {status && <p className={status.kind === "ok" ? "text-success text-sm" : "text-destructive text-sm"}>{status.text}</p>}
+      {busy && <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status"><Spinner aria-hidden="true" /> {activity}</p>}
+      {status && !(showForm && status.kind === "error") && <p id={`${inputId}-status`} className={status.kind === "ok" ? "text-success text-sm" : "text-destructive text-sm"}>{status.text}</p>}
     </section>
   );
 }

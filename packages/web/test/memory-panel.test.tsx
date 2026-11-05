@@ -35,7 +35,7 @@ describe("MemoryPanel", () => {
 
   it("says so when there is nothing yet, and shows load errors", async () => {
     openPanel(json([]));
-    expect(await screen.findByText("Nothing yet.")).toBeTruthy();
+    expect(await screen.findByText("No memories yet")).toBeTruthy();
   });
 
   it("shows the server's error when loading fails", async () => {
@@ -80,7 +80,10 @@ describe("MemoryPanel", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Memory text" }), { target: { value: "Draft" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Memory not found")).toBeTruthy();
-    expect((screen.getByRole("textbox", { name: "Memory text" }) as HTMLTextAreaElement).value).toBe("Draft");
+    const input = screen.getByRole("textbox", { name: "Memory text" });
+    expect((input as HTMLTextAreaElement).value).toBe("Draft");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")?.split(" ").map((id) => document.getElementById(id)?.textContent)).toContain("Memory not found");
   });
 
   it("asks before deleting, and removes the entry once deleted", async () => {

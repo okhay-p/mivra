@@ -1,5 +1,9 @@
 import type { MemoryKind, MemoryView } from "@mivra/protocol";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useState, type FormEvent } from "react";
+import { Brain } from "lucide-react";
+import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
+import { Field, FieldLabel, FieldDescription, FieldError } from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -55,7 +59,17 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
         </SheetHeader>
         <div className="flex flex-col gap-5 px-4 pb-4" aria-live="polite">
           {error && <p className="text-destructive text-sm">{error}</p>}
-          {memories?.length === 0 && <p className="text-muted-foreground text-sm">Nothing yet.</p>}
+          {!memories && !error && <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status"><Spinner aria-hidden="true" /> Loading memories…</p>}
+          {memories?.length === 0 && (
+            <Empty className="border p-6 md:p-6">
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><Brain aria-hidden="true" /></EmptyMedia>
+                <EmptyTitle>No memories yet</EmptyTitle>
+                <EmptyDescription>Start a conversation or course. As you learn, Mivra can remember your goals, preferences and concepts to revisit.</EmptyDescription>
+              </EmptyHeader>
+              <EmptyContent><Button variant="outline" onClick={() => onOpenChange(false)}>Back to learning</Button></EmptyContent>
+            </Empty>
+          )}
           {memories &&
             SECTIONS.map(({ kind, title }) => {
               const entries = memories.filter((m) => m.kind === kind);
@@ -90,6 +104,7 @@ function MemoryEntry({
   onChange: (memory: MemoryView) => void;
   onDelete: () => void;
 }) {
+  const inputId = useId();
   const [mode, setMode] = useState<"view" | "edit" | "confirm-delete">("view");
   const [draft, setDraft] = useState(memory.text ?? "");
   const [busy, setBusy] = useState(false);
@@ -118,10 +133,16 @@ function MemoryEntry({
     <li className="flex flex-col gap-2 rounded-lg border p-3 text-sm wrap-anywhere">
       {mode === "edit" ? (
         <form onSubmit={save} className="flex flex-col gap-2">
-          <Textarea aria-label="Memory text" value={draft} maxLength={300} onChange={(e) => setDraft(e.target.value)} autoFocus />
+          <Field data-invalid={Boolean(error)}>
+            <FieldLabel htmlFor={inputId}>Memory text</FieldLabel>
+            <Textarea id={inputId} aria-describedby={`${inputId}-description${error ? ` ${inputId}-error` : ""}`} aria-invalid={Boolean(error)} value={draft} maxLength={300} onChange={(e) => setDraft(e.target.value)} autoFocus />
+            <FieldDescription id={`${inputId}-description`}>Correct what Mivra should remember. Up to 300 characters.</FieldDescription>
+            {error && <FieldError id={`${inputId}-error`} role="alert">{error}</FieldError>}
+          </Field>
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={busy || !draft.trim()}>
-              Save
+              {busy && <Spinner aria-hidden="true" />}
+              {busy ? "Saving…" : "Save"}
             </Button>
             <Button
               type="button"
@@ -177,7 +198,7 @@ function MemoryEntry({
           )}
         </>
       )}
-      {error && <p className="text-destructive">{error}</p>}
+      {error && mode !== "edit" && <p className="text-destructive" role="alert">{error}</p>}
     </li>
   );
 }

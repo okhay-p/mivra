@@ -1,5 +1,6 @@
+import { Spinner } from "@/components/ui/spinner";
 import type { ArtifactView, CourseLessonsView, LessonView } from "@mivra/protocol";
-import { Check, CircleDashed, CornerUpLeft, HelpCircle, Loader2, Pencil } from "lucide-react";
+import { Check, CircleDashed, CornerUpLeft, HelpCircle, Pencil } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -84,7 +85,7 @@ export function TopicList({
                   {status === "finished" ? (
                     <Check className="text-success size-4" />
                   ) : status === "generating" ? (
-                    <Loader2 className="size-4 animate-spin" />
+                    <Spinner aria-hidden="true" />
                   ) : (
                     <CircleDashed className="size-4" />
                   )}
@@ -156,7 +157,7 @@ export function LessonPage({
   }, [hasLesson, focusSectionId]);
 
   if (!lesson) {
-    return error ? <p className="text-destructive m-auto p-6">{error}</p> : <p className="text-muted-foreground m-auto p-6">Loading the lesson…</p>;
+    return error ? <p className="text-destructive m-auto p-6">{error}</p> : <p className="text-muted-foreground m-auto flex items-center gap-2 p-6" role="status"><Spinner aria-hidden="true" /> Loading the lesson…</p>;
   }
 
   const generating = lesson.status === "generating";
@@ -190,7 +191,7 @@ export function LessonPage({
 
       {!lesson.outline && generating && (
         <p className="text-muted-foreground flex items-center gap-2" role="status">
-          <Loader2 className="size-4 animate-spin" aria-hidden /> Planning the lesson…
+          <Spinner aria-hidden="true" /> Planning the lesson…
         </p>
       )}
 
@@ -257,7 +258,7 @@ export function LessonPage({
             {i === 0 ? (
               <>
                 <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status">
-                  <Loader2 className="size-4 animate-spin" aria-hidden /> Writing…
+                  <Spinner aria-hidden="true" /> Writing…
                 </p>
                 <Skeleton className="h-16 w-full" />
               </>

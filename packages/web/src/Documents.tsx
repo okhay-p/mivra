@@ -1,7 +1,9 @@
 import { MAX_DOCUMENT_BYTES, type DocumentView } from "@mivra/protocol";
-import { FileText, LoaderCircle, Paperclip, X } from "lucide-react";
+import { FileText, Paperclip, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { deleteDocument, listDocuments, uploadDocument } from "./api.js";
+import { Spinner } from "@/components/ui/spinner";
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 
 const NOT_READ = "Only text is read: images and diagrams aren't, and formulas may come through garbled.";
@@ -115,9 +117,16 @@ export function AttachButton({ documents: { uploading, upload } }: { documents: 
           if (file) void upload(file);
         }}
       />
-      <Button type="button" variant="outline" size="icon" aria-label="Attach a PDF or PowerPoint file" title={`Attach a PDF or PowerPoint file. ${NOT_READ}`} disabled={uploading !== undefined} onClick={() => input.current?.click()}>
-        {uploading !== undefined ? <LoaderCircle className="animate-spin" /> : <Paperclip />}
-      </Button>
+      <TooltipProvider delayDuration={400}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button type="button" variant="ghost" size="icon" aria-label="Attach a PDF or PowerPoint file" disabled={uploading !== undefined} onClick={() => input.current?.click()}>
+              {uploading !== undefined ? <Spinner aria-hidden="true" /> : <Paperclip aria-hidden="true" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Attach a PDF or PowerPoint file</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </>
   );
 }
@@ -138,16 +147,23 @@ export function DocumentChips({ documents: { documents: allDocuments, uploading,
                 {document.filename}
               </span>
               <span className="text-muted-foreground shrink-0 text-xs">{pageLabel(document)}</span>
-              <Button type="button" variant="ghost" size="icon" className="size-6" aria-label={`Remove ${document.filename}`} onClick={() => void remove(document.id)}>
-                <X />
-              </Button>
+              <TooltipProvider delayDuration={400}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button type="button" variant="ghost" size="icon" className="size-6" aria-label={`Remove ${document.filename}`} onClick={() => void remove(document.id)}>
+                      <X aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Remove attachment</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
             </li>
           ))}
         </ul>
       )}
       {uploading !== undefined && (
-        <p role="status" className="text-muted-foreground truncate">
-          Reading {uploading}…
+        <p role="status" className="text-muted-foreground flex min-w-0 items-center gap-2">
+          <Spinner aria-hidden="true" /><span className="truncate">Reading {uploading}…</span>
         </p>
       )}
       {error && (
