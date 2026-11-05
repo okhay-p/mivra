@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,6 +84,37 @@ describe("opening the database", () => {
     expect(kept).toHaveLength(KEEP_BACKUPS);
     // Timestamps sort in order, so the oldest went first.
     expect(kept).toEqual([...kept].sort());
+  });
+
+  it("keeps the new backup even when older ones are dated later", () => {
+    const dataDir = tempDir();
+    const path = oldDatabase(dataDir);
+    // Backups from a clock that ran ahead, or restored from another machine.
+    mkdirSync(join(dataDir, "backups"));
+    for (let i = 0; i < KEEP_BACKUPS + 2; i++) writeFileSync(join(dataDir, "backups", `mivra-2099-01-01T00-00-0${i}-000Z.db`), "");
+    const backups: string[] = [];
+    openDb(path, { onBackup: (p) => backups.push(p), clock }).$client.close();
+    expect(existsSync(backups[0]!)).toBe(true);
+    expect(backupsIn(dataDir)).toHaveLength(KEEP_BACKUPS);
+  });
+
+  it("never deletes a copy the learner put in the backups folder", () => {
+    const dataDir = tempDir();
+    const path = join(dataDir, "mivra.db");
+    mkdirSync(join(dataDir, "backups"));
+    const mine = ["mivra-2020-manual.db", "mivra-before-exam.db", "notes.txt"];
+    for (const f of mine) writeFileSync(join(dataDir, "backups", f), "mine");
+    for (let count = 1; count <= journal.entries.length; count++) openDb(path, { migrationsFolder: olderMigrations(count), clock }).$client.close();
+    for (const f of mine) expect(readFileSync(join(dataDir, "backups", f), "utf8")).toBe("mine");
+    expect(backupsIn(dataDir).filter((f) => !mine.includes(f))).toHaveLength(KEEP_BACKUPS);
+  });
+
+  it("keeps backups private", () => {
+    const dataDir = tempDir();
+    const backups: string[] = [];
+    openDb(oldDatabase(dataDir), { onBackup: (p) => backups.push(p), clock }).$client.close();
+    expect(statSync(join(dataDir, "backups")).mode & 0o777).toBe(0o700);
+    expect(statSync(backups[0]!).mode & 0o777).toBe(0o600);
   });
 
   it("refuses a database a newer Mivra migrated, and leaves it untouched", () => {

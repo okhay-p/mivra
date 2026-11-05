@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
@@ -36,16 +36,21 @@ function backupBeforeMigrating(sqlite: Database.Database, path: string, migratio
   if (lastApplied > newestKnown) throw new NewerDatabaseError(path);
   if (!known.some((m) => m.folderMillis > lastApplied)) return undefined;
 
+  // Private from the start: the folder is 0700, so a copy is never readable by other users, even before its chmod.
   const dir = join(dirname(path), "backups");
-  mkdirSync(dir, { recursive: true });
-  const stamp = clock().toISOString().replace(/[:.]/g, "-");
-  const target = join(dir, `${basename(path, ".db")}-${stamp}.db`);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  const name = basename(path, ".db");
+  const target = join(dir, `${name}-${clock().toISOString().replace(/[:.]/g, "-")}.db`);
   // VACUUM INTO writes a consistent copy, WAL included, in one statement. If it fails, nothing is migrated.
   sqlite.prepare("VACUUM INTO ?").run(target);
+  chmodSync(target, 0o600);
 
-  const name = basename(path, ".db");
-  const backups = readdirSync(dir).filter((f) => f.startsWith(`${name}-`) && f.endsWith(".db")).sort();
-  for (const old of backups.slice(0, Math.max(0, backups.length - KEEP_BACKUPS))) rmSync(join(dir, old), { force: true });
+  // Only Mivra's own backups (exactly its timestamped names) are ever deleted, never the one just made, and never a
+  // copy the learner put here. Names sort by time.
+  const generated = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z\\.db$`);
+  const older = readdirSync(dir).filter((f) => generated.test(f) && f !== basename(target)).sort();
+  for (const old of older.slice(0, Math.max(0, older.length - (KEEP_BACKUPS - 1)))) rmSync(join(dir, old), { force: true });
   return target;
 }
 
