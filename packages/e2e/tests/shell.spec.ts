@@ -216,3 +216,22 @@ test.describe("markdown and maths", () => {
     await expect(reply).toContainText(`${">".repeat(2000)} deep`);
   });
 });
+
+
+test("the composer keeps keyboard sending and attachment help accessible", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New session" }).first().click();
+  await expect(page.getByText("Start a conversation", { exact: true })).toBeVisible();
+  const composer = page.getByRole("group", { name: "Message composer", exact: true });
+  const attach = composer.getByRole("button", { name: "Attach a PDF or PowerPoint file" });
+  await attach.focus();
+  await expect(page.getByRole("tooltip")).toHaveText("Attach a PDF or PowerPoint file");
+  // Padding next to Attach should focus Message, even though a hidden file input comes first.
+  await composer.locator('[data-slot="input-group-addon"]').first().click({ position: { x: 2, y: 2 } });
+  const message = composer.getByRole("textbox", { name: "Message", exact: true });
+  await expect(message).toBeFocused();
+  await message.fill("hello from the composer");
+  await message.press("Enter");
+  await expect(page.locator('[data-message-role="user"]')).toHaveText("hello from the composer");
+  await expect(page.getByText("Start a conversation", { exact: true })).toHaveCount(0);
+});

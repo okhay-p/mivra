@@ -20,7 +20,9 @@ import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
+import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
@@ -786,6 +788,15 @@ function Chat({
             if (e.key !== "Tab" && (e.target as HTMLElement).closest("button, input, [role=region]")) conversation.stopScroll();
           }}>
 
+          {messages.length === 0 && !busy && (
+            <Empty className="my-auto">
+              <EmptyHeader>
+                <EmptyMedia variant="icon"><MessagesSquare aria-hidden="true" /></EmptyMedia>
+                <EmptyTitle>Start a conversation</EmptyTitle>
+                <EmptyDescription>Ask a question, explore a concept or attach course notes to learn from.</EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          )}
           {interviewEnd >= 0 && !showInterview && (
             <Button variant="ghost" size="sm" className="text-muted-foreground self-center" onClick={() => setShowInterview(true)}>
               Show the placement interview
@@ -845,7 +856,7 @@ function Chat({
               )}
             </div>
           ))}
-          {status === "submitted" && <p className="text-muted-foreground">Thinking…</p>}
+          {status === "submitted" && <p className="text-muted-foreground flex items-center gap-2" role="status"><Spinner aria-hidden="true" /> Thinking…</p>}
           {stopError && <p className="text-destructive">{stopError}</p>}
           {(error || continuationFailure) && <p className="text-destructive">{error ? readableError(error) : continuationFailure}</p>}
         </ConversationContent>
@@ -853,38 +864,44 @@ function Chat({
       </Conversation>
       <form onSubmit={submit} className="border-t">
         <DocumentChips documents={documents} />
-        <div className="mx-auto flex max-w-3xl gap-2 p-3">
-          <AttachButton documents={documents} />
-          <Input
-            ref={messageInput}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={placeholder}
-            aria-label="Message"
-            autoFocus
-          />
-          {busy ? (
-            <Button type="button" variant="secondary" onClick={async (event) => {
-              const stopButton = event.currentTarget;
-              const restoreFocus = document.activeElement === stopButton;
-              try {
-                if (stopRequested.current) return;
-                stopRequested.current = true;
-                const messageId = continuationStopId.current ?? messages.findLast((message) => message.role === "user")?.id;
-                if (!messageId) return;
-                const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
-                // Disabling Send can blur Stop before this request resolves. Restore only
-                // its focus, and leave any element the learner moved to alone.
-                if (result.ok && restoreFocus && (document.activeElement === stopButton || document.activeElement === document.body)) {
-                  messageInput.current?.focus();
-                }
-                if (!result.ok) stopRequested.current = false;
-                if (!result.ok) setStopError("Couldn’t stop the reply. Try again.");
-              } catch { stopRequested.current = false; setStopError("Couldn’t stop the reply. Try again."); }
-            }}>Stop</Button>
-          ) : (
-            <Button type="submit" disabled={!input.trim()}>Send</Button>
-          )}
+        <div className="mx-auto w-full max-w-3xl p-3">
+          <InputGroup className="h-auto min-h-11" aria-label="Message composer">
+            <InputGroupAddon align="inline-start">
+              <AttachButton documents={documents} />
+            </InputGroupAddon>
+            <InputGroupInput
+              ref={messageInput}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={placeholder}
+              aria-label="Message"
+              autoFocus
+            />
+            <InputGroupAddon align="inline-end">
+              {busy ? (
+                <Button type="button" variant="secondary" onClick={async (event) => {
+                  const stopButton = event.currentTarget;
+                  const restoreFocus = document.activeElement === stopButton;
+                  try {
+                    if (stopRequested.current) return;
+                    stopRequested.current = true;
+                    const messageId = continuationStopId.current ?? messages.findLast((message) => message.role === "user")?.id;
+                    if (!messageId) return;
+                    const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
+                    // Disabling Send can blur Stop before this request resolves. Restore only
+                    // its focus, and leave any element the learner moved to alone.
+                    if (result.ok && restoreFocus && (document.activeElement === stopButton || document.activeElement === document.body)) {
+                      messageInput.current?.focus();
+                    }
+                    if (!result.ok) stopRequested.current = false;
+                    if (!result.ok) setStopError("Couldn’t stop the reply. Try again.");
+                  } catch { stopRequested.current = false; setStopError("Couldn’t stop the reply. Try again."); }
+                }}>Stop</Button>
+              ) : (
+                <Button type="submit" disabled={!input.trim()}>Send</Button>
+              )}
+            </InputGroupAddon>
+          </InputGroup>
         </div>
         <div className="mx-auto flex max-w-3xl px-3 pb-2">
           <ModelPicker state={modelPicker} />

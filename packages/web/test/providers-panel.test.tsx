@@ -68,6 +68,10 @@ describe("ProvidersPanel", () => {
     openPanel({}, json(view()), json({ error: "That's too short to be an API key" }, 400));
     fireEvent.change(await screen.findByLabelText("OpenAI API key"), { target: { value: "short" } });
     fireEvent.click(screen.getAllByRole("button", { name: "Save" })[2]!);
-    expect(await screen.findByText("That's too short to be an API key")).toBeTruthy();
+    const error = await screen.findByText("That's too short to be an API key");
+    const input = screen.getByLabelText("OpenAI API key");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")?.split(" ")).toContain(error.id);
+    expect((input as HTMLInputElement).value).toBe("short");
   });
 });
