@@ -69,7 +69,7 @@ To try the image before a release, run `npm pack` in `packages/mivra` with `--pa
 To check a release before tagging, run the workflow by hand from the Actions tab with **dry-run** on (the default). It builds everything and runs `npm publish --dry-run`, then builds the image without pushing it. Only a tag publishes.
 
 One-time setup, on the owner's accounts:
-- **npm:** under the package's Settings → Trusted publishing, add GitHub Actions with owner `okhay-p`, repository `mivra`, workflow `release.yml` and environment `release`.
+- **npm:** under the package's Settings → Trusted publishing, add GitHub Actions with owner `okhay-p`, repository `mivra`, workflow `release.yml` and environment `release`. A new trusted publisher only allows staged publishing by default, so also allow direct `npm publish`, or the workflow's publish fails. The setup expires if no release publishes through it within two days, so push the next tag soon after (or set it up again then).
 - **GHCR:** in the `mivra` package's settings, under Manage Actions access, add the `okhay-p/mivra` repository with the Write role. The package was first pushed by hand, so the workflow's `GITHUB_TOKEN` can't push to it otherwise.
 - **Optional:** in the repo's Settings → Environments → `release`, add yourself as a required reviewer, so each release waits for your approval.
 

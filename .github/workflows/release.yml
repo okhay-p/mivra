@@ -116,8 +116,10 @@ jobs:
             echo "spec=$PACKAGE@latest" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          for _ in $(seq 1 60); do
-            if [ "$(npm view "$PACKAGE@$VERSION" version --prefer-online 2>/dev/null)" = "$VERSION" ]; then
+          # An overall deadline, and short single requests, so a struggling registry can't stretch it.
+          deadline=$((SECONDS + 600))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            if [ "$(npm view "$PACKAGE@$VERSION" version --prefer-online --fetch-timeout=20000 --fetch-retries=0 2>/dev/null)" = "$VERSION" ]; then
               echo "spec=$PACKAGE@$VERSION" >> "$GITHUB_OUTPUT"
               exit 0
             fi
