@@ -118,6 +118,27 @@ describe("signing in with ChatGPT", () => {
     expect((await visit(ctx.auth.approve(started.url))).status).toBe(200);
   });
 
+  it("stays pending until the code is exchanged, so a client polling meanwhile keeps waiting", async () => {
+    const auth = fakeAuth();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const slowFetch: typeof fetch = async (input, init) => {
+      if (String(input).endsWith("/oauth/token")) await held;
+      return auth.fetch(input, init);
+    };
+    const session = createChatGptSession({ store: memoryChatGptStore(), oauth: createOAuthClient({ fetch: slowFetch }), callbackPort: 0 });
+    sessions.push(session);
+    const started = await session.startSignIn();
+    const page = visit(auth.approve(started.url));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(session.view()).toMatchObject({ signedIn: false, pending: true });
+    // The code is claimed: a pasted copy of the same address isn't exchanged twice.
+    await expect(session.completeSignIn(auth.approve(started.url))).rejects.toThrow("No sign-in is waiting");
+    release();
+    expect((await page).status).toBe(200);
+    expect(session.view()).toMatchObject({ signedIn: true, pending: false });
+  });
+
   it("refuses a sign-in that doesn't grant use of the plan", async () => {
     const ctx = setup({ scope: "openid profile email offline_access" });
     const { page, view } = await signIn(ctx);

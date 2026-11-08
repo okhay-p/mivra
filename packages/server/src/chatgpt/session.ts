@@ -121,7 +121,10 @@ export interface ChatGptSessionOptions {
 interface Pending {
   auth: Authorization;
   server: Server;
+  /** Finished, failed, timed out or cancelled: no longer pending. */
   settled: boolean;
+  /** A callback has been accepted and its code is being exchanged: still pending, but no second callback. */
+  claimed: boolean;
   finish(result: ChatGptView): void;
   timer: NodeJS.Timeout;
 }
@@ -293,6 +296,7 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
         auth,
         server,
         settled: false,
+        claimed: false,
         finish: resolveDone,
         timer: setTimeout(() => {
           if (current.settled) return;
@@ -315,7 +319,7 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
           // A malformed target (`//[/`, say) must not take the server down.
         }
         // Only the browser coming back to this exact address; anything else on the port is ignored.
-        if (!url || request.method !== "GET" || request.headers.host !== `127.0.0.1:${port}` || url.pathname !== CALLBACK_PATH || current.settled) {
+        if (!url || request.method !== "GET" || request.headers.host !== `127.0.0.1:${port}` || url.pathname !== CALLBACK_PATH || current.settled || current.claimed) {
           response.writeHead(404).end("Not found");
           return;
         }
@@ -338,8 +342,9 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
           reply(result);
           return;
         }
-        // Settle at once so a second request can't exchange the same code.
-        current.settled = true;
+        // Claim it at once so a second request can't exchange the same code. It stays pending until the
+        // exchange is done, so a client polling meanwhile keeps waiting.
+        current.claimed = true;
         void finish(current, callback).then((result) => {
           reply(result);
           close(current);
@@ -354,7 +359,7 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
      */
     async completeSignIn(address: string): Promise<ChatGptView> {
       const current = pending;
-      if (!current || current.settled) throw new ChatGptError("no_sign_in", "No sign-in is waiting. Start one first.");
+      if (!current || current.settled || current.claimed) throw new ChatGptError("no_sign_in", "No sign-in is waiting. Start one first.");
       let params: URLSearchParams;
       try {
         const trimmed = address.trim();
@@ -373,7 +378,7 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
         current.finish(result);
         return result;
       }
-      current.settled = true;
+      current.claimed = true;
       try {
         return await finish(current, callback);
       } finally {
