@@ -34,6 +34,8 @@ Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first tim
 | `mivra auth status` / `mivra auth remove <provider>` | See where each key comes from, or remove a saved one |
 | `mivra import obsidian <folder>` | Import an Obsidian vault's notes into a running Mivra. Run it again after you've changed the vault to update it. `--name` names the import |
 
+You can also import a vault from the app: open **Imported notes** in the sidebar, choose the vault's folder, and re-import or delete it there later. On a phone or tablet that can't choose folders, upload a `.zip` of the vault instead.
+
 Mivra uses port 4096, or the next free one if that's taken. `--port <n>` asks for a specific port, and `--no-open` skips opening the browser.
 
 ## Docker

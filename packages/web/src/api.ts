@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryView, type PlacementAnswer } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, VaultImportResult, VaultImportView, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -106,6 +106,51 @@ export const deleteDocument = (id: string) =>
     () => api.documents[":id"].$delete({ param: { id } }),
     () => undefined,
   );
+
+export const listImports = () =>
+  request(
+    () => api.imports.$get(),
+    async (res) => VaultImportView.array().parse(await res.json()),
+  );
+
+export const deleteImport = (id: string) =>
+  request(
+    () => api.imports[":id"].$delete({ param: { id } }),
+    () => undefined,
+  );
+
+/** A new import with this name, or a re-import of an existing one. */
+export type ImportTarget = { name: string } | { importId: string };
+
+const tooLargeImport = `These notes come to more than ${MAX_VAULT_BYTES / (1024 * 1024)} MB, more than one import can take.`;
+
+/** Sent by hand so the body's size can be checked before it's sent: the server refuses one over the limit unread. */
+export const importVaultFiles = (target: ImportTarget, files: VaultFile[]) => {
+  const body = JSON.stringify("importId" in target ? { files } : { name: target.name, files });
+  if (new Blob([body]).size > MAX_VAULT_BYTES) return Promise.resolve({ ok: false as const, error: tooLargeImport });
+  return request(
+    () =>
+      "importId" in target
+        ? fetch(`/api/imports/${encodeURIComponent(target.importId)}/files`, { method: "PUT", headers: { ...authHeaders, "content-type": "application/json" }, body })
+        : fetch("/api/imports", { method: "POST", headers: { ...authHeaders, "content-type": "application/json" }, body }),
+    async (res) => VaultImportResult.parse(await res.json()),
+  );
+};
+
+/** Sent by hand: the typed client has no multipart body for these routes, which the server reads as a stream. */
+export const importVaultZip = (target: ImportTarget, file: File) => {
+  if (file.size > MAX_VAULT_BYTES) return Promise.resolve({ ok: false as const, error: `This zip is over the ${MAX_VAULT_BYTES / (1024 * 1024)} MB limit.` });
+  const body = new FormData();
+  if ("name" in target) body.append("name", target.name);
+  body.append("file", file);
+  return request(
+    () =>
+      "importId" in target
+        ? fetch(`/api/imports/${encodeURIComponent(target.importId)}/zip`, { method: "PUT", headers: authHeaders, body })
+        : fetch("/api/imports/zip", { method: "POST", headers: authHeaders, body }),
+    async (res) => VaultImportResult.parse(await res.json()),
+  );
+};
 
 /** Starts a course for a goal; the server creates its session too. */
 export const startCourse = (goal: string) =>
