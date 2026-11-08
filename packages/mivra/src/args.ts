@@ -8,6 +8,7 @@ export type Command =
   | { name: "auth-set"; provider: ProviderId; check: boolean }
   | { name: "auth-status" }
   | { name: "auth-remove"; provider: ProviderId }
+  | { name: "import-obsidian"; folder: string; importName?: string }
   | { name: "help" }
   | { name: "version" };
 
@@ -24,6 +25,8 @@ Commands:
     --no-check             Save without asking the provider whether the key works
   auth status              Show which providers have a key
   auth remove <provider>   Remove a saved key
+  import obsidian <folder> Import an Obsidian vault's notes into a running Mivra; run it again to re-import
+    --name <name>          Name the import (default: the folder's name)
 
 Providers: ${providerIds.join(", ")}
 Data lives in ~/.mivra, or MIVRA_DATA_DIR.`;
@@ -46,6 +49,7 @@ export function parseCommand(argv: string[]): Command {
       allowNegative: true,
       options: {
         port: { type: "string" },
+        name: { type: "string" },
         detach: { type: "boolean", default: false },
         open: { type: "boolean", default: true },
         check: { type: "boolean", default: true },
@@ -92,6 +96,11 @@ export function parseCommand(argv: string[]): Command {
         return { name: "auth-status" };
       }
       throw new UsageError(sub ? `Unknown auth command "${sub}". Use set, status or remove.` : "Use `mivra auth set|status|remove`.");
+    case "import":
+      if (sub !== "obsidian") throw new UsageError(sub ? `Unknown import source "${sub}". Use obsidian.` : "Use `mivra import obsidian <folder>`.");
+      if (!arg) throw new UsageError("Give the vault's folder: `mivra import obsidian <folder>`.");
+      tooMany(3);
+      return { name: "import-obsidian", folder: arg, ...(values.name === undefined ? {} : { importName: values.name }) };
     case "help":
       return { name: "help" };
     default:

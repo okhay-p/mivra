@@ -1,7 +1,25 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import type { LanguageModel } from "ai";
-import { AddToLesson, ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
+import {
+  AddToLesson,
+  ArtifactView,
+  CourseLessonsView,
+  CourseView,
+  DocumentView,
+  LessonView,
+  MAX_VAULT_BYTES,
+  MemoryEdit,
+  MemoryView,
+  NoteGraph,
+  NoteView,
+  StartCourse,
+  VaultImportInput,
+  VaultImportResult,
+  VaultImportView,
+  VaultSnapshotInput,
+} from "@mivra/protocol";
+import { bodyLimit } from "hono/body-limit";
 import { ApiKey, memoryCredentials, providerIds, type CredentialStore, type ProviderId } from "./credentials.js";
 import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
@@ -19,7 +37,9 @@ import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js
 import { courseLessons, createLessonGenerator, lessonRevision, lessonView, reconcileCompletion } from "./runtime/lessons.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
+import { importVault, importView, resolveGraph } from "./notes/vault-import.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
+import { createNoteStore, type NoteRow } from "./store/note-store.js";
 import { createSettingsStore } from "./store/settings-store.js";
 import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
 
@@ -463,6 +483,77 @@ const deleteDocument = createRoute({
   },
 });
 
+const ImportParams = z.object({ id: z.string() });
+
+const listImports = createRoute({
+  method: "get",
+  path: "/imports",
+  description: "Imported Obsidian vaults, oldest first (ADR-014).",
+  responses: {
+    200: { description: "The imports", content: { "application/json": { schema: z.array(VaultImportView) } } },
+  },
+});
+
+const createImport = createRoute({
+  method: "post",
+  path: "/imports",
+  description:
+    "Imports an Obsidian vault from its Markdown files. Only `.md` files outside hidden folders such as `.obsidian` are read; anything else is skipped and reported. No model runs: notes, links, tags and searchable chunks come from the text alone.",
+  request: { body: { content: { "application/json": { schema: VaultImportInput } } } },
+  responses: {
+    201: { description: "What the import stored", content: { "application/json": { schema: VaultImportResult } } },
+    400: errorResponse("Invalid files"),
+    409: errorResponse("An import with this name already exists"),
+    413: errorResponse("Request too large"),
+  },
+});
+
+const replaceImportFiles = createRoute({
+  method: "put",
+  path: "/imports/{id}/files",
+  description: "Re-imports a vault as a snapshot: changed notes are rewritten, new ones added, and notes no longer sent removed. Unchanged notes are left as they are.",
+  request: { params: ImportParams, body: { content: { "application/json": { schema: VaultSnapshotInput } } } },
+  responses: {
+    200: { description: "What the re-import changed", content: { "application/json": { schema: VaultImportResult } } },
+    400: errorResponse("Invalid files"),
+    404: errorResponse("Unknown import"),
+    413: errorResponse("Request too large"),
+  },
+});
+
+const deleteImport = createRoute({
+  method: "delete",
+  path: "/imports/{id}",
+  description: "Removes an import and all of its notes from storage and search.",
+  request: { params: ImportParams },
+  responses: {
+    204: { description: "Deleted" },
+    404: errorResponse("Unknown import"),
+  },
+});
+
+const getImportGraph = createRoute({
+  method: "get",
+  path: "/imports/{id}/graph",
+  description: "An import's notes and the links between them. Links to notes that aren't in the vault have `to: null`.",
+  request: { params: ImportParams },
+  responses: {
+    200: { description: "The graph", content: { "application/json": { schema: NoteGraph } } },
+    404: errorResponse("Unknown import"),
+  },
+});
+
+const getNote = createRoute({
+  method: "get",
+  path: "/notes/{id}",
+  description: "One imported note. Notes are read-only: they change only when their vault is imported again.",
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: "The note", content: { "application/json": { schema: NoteView } } },
+    404: errorResponse("Unknown note"),
+  },
+});
+
 const attachErrorStatus = { not_found: 404, bad_request: 400, limit: 409, too_large: 413, wrong_type: 415, unreadable: 422, busy: 429 } as const satisfies Record<
   AttachError["kind"],
   number
@@ -524,6 +615,19 @@ function toMemoryJson(row: MemoryRow & { held: boolean }): MemoryView {
   };
 }
 
+function toNoteJson(row: NoteRow & { tags: string[] }): NoteView {
+  return {
+    id: row.id,
+    importId: row.importId,
+    path: row.path,
+    title: row.title,
+    aliases: row.aliases,
+    tags: row.tags,
+    body: row.body,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
 function toDocumentJson(row: DocumentRow): DocumentView {
   return {
     id: row.id,
@@ -566,8 +670,17 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   };
   const attachDocument = createDocumentAttacher({ store, ...(extractDocument ? { extract: extractDocument } : {}) });
 
+  const noteStore = createNoteStore(db);
+
   const base = new OpenAPIHono();
   base.openAPIRegistry.registerPath(uploadDocument);
+  // A vault arrives as one JSON body; refuse anything larger before it's read, let alone parsed.
+  const vaultBodyLimit = bodyLimit({
+    maxSize: MAX_VAULT_BYTES,
+    onError: (c) => c.json({ error: `An import can send at most ${MAX_VAULT_BYTES / (1024 * 1024)} MB. Leave attachments out, or import the vault in parts.` }, 413),
+  });
+  base.use("/imports", vaultBodyLimit);
+  base.use("/imports/:id/files", vaultBodyLimit);
   const api = base
     .openapi(health, (c) => c.json({ ok: true as const }, 200))
     .openapi(listSessions, (c) => c.json(store.listSessions().map(toSessionJson), 200))
@@ -752,6 +865,27 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .openapi(deleteDocument, (c) =>
       store.deleteDocument(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Document not found" }, 404),
     )
+    .openapi(listImports, (c) => c.json(noteStore.listImports().map(importView), 200))
+    .openapi(createImport, async (c) => {
+      const outcome = await importVault(noteStore, c.req.valid("json"));
+      if (!outcome.ok) return c.json({ error: outcome.message }, 409);
+      return c.json(outcome.result, 201);
+    })
+    .openapi(replaceImportFiles, async (c) => {
+      const outcome = await importVault(noteStore, { importId: c.req.valid("param").id, files: c.req.valid("json").files });
+      if (!outcome.ok) return c.json({ error: outcome.message }, 404);
+      return c.json(outcome.result, 200);
+    })
+    .openapi(deleteImport, (c) => (noteStore.deleteImport(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Import not found" }, 404)))
+    .openapi(getImportGraph, (c) => {
+      const { id } = c.req.valid("param");
+      if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
+      return c.json(resolveGraph(noteStore.importGraph(id)), 200);
+    })
+    .openapi(getNote, (c) => {
+      const note = noteStore.findNote(c.req.valid("param").id);
+      return note ? c.json(toNoteJson(note), 200) : c.json({ error: "Note not found" }, 404);
+    })
     .post("/sessions/:id/documents", async (c) => {
       const result = await attachDocument(
         c.req.param("id"),

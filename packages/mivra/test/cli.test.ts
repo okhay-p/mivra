@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -101,11 +101,34 @@ describe("mivra", () => {
     const upload = await fetch(`${url}/api/sessions/${session.id}/documents`, { method: "POST", headers, body });
     expect(upload.status, await upload.clone().text()).toBe(201);
 
+    // An Obsidian vault: config and symlinks are left behind, and running it again re-imports.
+    const vault = join(dir, "My Vault");
+    mkdirSync(join(vault, ".obsidian"), { recursive: true });
+    mkdirSync(join(vault, "CS"));
+    writeFileSync(join(vault, "Recursion.md"), "Calls itself. See [[Stack]]. #cs");
+    writeFileSync(join(vault, "CS", "Stack.md"), "LIFO.");
+    writeFileSync(join(vault, ".obsidian", "app.md"), "config");
+    writeFileSync(join(dir, "outside.md"), "secret outside the vault");
+    symlinkSync(join(dir, "outside.md"), join(vault, "Linked.md"));
+    const first = run(dir, ["import", "obsidian", vault]);
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.stdout).toContain('Imported "My Vault": 2 added, 0 updated, 0 removed, 0 unchanged. 2 notes in all.');
+    writeFileSync(join(vault, "CS", "Stack.md"), "LIFO, used by [[Recursion]].");
+    const again = run(dir, ["import", "obsidian", vault]);
+    expect(again.stdout, again.stderr).toContain('Re-imported "My Vault": 0 added, 1 updated, 0 removed, 1 unchanged.');
+    const imports = (await (await fetch(`${url}/api/imports`, { headers })).json()) as { id: string }[];
+    const graph = (await (await fetch(`${url}/api/imports/${imports[0]!.id}/graph`, { headers })).json()) as { notes: { path: string }[]; links: { to: string | null }[] };
+    expect(graph.notes.map((n) => n.path)).toEqual(["CS/Stack.md", "Recursion.md"]);
+    expect(graph.links.every((l) => l.to !== null)).toBe(true);
+    expect(run(dir, ["import", "obsidian", join(dir, "missing")]).stderr).toContain("doesn't exist");
+
     const stop = run(dir, ["stop"]);
     expect(stop.stdout).toContain("Mivra stopped.");
+    expect(run(dir, ["import", "obsidian", vault]).stderr).toContain("Mivra isn't running.");
     expect(existsSync(join(dir, "mivra.pid"))).toBe(false);
     expect(run(dir, ["status"]).stdout).toContain("isn't running");
-  });
+    // Many CLI runs, each a new Node process: slow on a loaded machine.
+  }, 180_000);
 
   it("stops cleanly on Ctrl+C in the foreground", async () => {
     const dir = dataDir();
