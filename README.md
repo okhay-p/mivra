@@ -53,7 +53,7 @@ Docker is also the easiest route on systems Mivra has no prebuilt database drive
 
 - Everything is stored in `~/.mivra` (set `MIVRA_DATA_DIR` to move it). Before an update changes the database, Mivra saves a backup in `~/.mivra/backups` and keeps the latest five.
 - API keys are saved in `~/.mivra/credentials.json`, readable only by you, and are never sent back to the browser. Keys in `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` take precedence over saved ones.
-- What reaches the model provider: your conversation, a short summary of your recent progress and saved notes, and excerpts of any documents you've attached that are relevant to your question. Uploaded files themselves aren't kept: Mivra extracts their text on your computer and stores only that.
+- What reaches the model provider: your conversation, a short summary of your recent progress and saved notes, excerpts of any documents you've attached that are relevant to your question, and excerpts of your imported notes that match your latest message, with their titles and the titles of notes they link to. Uploaded files themselves aren't kept: Mivra extracts their text on your computer and stores only that.
 - An imported Obsidian vault is copied into Mivra's database: only its Markdown notes, never attachments or the `.obsidian` folder. Mivra never writes to the vault.
 - Mivra listens on `127.0.0.1` only, and every request needs a private access token, so other devices and websites can't reach it.
 
