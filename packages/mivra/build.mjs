@@ -101,7 +101,9 @@ function thirdPartyNotices() {
   if (missing.length) {
     throw new Error(`No license text for ${missing.join(", ")}. Add the upstream license to packages/mivra/notices/ (see its README).`);
   }
-  return `# Third-party notices\n\nMivra is MIT-licensed (see LICENSE). It bundles code from these packages, under their own licenses.\n\n${sections.join("\n")}`;
+  // The ChatGPT mark on the "Continue with ChatGPT" button is a trademark, not code under a license (ADR-015).
+  const trademarks = "## Trademarks\n\nChatGPT and the ChatGPT logo are trademarks of OpenAI. The web UI uses the mark from OpenAI's approved Sign in with ChatGPT button assets, only on that button and the plan-usage labels, as OpenAI's brand guidelines (https://openai.com/brand/) allow. Mivra is not affiliated with or endorsed by OpenAI.\n";
+  return `# Third-party notices\n\nMivra is MIT-licensed (see LICENSE). It bundles code from these packages, under their own licenses.\n\n${trademarks}\n${sections.join("\n")}`;
 }
 
 console.log(`Built mivra ${pkg.version}: dist/, drizzle/, web/ (${externals.size} external packages).`);

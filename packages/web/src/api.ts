@@ -190,6 +190,27 @@ export const saveProviderKey = (id: ProviderId, key: string) =>
 
 export const removeProviderKey = (id: ProviderId) => request(() => api.settings.providers[":id"].$delete({ param: { id } }), readProviderKeys);
 
+/** Sign in with ChatGPT (ADR-015). Tokens never reach the browser; this is only whether it's signed in. */
+export type ChatGptSignIn = NonNullable<ProviderKeysView["chatgpt"]>;
+
+/** Starts a sign-in; the server waits on 127.0.0.1 for the browser to come back from the returned URL. */
+export const startChatGptSignIn = (newAccount = false) =>
+  request(() => api.settings.chatgpt["sign-in"].$post({ json: { newAccount } }), async (res) => (await res.json()) as { url: string });
+
+/** Finishes the sign-in from the address the browser ended on, when it couldn't reach the server. */
+export const completeChatGptSignIn = (address: string) =>
+  request(() => api.settings.chatgpt["sign-in"].complete.$post({ json: { address } }), readProviderKeys);
+
+export const cancelChatGptSignIn = () => request(() => api.settings.chatgpt["sign-in"].$delete(), readProviderKeys);
+
+export const signOutChatGpt = () => request(() => api.settings.chatgpt.$delete(), readProviderKeys);
+
+/** Records that the one-time ChatGPT plan welcome was shown. */
+export const markChatGptWelcomed = () => request(() => api.settings.chatgpt.welcomed.$post(), async (res) => (await res.json()) as ProviderKeysView);
+
+export const checkChatGpt = () =>
+  request(() => api.settings.chatgpt.check.$post(), async (res) => (await res.json()) as { ok: boolean; message?: string });
+
 export const checkProviderKey = (id: ProviderId) =>
   request(
     () => api.settings.providers[":id"].check.$post({ param: { id } }),

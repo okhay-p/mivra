@@ -23,6 +23,7 @@ This starts Mivra and opens it in your browser. The first time, it asks for an A
 | `mivra stop` / `mivra status` | Stop the background Mivra, or say where it runs |
 | `mivra auth set openrouter` | Save an API key (also `anthropic`, `openai`); it asks for the key without showing it |
 | `mivra auth status` / `mivra auth remove <provider>` | See or remove saved keys |
+| `mivra auth login chatgpt` / `mivra auth logout chatgpt` | Sign in with ChatGPT to use your Plus or Pro plan instead of a key, or sign out |
 
 Options: `--port <n>` to use one port only, `--no-open` to skip the browser. `MIVRA_DATA_DIR` moves the data folder. Keys in `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` take precedence over saved ones.
 

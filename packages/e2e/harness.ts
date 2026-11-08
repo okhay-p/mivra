@@ -6,7 +6,10 @@ import { serve } from "@hono/node-server";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { createApp } from "../server/src/app.js";
+import { createOAuthClient } from "../server/src/chatgpt/oauth.js";
+import { createChatGptSession, memoryChatGptStore } from "../server/src/chatgpt/session.js";
 import { memoryCredentials } from "../server/src/credentials.js";
+import { fakeAuth } from "../server/test/support/fake-chatgpt-auth.js";
 import { staticCatalog } from "../server/src/models/catalog.js";
 import { runs, memories } from "../server/src/db/schema.js";
 import { openDb } from "../server/src/db/client.js";
@@ -715,6 +718,10 @@ const dataDir = process.env.MIVRA_E2E_DATA_DIR ?? mkdtempSync(join(tmpdir(), "mi
 process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
 const token = loadOrCreateToken(dataDir);
 const db = openDb(join(dataDir, "mivra.db"));
+// Sign in with ChatGPT against a stand-in for auth.openai.com. The test sends the browser's authorize request to
+// /e2e/chatgpt/approve, which answers with the callback address, as OpenAI would after the learner approves.
+const chatgptAuth = fakeAuth();
+const chatgpt = createChatGptSession({ store: memoryChatGptStore(), oauth: createOAuthClient({ fetch: chatgptAuth.fetch }), callbackPort: 0 });
 const app = createApp({
   db,
   // Every selection runs the scripted model; the catalog only gives the picker something to offer.
@@ -729,7 +736,7 @@ const app = createApp({
     suggested: ["openrouter:e2e/thinker", "openrouter:e2e/plain"],
   },
   // A saved key, so the first-run setup stays closed; a test removes it to see that setup. Checks always pass.
-  providers: { credentials: memoryCredentials({ saved: { openrouter: "sk-or-e2e-key-0000WXYZ" } }), check: async () => ({ ok: true }) },
+  providers: { credentials: memoryCredentials({ saved: { openrouter: "sk-or-e2e-key-0000WXYZ" } }), check: async () => ({ ok: true }), chatgpt },
   security: { token, allowedHosts: [] },
 });
 // Test-only observability: no credentials or private provider details.
@@ -738,6 +745,7 @@ app.get("/e2e/state", (c) => c.json({
   pendingMemories: db.select({ status: memories.status }).from(memories).all().filter((m) => m.status === "pending").length,
   modelAborts, controlledStarts,
 }));
+app.get("/e2e/chatgpt/approve", (c) => c.text(chatgptAuth.approve(c.req.query("url")!)));
 // Lets a test finish a held reply once it has seen the state it wants to check.
 app.post("/e2e/release", (c) => {
   releaseHeld();

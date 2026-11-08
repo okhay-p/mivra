@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { createAdaptorServer } from "@hono/node-server";
 import { createApp } from "./app.js";
 import type { Config } from "./config.js";
+import { chatGptFileStore, createChatGptSession } from "./chatgpt/session.js";
 import { createCredentialStore, keysSignature, type ProviderKeys } from "./credentials.js";
 import { openDb } from "./db/client.js";
 import { createRegistry, resolveModel } from "./model.js";
@@ -80,11 +81,15 @@ export async function startServer({ config, webDist, migrationsFolder, portFallb
   // `mivra auth` applies from the next run (ADR-013).
   const credentials = createCredentialStore({ dataDir: config.dataDir, env });
   const baseUrls = { anthropic: env.ANTHROPIC_BASE_URL, openai: env.OPENAI_BASE_URL };
+  // The learner's ChatGPT sign-in, in chatgpt.json beside the keys (ADR-015). `mivra auth login chatgpt` writes
+  // the same file, so a sign-in from the CLI applies from the next run.
+  const chatgpt = createChatGptSession({ store: chatGptFileStore(config.dataDir) });
+  const chatgptToken = () => chatgpt.accessToken();
   let registry: { signature: string; registry: ReturnType<typeof createRegistry> } | undefined;
   const registryFor = (keys: ProviderKeys) => {
     const signature = keysSignature(keys);
     if (registry?.signature !== signature) {
-      registry = { signature, registry: createRegistry({ openrouterApiKey: keys.openrouter, anthropicApiKey: keys.anthropic, openaiApiKey: keys.openai }) };
+      registry = { signature, registry: createRegistry({ openrouterApiKey: keys.openrouter, anthropicApiKey: keys.anthropic, openaiApiKey: keys.openai, chatgptToken }) };
     }
     return registry.registry;
   };
@@ -92,19 +97,24 @@ export async function startServer({ config, webDist, migrationsFolder, portFallb
     db,
     model: (selection) => resolveModel(selection.model, registryFor(credentials.keys())),
     models: {
-      defaults: () => defaultSelectionFor(credentials.keys()),
-      // A provider shows in the picker only when its key is set (ADR-012).
-      catalog: createKeyedCatalog(credentials.keys, (keys) =>
-        createProviderCatalog({
-          keys,
-          baseUrls,
-          // The last good lists survive restarts, so the picker works offline.
-          persistFor: (source) => ({ load: () => settings.get(`catalog.${source}`), save: (models) => settings.set(`catalog.${source}`, models) }),
-        }),
+      defaults: () => defaultSelectionFor(credentials.keys(), chatgpt.signature() !== ""),
+      // A provider shows in the picker only when its key is set, or the learner signed in (ADR-012, ADR-015).
+      catalog: createKeyedCatalog(
+        credentials.keys,
+        (keys) =>
+          createProviderCatalog({
+            keys,
+            baseUrls,
+            chatgpt: chatgpt.signature() ? { token: chatgptToken } : undefined,
+            // The last good lists survive restarts, so the picker works offline.
+            persistFor: (source) => ({ load: () => settings.get(`catalog.${source}`), save: (models) => settings.set(`catalog.${source}`, models) }),
+          }),
+        chatgpt.signature,
       ),
     },
     providers: {
       credentials,
+      chatgpt,
       check: (provider, key) => checkProviderKey(provider, key, { baseUrl: provider === "openrouter" ? undefined : baseUrls[provider] }),
     },
     security: { token, allowedHosts: config.allowedHosts },
@@ -113,8 +123,8 @@ export async function startServer({ config, webDist, migrationsFolder, portFallb
   if (config.ignored.length > 0) {
     log(`${config.ignored.join(" and ")} ${config.ignored.length > 1 ? "are" : "is"} no longer used: choose the model in the picker under the message box.`);
   }
-  if (Object.keys(credentials.keys()).length === 0) {
-    log("No model provider key is set yet. Add one in Mivra under Model providers, run `mivra auth set openrouter`, or set OPENROUTER_API_KEY (or ANTHROPIC_API_KEY or OPENAI_API_KEY).");
+  if (Object.keys(credentials.keys()).length === 0 && !chatgpt.signature()) {
+    log("No model provider is set up yet. Sign in with ChatGPT or add a key in Mivra under Model providers, run `mivra auth login chatgpt` or `mivra auth set openrouter`, or set OPENROUTER_API_KEY (or ANTHROPIC_API_KEY or OPENAI_API_KEY).");
   }
 
   // The server also serves the built web UI (ADR-003). In dev, Vite serves it and proxies /api here.
@@ -127,6 +137,7 @@ export async function startServer({ config, webDist, migrationsFolder, portFallb
     url: `http://127.0.0.1:${port}`,
     close: () =>
       new Promise((resolve) => {
+        chatgpt.close();
         server.close(() => resolve());
         // Open streams (SSE) would hold close() until they end; a stop shouldn't wait on a reply.
         server.closeAllConnections?.();

@@ -8,6 +8,8 @@ export type Command =
   | { name: "auth-set"; provider: ProviderId; check: boolean }
   | { name: "auth-status" }
   | { name: "auth-remove"; provider: ProviderId }
+  | { name: "auth-login"; newAccount: boolean; open: boolean }
+  | { name: "auth-logout" }
   | { name: "help" }
   | { name: "version" };
 
@@ -24,6 +26,10 @@ Commands:
     --no-check             Save without asking the provider whether the key works
   auth status              Show which providers have a key
   auth remove <provider>   Remove a saved key
+  auth login chatgpt       Sign in with ChatGPT to use your Plus or Pro plan instead of a key
+    --new-account          Sign in to a different account than last time
+    --no-open              Print the sign-in address instead of opening the browser
+  auth logout chatgpt      Sign out of ChatGPT
 
 Providers: ${providerIds.join(", ")}
 Data lives in ~/.mivra, or MIVRA_DATA_DIR.`;
@@ -49,6 +55,7 @@ export function parseCommand(argv: string[]): Command {
         detach: { type: "boolean", default: false },
         open: { type: "boolean", default: true },
         check: { type: "boolean", default: true },
+        "new-account": { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
         version: { type: "boolean", short: "v", default: false },
       },
@@ -87,11 +94,16 @@ export function parseCommand(argv: string[]): Command {
         tooMany(3);
         return { name: "auth-remove", provider: provider(arg) };
       }
+      if (sub === "login" || sub === "logout") {
+        tooMany(3);
+        if (arg !== undefined && arg !== "chatgpt") throw new UsageError(`Only ChatGPT has a sign-in: \`mivra auth ${sub} chatgpt\`. API keys use \`mivra auth set\`.`);
+        return sub === "login" ? { name: "auth-login", newAccount: values["new-account"], open: values.open } : { name: "auth-logout" };
+      }
       if (sub === "status") {
         tooMany(2);
         return { name: "auth-status" };
       }
-      throw new UsageError(sub ? `Unknown auth command "${sub}". Use set, status or remove.` : "Use `mivra auth set|status|remove`.");
+      throw new UsageError(sub ? `Unknown auth command "${sub}". Use set, status, remove, login or logout.` : "Use `mivra auth set|status|remove|login|logout`.");
     case "help":
       return { name: "help" };
     default:

@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
+import { UsingChatGptPlan } from "./ChatGpt.js";
 
 /** Most search matches listed at once; typing more narrows them. */
 const MAX_MATCHES = 50;
@@ -44,7 +45,7 @@ export function shortModelName(id: string, models: CatalogModel[] = []): string 
   return id.replace(/^[a-z][a-z0-9-]*:/, "");
 }
 
-const PROVIDERS: Record<string, string> = { openrouter: "OpenRouter", anthropic: "Anthropic", openai: "OpenAI" };
+const PROVIDERS: Record<string, string> = { openrouter: "OpenRouter", anthropic: "Anthropic", openai: "OpenAI", chatgpt: "ChatGPT" };
 
 /** "anthropic:claude-sonnet-5-5" → "Anthropic". */
 export function providerLabel(id: string): string {
@@ -117,7 +118,8 @@ export function useModelPicker() {
 export type ModelPickerState = ReturnType<typeof useModelPicker>;
 
 function ModelRow({ model, selected }: { model: CatalogModel; selected: boolean }) {
-  const price = priceText(model.price);
+  // ChatGPT models are paid for by the learner's plan, not per token (ADR-015).
+  const price = model.id.startsWith("chatgpt:") ? "your ChatGPT plan" : priceText(model.price);
   return (
     <>
       <Check className={cn("mt-0.5 self-start", selected ? "opacity-100" : "opacity-0")} aria-hidden />
@@ -155,10 +157,14 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
       }));
     }
     const pinned = new Set(view.pinned);
+    const used = new Set([...view.pinned, ...view.recent]);
+    // The learner's ChatGPT plan offers a short list, so all of it shows without searching (ADR-015).
+    const plan = view.models.filter((m) => m.id.startsWith("chatgpt:"));
     const own = [
       { heading: "Pinned", models: lookup(view.pinned) },
       { heading: "Recent", models: lookup(view.recent.filter((id) => !pinned.has(id))) },
-      { heading: "Suggested", models: lookup(view.suggested) },
+      { heading: "ChatGPT plan", models: plan.filter((m) => !used.has(m.id)) },
+      { heading: "Suggested", models: lookup(view.suggested.filter((id) => !id.startsWith("chatgpt:"))) },
     ];
     // The current model is always one keystroke away, even before it's been used.
     const listed = new Set(own.flatMap((s) => s.models.map((m) => m.id)));
@@ -270,6 +276,8 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
           </DropdownMenuContent>
         </DropdownMenu>
       )}
+      {/* OpenAI's guidelines: say when replies use the learner's plan, with a way to manage it (ADR-015). */}
+      {view.current.model.startsWith("chatgpt:") && <UsingChatGptPlan />}
       {error && <span role="alert" className="text-destructive text-xs">{error}</span>}
     </div>
   );

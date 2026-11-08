@@ -2,6 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 import { createProviderRegistry, type LanguageModel, type streamText } from "ai";
+import { CHATGPT_API, ChatGptError } from "./chatgpt/oauth.js";
 
 type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]["providerOptions"]>;
 
@@ -20,6 +21,8 @@ export interface RegistryOptions {
   openrouterApiKey?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  /** A fresh access token for the learner's ChatGPT sign-in (ADR-015). Without it, `chatgpt:` models fail. */
+  chatgptToken?: () => Promise<string>;
   /** Override fetch, for tests. */
   fetch?: typeof fetch;
 }
@@ -42,12 +45,36 @@ export function createRegistry(options: RegistryOptions = {}) {
 
   const anthropic = createAnthropic({ apiKey: options.anthropicApiKey, fetch: options.fetch });
   const openai = createOpenAI({ apiKey: options.openaiApiKey, fetch: options.fetch });
-  return createProviderRegistry({ anthropic, openai, openrouter });
+  return createProviderRegistry({ anthropic, openai, openrouter, chatgpt: chatgptProvider(options) });
+}
+
+/**
+ * ChatGPT models through the learner's plan (ADR-015): OpenAI's Responses API with a fresh OAuth access token
+ * on every request. The base URL is fixed, never OPENAI_BASE_URL, so the token only ever goes to OpenAI.
+ */
+function chatgptProvider({ chatgptToken, fetch: fetchImpl = fetch }: RegistryOptions) {
+  // Its models use the Responses API, the only one that takes ChatGPT tokens.
+  return createOpenAI({
+    // The fetch below replaces it; the SDK only needs a value so it doesn't look for OPENAI_API_KEY.
+    apiKey: "chatgpt-sign-in",
+    baseURL: CHATGPT_API,
+    fetch: async (input, init) => {
+      if (!chatgptToken) throw new ChatGptError("signed_out", "Sign in with ChatGPT under Model providers first.");
+      const token = await chatgptToken();
+      const headers = new Headers(init?.headers);
+      headers.set("authorization", `Bearer ${token}`);
+      // A plan-backed request has no Platform organisation or project.
+      headers.delete("openai-organization");
+      headers.delete("openai-project");
+      // A redirect could carry the token or the conversation to another origin.
+      return fetchImpl(input, { ...init, headers, redirect: "error" });
+    },
+  });
 }
 
 const defaultRegistry = createRegistry();
 
-type ModelId = `anthropic:${string}` | `openai:${string}` | `openrouter:${string}`;
+type ModelId = `anthropic:${string}` | `openai:${string}` | `openrouter:${string}` | `chatgpt:${string}`;
 
 /**
  * Resolves a "<provider>:<model-id>" string, e.g. "anthropic:claude-sonnet-5-5" or
@@ -60,6 +87,11 @@ export function resolveModel(id: string, registry = defaultRegistry): LanguageMo
 
 /** Per-call options for a selection: its effort, in the form each provider takes (ADR-012). */
 export function callOptionsFor(selection: ModelSelection): { reasoning?: ReasoningEffort; providerOptions?: ProviderOptions } {
+  // The ChatGPT route stores nothing and rejects system-role items (ADR-015). Without stored responses the SDK
+  // asks for encrypted reasoning, so a later turn can replay it.
+  if (selection.model.startsWith("chatgpt:")) {
+    return { ...(selection.effort ? { reasoning: selection.effort } : {}), providerOptions: { openai: { store: false, systemMessageMode: "developer" } } };
+  }
   if (!selection.effort) return {};
   // OpenRouter takes effort in its own request field; the AI SDK's `reasoning` option doesn't reach it.
   if (selection.model.startsWith("openrouter:")) return { providerOptions: { openrouter: { reasoning: { effort: selection.effort } } } };

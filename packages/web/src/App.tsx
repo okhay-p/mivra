@@ -3,6 +3,7 @@ import { Conversation, ConversationContent, ConversationScrollButton } from "@/c
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
+import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
 import { Brain, GraduationCap, KeyRound, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
@@ -16,6 +17,7 @@ import { MathText } from "./MathText.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ModelPicker, modelLabel, useModelPicker } from "./ModelPicker.js";
 import { ProvidersPanel, hasAnyKey } from "./ProvidersPanel.js";
+import { ChatGptWelcome, UsageLimitNotice } from "./ChatGpt.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
@@ -123,6 +125,7 @@ export function App() {
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
       <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
+      <ChatGptWelcome />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
         <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
@@ -858,7 +861,12 @@ function Chat({
           ))}
           {status === "submitted" && <p className="text-muted-foreground flex items-center gap-2" role="status"><Spinner aria-hidden="true" /> Thinking…</p>}
           {stopError && <p className="text-destructive">{stopError}</p>}
-          {(error || continuationFailure) && <p className="text-destructive">{error ? readableError(error) : continuationFailure}</p>}
+          {(error || continuationFailure) &&
+            ((error ? readableError(error) : continuationFailure) === CHATGPT_USAGE_LIMIT_ERROR ? (
+              <UsageLimitNotice />
+            ) : (
+              <p className="text-destructive">{error ? readableError(error) : continuationFailure}</p>
+            ))}
         </ConversationContent>
         <ConversationScrollButton aria-label="Scroll to bottom" onClick={() => void conversation.scrollToBottom("instant")} />
       </Conversation>

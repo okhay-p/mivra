@@ -102,6 +102,7 @@ describe("provider key routes", () => {
     expect(text).not.toContain("sk-env-key");
     expect(JSON.parse(text)).toEqual({
       canEdit: true,
+      chatgpt: null,
       providers: [
         { id: "openrouter", label: "OpenRouter", source: "saved", hint: "WXYZ" },
         { id: "anthropic", label: "Anthropic", source: null, hint: null },

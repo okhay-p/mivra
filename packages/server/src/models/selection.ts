@@ -10,6 +10,8 @@ import type { CatalogModel, CatalogState, ModelCatalog } from "./catalog.js";
  * a direct model and its OpenRouter counterpart are listed, only the direct one is suggested.
  */
 export const SUGGESTED_MODELS = [
+  "chatgpt:gpt-6-luna",
+  "chatgpt:gpt-6.1-sol",
   "anthropic:claude-sonnet-5-5",
   "anthropic:claude-opus-5-5",
   "openai:gpt-6-luna",
@@ -28,8 +30,15 @@ export const SUGGESTED_MODELS = [
 /** The model a new install uses until the learner picks one (ADR-012). Needs only OPENROUTER_API_KEY. */
 export const DEFAULT_SELECTION: ModelSelection = { model: "openrouter:openai/gpt-6-luna", effort: "high" };
 
-/** The built-in default for the keys that are set: OpenRouter's if its key is, otherwise a direct provider's. */
-export function defaultSelectionFor(keys: ProviderKeys): ModelSelection {
+/** The default when the learner has signed in with ChatGPT (ADR-015). */
+export const CHATGPT_DEFAULT: ModelSelection = { model: "chatgpt:gpt-6-luna", effort: "high" };
+
+/**
+ * The built-in default for the providers set up: ChatGPT when the learner signed in (an explicit choice that
+ * costs nothing extra), else OpenRouter's if its key is set, otherwise a direct provider's.
+ */
+export function defaultSelectionFor(keys: ProviderKeys, chatgpt = false): ModelSelection {
+  if (chatgpt) return CHATGPT_DEFAULT;
   if (keys.openrouter) return DEFAULT_SELECTION;
   if (keys.openai) return { model: "openai:gpt-6-luna", effort: "high" };
   if (keys.anthropic) return { model: "anthropic:claude-sonnet-5-5", effort: "high" };

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { keysSignature, type ProviderKeys } from "../credentials.js";
+import { CHATGPT_API } from "../chatgpt/oauth.js";
 import { reasoningEfforts, type ReasoningEffort } from "../model.js";
 
 /** A model the picker can offer (ADR-012). Ids carry the provider prefix, like a selection. */
@@ -248,36 +249,83 @@ export function matchDirectModels(provider: DirectProvider, direct: DirectModel[
   });
 }
 
+/** A model as the ChatGPT route lists it (ADR-015). */
+export interface ChatGptModel {
+  slug: string;
+  name: string;
+}
+
+const ChatGptList = z.object({ models: z.array(z.unknown()).max(1000) });
+const ChatGptEntry = z.object({ slug: z.string().min(1).max(200), display_name: z.string().max(200).nullish(), visibility: z.string().nullish() });
+
+/** The models the ChatGPT route lists for picking (`visibility: "list"`); entries that don't parse are skipped. */
+export function parseChatGptModels(body: unknown): ChatGptModel[] {
+  const seen = new Set<string>();
+  return ChatGptList.parse(body).models.flatMap((entry) => {
+    const m = ChatGptEntry.safeParse(entry);
+    if (!m.success || m.data.visibility !== "list" || seen.has(m.data.slug)) return [];
+    seen.add(m.data.slug);
+    return [{ slug: m.data.slug, name: m.data.display_name?.trim() || m.data.slug }];
+  });
+}
+
+/**
+ * ChatGPT's models, described (context length, effort levels) by their OpenRouter counterpart `openai/<slug>`
+ * when there is one. They have no price: the learner's plan pays.
+ */
+export function describeChatGptModels(models: ChatGptModel[], openrouter: CatalogModel[]): CatalogModel[] {
+  const counterparts = new Map<string, CatalogModel>();
+  for (const m of openrouter) {
+    if (m.id.startsWith("openrouter:openai/")) counterparts.set(matchKey(m.id.slice("openrouter:openai/".length)), m);
+  }
+  return models.map((m) => {
+    const counterpart = counterparts.get(matchKey(m.slug));
+    return { id: `chatgpt:${m.slug}`, name: m.name, contextLength: counterpart?.contextLength ?? null, price: null, reasoning: counterpart?.reasoning ?? null };
+  });
+}
+
+function chatgptList(token: () => Promise<string>, options: CatalogSourceOptions): CachedList<ChatGptModel> {
+  return cachedList(
+    async (f) => parseChatGptModels(await getJson(f, `${CHATGPT_API}/models`, { authorization: `Bearer ${await token()}`, accept: "application/json" }, "ChatGPT's model list")),
+    (value) => typeof (value as ChatGptModel)?.slug === "string",
+    options,
+  );
+}
+
 export interface ProviderCatalogOptions extends CatalogSourceOptions {
   /** API keys. A provider is listed only when its key is set (ADR-012). */
   keys: ProviderKeys;
   /** Base URLs for the direct providers, as their SDKs read them (ANTHROPIC_BASE_URL, OPENAI_BASE_URL). */
   baseUrls?: Partial<Record<DirectProvider, string>>;
   /** One store per source; each keeps its last good list. */
-  persistFor?: (source: "openrouter" | DirectProvider) => CatalogSourceOptions["persist"];
+  persistFor?: (source: "openrouter" | DirectProvider | "chatgpt") => CatalogSourceOptions["persist"];
+  /** The learner's ChatGPT sign-in, when there is one (ADR-015). */
+  chatgpt?: { token: () => Promise<string> };
 }
 
 /**
  * The models of every provider whose key is set: OpenRouter's list, then Anthropic's and OpenAI's own models.
  * OpenRouter's public list is loaded even without its key, since it describes the direct providers' models.
  */
-export function createProviderCatalog({ keys, baseUrls = {}, persistFor, ...options }: ProviderCatalogOptions): ModelCatalog {
+export function createProviderCatalog({ keys, baseUrls = {}, persistFor, chatgpt, ...options }: ProviderCatalogOptions): ModelCatalog {
   const openrouter = openRouterList({ ...options, persist: persistFor?.("openrouter") });
   const direct = (["anthropic", "openai"] as const).flatMap((provider) => {
     const key = keys[provider];
     return key ? [{ provider, source: directList(provider, key, baseUrls[provider], { ...options, persist: persistFor?.(provider) }) }] : [];
   });
+  const plan = chatgpt ? chatgptList(chatgpt.token, { ...options, persist: persistFor?.("chatgpt") }) : undefined;
 
   return {
     async list() {
-      const [or, ...lists] = await Promise.all([openrouter.list(), ...direct.map((d) => d.source.list())]);
+      const [or, chatgptModels, ...lists] = await Promise.all([openrouter.list(), plan?.list(), ...direct.map((d) => d.source.list())]);
       const described = or.items ?? [];
       const models = [
+        ...(chatgptModels ? describeChatGptModels(chatgptModels.items ?? [], described) : []),
         ...(keys.openrouter ? described : []),
         ...direct.flatMap((d, i) => matchDirectModels(d.provider, lists[i]!.items ?? [], described)),
       ];
       // Direct models are described by OpenRouter's list, so they depend on it even without its key.
-      const states = [or.state, ...lists.map((l) => l.state)];
+      const states = [or.state, ...(chatgptModels ? [chatgptModels.state] : []), ...lists.map((l) => l.state)];
       const state: CatalogState = states.every((s) => s === "fresh") ? "fresh" : models.length > 0 ? "stale" : "unavailable";
       return { models, state };
     },
@@ -288,12 +336,13 @@ export function createProviderCatalog({ keys, baseUrls = {}, persistFor, ...opti
  * A catalog for the keys set now (ADR-013): rebuilt when a key is added, changed or removed, so the picker
  * follows keys saved in settings or with `mivra auth` without a restart. Persisted lists carry over.
  */
-export function createKeyedCatalog(keys: () => ProviderKeys, build: (keys: ProviderKeys) => ModelCatalog): ModelCatalog {
+export function createKeyedCatalog(keys: () => ProviderKeys, build: (keys: ProviderKeys) => ModelCatalog, account: () => string = () => ""): ModelCatalog {
   let current: { signature: string; catalog: ModelCatalog } | undefined;
   return {
     list() {
       const now = keys();
-      const signature = keysSignature(now);
+      // `account` changes when the learner signs in to or out of ChatGPT (ADR-015).
+      const signature = `${keysSignature(now)}\n${account()}`;
       if (current?.signature !== signature) current = { signature, catalog: build(now) };
       return current.catalog.list();
     },

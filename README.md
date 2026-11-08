@@ -21,7 +21,7 @@ npx @okhay-p/mivra
 
 Or install it once with `npm install -g @okhay-p/mivra` and then run `mivra`.
 
-Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first time, it asks for an API key. An [OpenRouter key](https://openrouter.ai/keys) reaches every model; an Anthropic or OpenAI key calls that provider directly. You can add or change keys any time under **Model providers** in the sidebar, and **Check** tests a key without spending anything.
+Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first time, it asks you to sign in with ChatGPT or add an API key. Signing in with a ChatGPT Plus or Pro account uses your plan instead of a key. An [OpenRouter key](https://openrouter.ai/keys) reaches every model; an Anthropic or OpenAI key calls that provider directly. You can add or change keys any time under **Model providers** in the sidebar, and **Check** tests a key without spending anything.
 
 ## Commands
 
@@ -32,6 +32,7 @@ Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first tim
 | `mivra stop` / `mivra status` | Stop the background Mivra, or show where it's running |
 | `mivra auth set <provider>` | Save an API key for `openrouter`, `anthropic` or `openai`. It asks for the key without showing it |
 | `mivra auth status` / `mivra auth remove <provider>` | See where each key comes from, or remove a saved one |
+| `mivra auth login chatgpt` / `mivra auth logout chatgpt` | Sign in with ChatGPT to use your plan, or sign out |
 
 Mivra uses port 4096, or the next free one if that's taken. `--port <n>` asks for a specific port, and `--no-open` skips opening the browser.
 
@@ -44,7 +45,7 @@ docker run -d --name mivra --restart unless-stopped \
   ghcr.io/okhay-p/mivra
 ```
 
-Then open <http://127.0.0.1:4096>. Your data is kept in the `mivra-data` volume. Because the browser reaches the container over Docker's network, keys can't be changed from the app here: pass them with `-e`, or save one with `docker exec -i mivra mivra auth set openrouter`.
+Then open <http://127.0.0.1:4096>. Your data is kept in the `mivra-data` volume. Because the browser reaches the container over Docker's network, keys can't be changed from the app here: pass them with `-e`, or save one with `docker exec -i mivra mivra auth set openrouter`. To sign in with ChatGPT, use **Continue with ChatGPT** under Model providers and paste back the address the browser ends on, or run `docker exec -it mivra mivra auth login chatgpt --no-open`.
 
 Docker is also the easiest route on systems Mivra has no prebuilt database driver for (see [Supported systems](#supported-systems)).
 

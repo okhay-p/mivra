@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { startCourse } from "./api.js";
+import { ModelPicker, useModelPicker } from "./ModelPicker.js";
 
 export interface StartedCourse {
   session: { id: string; title: string; updatedAt: string; courseId: string | null };
@@ -21,6 +22,8 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
   const [goal, setGoal] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // The selection is app-wide (ADR-012): the one chosen here writes the syllabus and teaches the course.
+  const modelPicker = useModelPicker();
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -60,6 +63,9 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
         </div>
         {error && <FieldError id={`${goalId}-error`} role="alert">{error}</FieldError>}
       </Field>
+      <div className="flex justify-center">
+        <ModelPicker state={modelPicker} disabled={busy} />
+      </div>
       <Button type="button" variant="link" className="text-muted-foreground self-center" onClick={onFreeChat}>
         Or just chat
       </Button>

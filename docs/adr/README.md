@@ -20,6 +20,8 @@ Files use four digits (`0010-*.md`); the code cites them as `ADR-010`. The next 
 - [ADR-012](0012-model-picker.md): model picker: one app-wide model and effort chosen in the UI, with run provenance
 - [ADR-013](0013-distribution-and-api-keys.md): distribution through npm (main) and Docker; API keys set in the UI or with `mivra auth`, kept out of the database
 
+- [ADR-015](0015-sign-in-with-chatgpt.md): sign in with ChatGPT through OpenAI's open-source route, as a provider beside the API keys
+
 ## Project scope
 
 - Name: Mivra.

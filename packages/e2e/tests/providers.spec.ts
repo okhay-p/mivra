@@ -14,7 +14,7 @@ test("model provider keys: first-run setup, saving, checking and removing", asyn
   await openrouter.getByRole("button", { name: "Remove" }).click();
   await expect(openrouter.getByText(/^Not set\./)).toBeVisible();
   await page.reload();
-  await expect(panel.getByText(/needs an API key from one of these providers/)).toBeVisible();
+  await expect(panel.getByText(/needs a model provider before it can teach/)).toBeVisible();
 
   // Saving a key checks it straight away, and the field is cleared.
   await openrouter.getByLabel("OpenRouter API key").fill("sk-or-v1-new-key-1234ABCD");
