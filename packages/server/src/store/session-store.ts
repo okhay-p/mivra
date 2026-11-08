@@ -67,7 +67,7 @@ function firstText(message: UIMessage): string | undefined {
 }
 
 /**
- * All persistence for sessions, messages and runs. With lesson-store.ts, the only code that talks to Drizzle
+ * All persistence for sessions, messages and runs. With lesson-store.ts and note-store.ts, the only code that talks to Drizzle
  * (ADR-007), so the storage engine and schema can change without touching the runtime or routes.
  */
 export function createSessionStore(db: Db, clock: () => Date = () => new Date()) {

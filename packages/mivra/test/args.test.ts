@@ -14,6 +14,14 @@ describe("the command line", () => {
     expect(parseCommand(["auth", "remove", "openai"])).toEqual({ name: "auth-remove", provider: "openai" });
   });
 
+  it("reads the import command", () => {
+    expect(parseCommand(["import", "obsidian", "~/Vault"])).toEqual({ name: "import-obsidian", folder: "~/Vault" });
+    expect(parseCommand(["import", "obsidian", "Vault", "--name", "Uni notes"])).toEqual({ name: "import-obsidian", folder: "Vault", importName: "Uni notes" });
+    for (const argv of [["import"], ["import", "notion", "x"], ["import", "obsidian"], ["import", "obsidian", "a", "b"]]) {
+      expect(() => parseCommand(argv), argv.join(" ")).toThrow(UsageError);
+    }
+  });
+
   it("never takes a key as an argument", () => {
     expect(() => parseCommand(["auth", "set", "openrouter", "sk-or-v1-secret"])).toThrow(UsageError);
   });

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
@@ -305,3 +305,82 @@ export const settings = sqliteTable("settings", {
   value: text("value", { mode: "json" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });
+
+/** One imported Obsidian vault (ADR-014). Importing again replaces its notes with the new snapshot. */
+export const vaultImports = sqliteTable(
+  "vault_imports",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    source: text("source", { enum: ["obsidian"] }).notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("vault_imports_name_idx").on(t.name)],
+);
+
+/**
+ * A Markdown note from an imported vault, written only by the import (ADR-014). `hash` is the SHA-256 of its text,
+ * so a re-import skips unchanged files. `titleKey` and `aliases` (already normalised) resolve `[[links]]`.
+ */
+export const notes = sqliteTable(
+  "notes",
+  {
+    id: text("id").primaryKey(),
+    importId: text("import_id")
+      .notNull()
+      .references(() => vaultImports.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    title: text("title").notNull(),
+    titleKey: text("title_key").notNull(),
+    aliases: text("aliases", { mode: "json" }).$type<string[]>().notNull(),
+    body: text("body").notNull(),
+    hash: text("hash").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("notes_import_path_idx").on(t.importId, t.path), index("notes_import_title_idx").on(t.importId, t.titleKey)],
+);
+
+/**
+ * A piece of a note's text under its heading path (`Heading > Subheading`). The migration adds the note_chunks_fts
+ * FTS5 table, kept in sync by triggers, which relies on `id` being a stable rowid, as for document chunks.
+ */
+export const noteChunks = sqliteTable(
+  "note_chunks",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    noteId: text("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    heading: text("heading"),
+    text: text("text").notNull(),
+  },
+  (t) => [uniqueIndex("note_chunks_note_seq_idx").on(t.noteId, t.seq)],
+);
+
+/** A `[[link]]` or `![[embed]]` as written, without its heading or display text. Resolved to a note when read. */
+export const noteLinks = sqliteTable(
+  "note_links",
+  {
+    noteId: text("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    target: text("target").notNull(),
+    kind: text("kind", { enum: ["link", "embed"] }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.noteId, t.target, t.kind] })],
+);
+
+/** A tag from a note's text or frontmatter, lower-cased and without its `#`. */
+export const noteTags = sqliteTable(
+  "note_tags",
+  {
+    noteId: text("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    tag: text("tag").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.noteId, t.tag] }), index("note_tags_tag_idx").on(t.tag)],
+);

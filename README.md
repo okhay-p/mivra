@@ -32,6 +32,7 @@ Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first tim
 | `mivra stop` / `mivra status` | Stop the background Mivra, or show where it's running |
 | `mivra auth set <provider>` | Save an API key for `openrouter`, `anthropic` or `openai`. It asks for the key without showing it |
 | `mivra auth status` / `mivra auth remove <provider>` | See where each key comes from, or remove a saved one |
+| `mivra import obsidian <folder>` | Import an Obsidian vault's notes into a running Mivra. Run it again after you've changed the vault to update it. `--name` names the import |
 
 Mivra uses port 4096, or the next free one if that's taken. `--port <n>` asks for a specific port, and `--no-open` skips opening the browser.
 
@@ -53,6 +54,7 @@ Docker is also the easiest route on systems Mivra has no prebuilt database drive
 - Everything is stored in `~/.mivra` (set `MIVRA_DATA_DIR` to move it). Before an update changes the database, Mivra saves a backup in `~/.mivra/backups` and keeps the latest five.
 - API keys are saved in `~/.mivra/credentials.json`, readable only by you, and are never sent back to the browser. Keys in `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` take precedence over saved ones.
 - What reaches the model provider: your conversation, a short summary of your recent progress and saved notes, and excerpts of any documents you've attached that are relevant to your question. Uploaded files themselves aren't kept: Mivra extracts their text on your computer and stores only that.
+- An imported Obsidian vault is copied into Mivra's database: only its Markdown notes, never attachments or the `.obsidian` folder. Mivra never writes to the vault.
 - Mivra listens on `127.0.0.1` only, and every request needs a private access token, so other devices and websites can't reach it.
 
 ### Using it from another device
