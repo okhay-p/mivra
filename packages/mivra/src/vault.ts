@@ -29,6 +29,7 @@ export function readVault(root: string): VaultFiles {
   const files: VaultFile[] = [];
   const tooLong: string[] = [];
   const folders = [root];
+  let bytes = 0;
   while (folders.length > 0) {
     const folder = folders.pop()!;
     for (const entry of readdirSync(folder, { withFileTypes: true })) {
@@ -38,6 +39,16 @@ export function readVault(root: string): VaultFiles {
       else if (entry.isFile() && /\.md$/i.test(entry.name)) {
         if (files.length >= MAX_VAULT_FILES) throw new VaultReadError(`The vault has more than ${MAX_VAULT_FILES} notes, more than one import can take.`);
         const path = relative(root, full).split(sep).join("/");
+        // Sizes are checked before reading, so a huge vault fails fast instead of filling memory. A UTF-8 file has at
+        // least as many bytes as characters, so a file over the character limit by bytes alone may still fit; one
+        // over four times it can't.
+        const size = statSync(full).size;
+        if (size > MAX_NOTE_CHARS * 4) {
+          tooLong.push(path);
+          continue;
+        }
+        bytes += size;
+        if (bytes > MAX_VAULT_BYTES) throw new VaultReadError(`The vault's notes come to more than ${MAX_VAULT_BYTES / (1024 * 1024)} MB, more than one import can take.`);
         const text = readFileSync(full, "utf8");
         if (text.length > MAX_NOTE_CHARS) tooLong.push(path);
         else files.push({ path, text });

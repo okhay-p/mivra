@@ -127,7 +127,8 @@ describe("mivra", () => {
     expect(run(dir, ["import", "obsidian", vault]).stderr).toContain("Mivra isn't running.");
     expect(existsSync(join(dir, "mivra.pid"))).toBe(false);
     expect(run(dir, ["status"]).stdout).toContain("isn't running");
-  });
+    // Many CLI runs, each a new Node process: slow on a loaded machine.
+  }, 180_000);
 
   it("stops cleanly on Ctrl+C in the foreground", async () => {
     const dir = dataDir();

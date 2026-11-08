@@ -15,6 +15,9 @@ const MAX_TARGET_CHARS = 300;
 const MAX_ALIASES = 50;
 /** Headings past this many in one note stay plain text, so a note of nothing but headings can't make 250,000 sections. */
 const MAX_SECTIONS = 2000;
+/** A heading is copied into each chunk under it, so both it and its path are capped: a 100 KB heading over 2,000 subsections would otherwise be copied 2,000 times. */
+const MAX_HEADING_CHARS = 120;
+const MAX_HEADING_PATH_CHARS = 300;
 /** Frontmatter beyond this many lines isn't read, so a note that opens with `---` and never closes it stays text. */
 const MAX_FRONTMATTER_LINES = 500;
 
@@ -118,9 +121,12 @@ function headingText(raw: string): string {
 }
 
 /** The target of a wiki link, without `|display`, `#heading` or `^block`, and without a `.md` extension. */
-function wikiTarget(inner: string): string | undefined {
-  const target = inner.split("|")[0]!.split("#")[0]!.split("^")[0]!.trim().replace(/\.md$/i, "");
-  return target && target.length <= MAX_TARGET_CHARS ? target : undefined;
+function wikiTarget(inner: string): { target: string; attachment: boolean } | undefined {
+  const raw = inner.split("|")[0]!.split("#")[0]!.split("^")[0]!.trim();
+  // Decided before `.md` comes off, so `[[Version 1.0.md]]` is a note, not a `.0` attachment.
+  const attachment = !/\.md$/i.test(raw) && isAttachment(raw);
+  const target = raw.replace(/\.md$/i, "");
+  return target && target.length <= MAX_TARGET_CHARS ? { target, attachment } : undefined;
 }
 
 /** A Markdown link to another note in the vault, relative to this note's folder, as a vault path without `.md`. */
@@ -140,7 +146,8 @@ function markdownTarget(href: string, notePath: string): string | undefined {
 }
 
 /** Attachments (images, PDFs) embedded with `![[...]]` aren't notes; only extensionless or `.md` targets are. */
-const isAttachment = (target: string) => /\.[A-Za-z0-9]{1,8}$/.test(posix.basename(target));
+const ATTACHMENT = /\.(png|jpe?g|gif|bmp|svg|webp|avif|heic|tiff?|mp3|wav|m4a|ogg|flac|3gp|webm|mp4|mov|mkv|ogv|pdf|canvas|base)$/i;
+const isAttachment = (target: string) => ATTACHMENT.test(target);
 
 /**
  * Splits a long section at a line end in the second half of each window, else at the last space, else mid-word.
@@ -178,7 +185,9 @@ function packChunks(sections: { heading: string | null; lines: string[] }[]) {
     pending = undefined;
   };
   for (const section of sections) {
-    const text = section.lines.join("\n").trim();
+    // A heading with nothing under it, as in an outline, still says what the note covers, so it's kept as text.
+    const body = section.lines.join("\n").trim();
+    const text = body || (section.heading?.split(" > ").at(-1) ?? "");
     if (!text) continue;
     if (text.length > MAX_CHUNK_CHARS) {
       flush();
@@ -187,7 +196,8 @@ function packChunks(sections: { heading: string | null; lines: string[] }[]) {
     }
     if (pending && pending.text.length + text.length + 2 <= MAX_CHUNK_CHARS) {
       // The heading of a section merged into an earlier one stays in the text, so search still finds it.
-      pending.text += `\n\n${section.heading && section.heading !== pending.heading ? `${section.heading}\n` : ""}${text}`;
+      // A heading with no text of its own is written once, as its whole path.
+      pending.text += `\n\n${!body ? section.heading : `${section.heading && section.heading !== pending.heading ? `${section.heading}\n` : ""}${text}`}`;
     } else {
       flush();
       pending = { heading: section.heading, text };
@@ -244,8 +254,8 @@ export function parseNote(path: string, raw: string): ParsedNote {
     if (heading) {
       const level = heading[1]!.length;
       headingPath.length = Math.min(headingPath.length, level - 1);
-      headingPath.push(headingText(heading[2] ?? ""));
-      sections.push({ heading: headingPath.filter(Boolean).join(" > ") || null, lines: [] });
+      headingPath.push(headingText(heading[2] ?? "").slice(0, MAX_HEADING_CHARS));
+      sections.push({ heading: headingPath.filter(Boolean).join(" > ").slice(0, MAX_HEADING_PATH_CHARS) || null, lines: [] });
     } else {
       sections.at(-1)!.lines.push(line);
     }
@@ -257,11 +267,11 @@ export function parseNote(path: string, raw: string): ParsedNote {
   for (const match of proseText.matchAll(WIKI_LINK)) {
     if (seenLinks.has(match[0])) continue;
     seenLinks.add(match[0]);
-    const target = wikiTarget(match[2]!);
-    if (!target) continue;
+    const parsed = wikiTarget(match[2]!);
+    if (!parsed) continue;
     const embed = match[1] === "!";
-    if (embed && isAttachment(target)) continue;
-    addLink(target, embed ? "embed" : "link");
+    if (embed && parsed.attachment) continue;
+    addLink(parsed.target, embed ? "embed" : "link");
   }
   for (const match of proseText.matchAll(MD_LINK)) {
     const target = markdownTarget(match[1]!, path);

@@ -66,7 +66,7 @@ describe("parseNote", () => {
 
   it("chunks text under its heading path and packs small sections together", () => {
     const note = parseNote("a.md", "Intro.\n# Sorting\n## Merge sort\nSplit and merge.\n## Quick sort ##\nPivot.\n");
-    expect(note.chunks).toEqual([{ seq: 0, heading: null, text: "Intro.\n\nSorting > Merge sort\nSplit and merge.\n\nSorting > Quick sort\nPivot." }]);
+    expect(note.chunks).toEqual([{ seq: 0, heading: null, text: "Intro.\n\nSorting\n\nSorting > Merge sort\nSplit and merge.\n\nSorting > Quick sort\nPivot." }]);
     const long = parseNote("a.md", `# One\n${"word ".repeat(400)}\n# Two\n${"more ".repeat(400)}`);
     expect(long.chunks.map((c) => c.heading)).toEqual(["One", "One", "Two", "Two"]);
   });
@@ -77,6 +77,23 @@ describe("parseNote", () => {
     expect(words.chunks.map((c) => c.text).join(" ")).toBe("word ".repeat(100_000).trim());
     const solid = parseNote("a.md", "x".repeat(5000));
     expect(solid.chunks.map((c) => c.text.length)).toEqual([1200, 1200, 1200, 1200, 200]);
+  });
+
+  it("keeps headings with nothing under them searchable", () => {
+    expect(parseNote("a.md", "# Merge sort\n## Complexity\n").chunks).toEqual([{ seq: 0, heading: "Merge sort", text: "Merge sort\n\nMerge sort > Complexity" }]);
+  });
+
+  it("caps headings, which are copied into every chunk under them", () => {
+    const note = parseNote("a.md", `# ${"h".repeat(100_000)}\n${Array.from({ length: 1900 }, (_, i) => `## s${i}\n${"x".repeat(1100)}`).join("\n")}`);
+    expect(note.chunks.every((c) => (c.heading?.length ?? 0) <= 300)).toBe(true);
+    expect(note.chunks.reduce((sum, c) => sum + (c.heading?.length ?? 0), 0)).toBeLessThan(1_000_000);
+  });
+
+  it("keeps embeds of notes whose names contain dots", () => {
+    expect(parseNote("a.md", "![[Version 1.0.md]] ![[Version 2.0]] ![[photo.JPEG]] ![[slides.pdf#page=2]]").links).toEqual([
+      { target: "Version 1.0", kind: "embed" },
+      { target: "Version 2.0", kind: "embed" },
+    ]);
   });
 
   it("caps the links one note can add", () => {
