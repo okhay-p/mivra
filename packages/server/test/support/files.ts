@@ -45,6 +45,8 @@ export interface ZipEntry {
   /** Forges the unpacked size the zip claims. */
   declaredSize?: number;
   stored?: boolean;
+  /** A Unix mode, such as 0o120777 for a symbolic link, written as made on Unix. */
+  mode?: number;
 }
 
 export function makeZip(entries: ZipEntry[]): Buffer {
@@ -68,8 +70,9 @@ export function makeZip(entries: ZipEntry[]): Buffer {
     const head = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), shared, name]);
     local.push(head, packed);
     const tail = Buffer.alloc(14);
+    if (entry.mode !== undefined) tail.writeUInt32LE((entry.mode << 16) >>> 0, 6);
     tail.writeUInt32LE(offset, 10);
-    central.push(Buffer.from([0x50, 0x4b, 0x01, 0x02, 20, 0]), shared, tail, name);
+    central.push(Buffer.from([0x50, 0x4b, 0x01, 0x02, 20, entry.mode === undefined ? 0 : 3]), shared, tail, name);
     offset += head.length + packed.length;
   }
   const directory = Buffer.concat(central);

@@ -10,7 +10,10 @@ const MAX_MULTIPART_OVERHEAD_BYTES = 64 * 1024;
 /** About 13 Mbit/s would fill the size limit in 15 s; this allows for a slow link. */
 const READ_TIMEOUT_MS = 120_000;
 
-export const TOO_LARGE = `This file is over the ${MAX_DOCUMENT_BYTES / (1024 * 1024)} MB limit.`;
+const tooLarge = (maxBytes: number) => `This file is over the ${Math.round(maxBytes / (1024 * 1024))} MB limit.`;
+export const TOO_LARGE = tooLarge(MAX_DOCUMENT_BYTES);
+/** Longest value of a text field sent beside the file. */
+const MAX_FIELD_BYTES = 1024;
 
 /**
  * A name that's safe to display and to give the model: no folders, no control or invisible characters
@@ -38,19 +41,29 @@ export interface ReadUploadOptions {
   timeoutMs?: number;
   /** Stops reading, e.g. when the client disconnects. */
   signal?: AbortSignal;
+  /** Short text fields allowed beside the file, each at most once. Any other field is refused. */
+  fields?: readonly string[];
+}
+
+export interface Upload {
+  filename: string;
+  bytes: Uint8Array;
+  /** The allowed fields that were sent. */
+  fields: Record<string, string>;
 }
 
 /**
- * Reads a multipart body holding one part, a file in the field `file`, keeping at most the size limit
+ * Reads a multipart body holding a file in the field `file` (and any allowed text fields), keeping at most the size limit
  * in memory. Whole-request bytes are counted before the parser and whatever Content-Length claimed, and
  * anything unexpected stops the read at once. Every way of stopping goes through `finish`, which destroys
  * all the streams, so nothing is left reading and none of their errors can go unhandled.
  */
 export function readUpload(
   { body, contentType, contentLength }: UploadRequest,
-  { maxBytes = MAX_DOCUMENT_BYTES, timeoutMs = READ_TIMEOUT_MS, signal }: ReadUploadOptions = {},
-): Promise<{ filename: string; bytes: Uint8Array }> {
+  { maxBytes = MAX_DOCUMENT_BYTES, timeoutMs = READ_TIMEOUT_MS, signal, fields: allowedFields = [] }: ReadUploadOptions = {},
+): Promise<Upload> {
   return new Promise((resolve, reject) => {
+    const TOO_LARGE = tooLarge(maxBytes);
     const badRequest = new DocumentError("failed", "Send one file as multipart/form-data in a field called file.");
     const unfinished = new DocumentError("failed", "The upload didn't finish.");
     const cancelled = new DocumentError("failed", "The upload was cancelled.");
@@ -68,7 +81,11 @@ export function readUpload(
       // Filenames arrive as UTF-8 from browsers; busboy's default strips any folders from them. It fires
       // "limit" on reaching fileSize, so one byte more lets a file of exactly the limit through. It counts
       // a part when the part ends, so parts: 2 can't fire on a lone file.
-      parser = busboy({ headers: { "content-type": contentType }, defParamCharset: "utf8", limits: { files: 1, fields: 0, parts: 2, headerPairs: 8, fileSize: maxBytes + 1 } });
+      parser = busboy({
+        headers: { "content-type": contentType },
+        defParamCharset: "utf8",
+        limits: { files: 1, fields: allowedFields.length, fieldSize: MAX_FIELD_BYTES, parts: allowedFields.length + 2, headerPairs: 8, fileSize: maxBytes + 1 },
+      });
     } catch {
       return refuse(badRequest);
     }
@@ -108,6 +125,11 @@ export function readUpload(
 
     let file: { filename: string; bytes: Uint8Array } | undefined;
     let reading = false;
+    const values: Record<string, string> = {};
+    parser.on("field", (name: string, value: string, info: busboy.FieldInfo) => {
+      if (!allowedFields.includes(name) || Object.hasOwn(values, name) || info.valueTruncated || info.nameTruncated) return fail(badRequest);
+      values[name] = value;
+    });
     parser.on("file", (field: string, stream: NodeJS.ReadableStream & { truncated?: boolean; destroy(): void }, info: busboy.FileInfo) => {
       files.add(stream);
       // Busboy destroys an unfinished file with an error, which would be fatal without a listener.
@@ -124,7 +146,7 @@ export function readUpload(
     for (const limit of ["filesLimit", "fieldsLimit", "partsLimit"] as const) parser.on(limit, () => fail(badRequest));
     parser.on("close", () => {
       const done = file;
-      if (done) finish(() => resolve(done));
+      if (done) finish(() => resolve({ ...done, fields: values }));
       else fail(badRequest);
     });
     parser.on("error", () => fail(unfinished));

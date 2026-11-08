@@ -45,7 +45,11 @@ export const VaultImportView = z
   .strict();
 export type VaultImportView = z.infer<typeof VaultImportView>;
 
-export const SkipReason = z.enum(["not_markdown", "hidden", "bad_path", "duplicate"]);
+/**
+ * Why a file wasn't imported. `too_long` is a note over MAX_NOTE_CHARS and `symlink` a link inside a zipped
+ * vault; both are reported by the zip upload and by clients that check sizes before sending.
+ */
+export const SkipReason = z.enum(["not_markdown", "hidden", "bad_path", "duplicate", "too_long", "symlink"]);
 export type SkipReason = z.infer<typeof SkipReason>;
 
 /** What one import or re-import changed. `skipped` lists at most a few paths; `skippedCount` counts them all. */
