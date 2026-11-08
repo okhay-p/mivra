@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import type { NoteGraph, SkipReason, VaultFile, VaultImportResult } from "@mivra/protocol";
 import { DuplicateImportName, type NoteStore, type PreparedNote, type VaultImportRow } from "../store/note-store.js";
 import { noteKey, parseNote } from "./parse.js";
+import { cleanVaultPath, type SkippedFile } from "./vault-path.js";
+
+export { cleanVaultPath, type SkippedFile };
 
 /**
  * Turns the files a client sent into a snapshot of the vault and stores it (ADR-014). No model runs here: the
@@ -20,22 +23,6 @@ export type ImportOutcome =
   | { ok: true; result: VaultImportResult }
   | { ok: false; kind: "duplicate_name" | "not_found"; message: string };
 
-/**
- * A safe vault path, or why the file is skipped. Paths come from the client, so absolute paths, `..`, empty
- * segments and NUL are refused outright. Hidden folders such as `.obsidian` and `.trash` hold config and
- * deleted notes, not notes.
- */
-export function cleanVaultPath(raw: string): { path: string } | { reason: SkipReason } {
-  let path = raw.replace(/\\/g, "/").normalize("NFC");
-  if (path.includes("\0") || path.startsWith("/") || /^[A-Za-z]:/.test(path)) return { reason: "bad_path" };
-  path = path.replace(/^(\.\/)+/, "");
-  const segments = path.split("/");
-  if (segments.some((s) => s === "" || s === "." || s === "..")) return { reason: "bad_path" };
-  if (segments.some((s) => s.startsWith("."))) return { reason: "hidden" };
-  if (!/\.md$/i.test(path)) return { reason: "not_markdown" };
-  return { path };
-}
-
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 export function importView(row: VaultImportRow): VaultImportResult["import"] {
@@ -52,7 +39,7 @@ const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resol
  */
 async function prepare(files: VaultFile[], previous: Map<string, string>) {
   let slice = performance.now();
-  const skipped: { path: string; reason: SkipReason }[] = [];
+  const skipped: SkippedFile[] = [];
   const seen = new Set<string>();
   const write: PreparedNote[] = [];
   const keep: string[] = [];
@@ -105,10 +92,14 @@ async function prepare(files: VaultFile[], previous: Map<string, string>) {
   return { snapshot: { write, keep }, skipped, truncated };
 }
 
-/** Starts a new import from a vault's files, or replaces an existing import's notes with them when `importId` is given. */
+/**
+ * Starts a new import from a vault's files, or replaces an existing import's notes with them when `importId` is given.
+ * `alreadySkipped` lists files a caller left out before this, such as a zip's attachments, to report with the rest.
+ */
 export async function importVault(
   store: NoteStore,
   input: { name: string; files: VaultFile[] } | { importId: string; files: VaultFile[] },
+  alreadySkipped: SkippedFile[] = [],
 ): Promise<ImportOutcome> {
   const previous = "importId" in input ? store.noteHashes(input.importId) : new Map<string, string>();
   const { snapshot, skipped, truncated } = await prepare(input.files, previous);
@@ -132,8 +123,9 @@ export async function importVault(
       updated: stored.updated,
       removed: stored.removed,
       unchanged: snapshot.keep.length,
-      skippedCount: skipped.length,
-      skipped: skipped.slice(0, MAX_SKIPPED_LISTED),
+      skippedCount: skipped.length + alreadySkipped.length,
+      // Attachments are the least surprising, so they're listed last.
+      skipped: [...skipped, ...alreadySkipped.filter((f) => f.reason !== "not_markdown"), ...alreadySkipped.filter((f) => f.reason === "not_markdown")].slice(0, MAX_SKIPPED_LISTED),
       truncated,
     },
   };

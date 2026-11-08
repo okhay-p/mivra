@@ -35,24 +35,33 @@ export interface ExtractOptions {
 
 export type Extract = (bytes: Uint8Array, options?: ExtractOptions) => Promise<ExtractedDocument>;
 
-type ChildResult = { ok: true; document: ExtractedDocument } | { ok: false; code: DocumentErrorCode; message: string };
+/** What the child does with the bytes: extract a document's text, or unpack a zipped vault's notes. */
+export type ChildTask = "document" | "vault-zip";
+
+type ChildResult<T> = { ok: true; value: T } | { ok: false; code: DocumentErrorCode; message: string };
 
 const errorCodes = new Set<string>(["too_large", "wrong_type", "no_text", "encrypted", "corrupt", "too_complex", "timeout", "failed"]);
 
-/** Only trusts a message shaped like the child's report; anything else is a failure. */
-function parseResult(message: unknown): ChildResult | undefined {
+/** A document as the child reports it, or undefined if it's shaped like anything else. */
+function parseDocument(value: unknown): ExtractedDocument | undefined {
+  const d = value as Record<string, unknown> | null | undefined;
+  const valid =
+    typeof d === "object" &&
+    d !== null &&
+    (d.kind === "pdf" || d.kind === "pptx") &&
+    Number.isInteger(d.pageCount) &&
+    Array.isArray(d.pages) &&
+    d.pages.every((p: unknown) => typeof p === "object" && p !== null && Number.isInteger((p as { page?: unknown }).page) && typeof (p as { text?: unknown }).text === "string");
+  return valid ? (d as unknown as ExtractedDocument) : undefined;
+}
+
+/** Only trusts a message shaped like the child's report, with a value `accept` takes; anything else is a failure. */
+function parseResult<T>(message: unknown, accept: (value: unknown) => T | undefined): ChildResult<T> | undefined {
   if (typeof message !== "object" || message === null) return undefined;
   const m = message as Record<string, unknown>;
   if (m.ok === true) {
-    const d = m.document as Record<string, unknown> | null | undefined;
-    const valid =
-      typeof d === "object" &&
-      d !== null &&
-      (d.kind === "pdf" || d.kind === "pptx") &&
-      Number.isInteger(d.pageCount) &&
-      Array.isArray(d.pages) &&
-      d.pages.every((p: unknown) => typeof p === "object" && p !== null && Number.isInteger((p as { page?: unknown }).page) && typeof (p as { text?: unknown }).text === "string");
-    return valid ? { ok: true, document: d as unknown as ExtractedDocument } : undefined;
+    const value = accept(m.value);
+    return value === undefined ? undefined : { ok: true, value };
   }
   if (m.ok === false && typeof m.code === "string" && errorCodes.has(m.code) && typeof m.message === "string") {
     return { ok: false, code: m.code as DocumentErrorCode, message: m.message };
@@ -64,7 +73,8 @@ function parseResult(message: unknown): ChildResult | undefined {
 function childTarget(): { path: string; execArgv: string[] } {
   if (!import.meta.url.endsWith(".ts")) return { path: fileURLToPath(new URL("./extract-child.js", import.meta.url)), execArgv: [] };
   const tsx = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
-  return { path: fileURLToPath(new URL("./extract-child.ts", import.meta.url)), execArgv: ["--import", tsx] };
+  // The condition resolves workspace packages such as @mivra/protocol to their source, as the dev server does.
+  return { path: fileURLToPath(new URL("./extract-child.ts", import.meta.url)), execArgv: ["--conditions=@mivra/source", "--import", tsx] };
 }
 
 /** The child's resident memory, read from /proc where there is one; elsewhere the child reports it. */
@@ -80,16 +90,19 @@ async function procRss(pid: number): Promise<number | undefined> {
 const alive = (child: ChildProcess) => child.exitCode === null && child.signalCode === null;
 
 /**
- * Extracts a file's text in a separate Node process, so a slow or hostile file can't stall chat or take
- * the server down: a native crash or running out of memory only ends the child. The child gets its own
- * heap limit and its resident memory is watched; a timeout, cancellation or limit sends SIGTERM, then
- * SIGKILL after a grace period. The promise settles only once the child has exited, so a caller's
- * capacity is freed only when the work really has stopped. Rejects only with DocumentError.
+ * Runs one task on a hostile file's bytes in a separate Node process, so a slow or hostile file can't stall
+ * chat or take the server down: a native crash or running out of memory only ends the child. The child gets
+ * its own heap limit and its resident memory is watched; a timeout, cancellation or limit sends SIGTERM, then
+ * SIGKILL after a grace period. The promise settles only once the child has exited, so a caller's capacity is
+ * freed only when the work really has stopped. `accept` checks the child's result and returns undefined for
+ * anything malformed. Rejects only with DocumentError.
  */
-export const extractInChild: Extract = (
-  bytes,
-  { timeoutMs = TIMEOUT_MS, maxHeapMb = MAX_HEAP_MB, maxRssBytes = MAX_RSS_BYTES, killGraceMs = KILL_GRACE_MS, signal } = {},
-) =>
+export const runInChild = <T>(
+  task: ChildTask,
+  bytes: Uint8Array,
+  accept: (value: unknown) => T | undefined,
+  { timeoutMs = TIMEOUT_MS, maxHeapMb = MAX_HEAP_MB, maxRssBytes = MAX_RSS_BYTES, killGraceMs = KILL_GRACE_MS, signal }: ExtractOptions = {},
+): Promise<T> =>
   new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(new DocumentError("failed", CANCELLED));
     const { path, execArgv } = childTarget();
@@ -161,9 +174,9 @@ export const extractInChild: Extract = (
         reportedRss = (message as { rss: number }).rss;
         return;
       }
-      const result = parseResult(message);
+      const result = parseResult(message, accept);
       if (!result) fail("failed", UNREADABLE);
-      else if (result.ok) decide(() => resolve(result.document));
+      else if (result.ok) decide(() => resolve(result.value));
       else fail(result.code, result.message);
     });
     child.on("error", () => {
@@ -185,7 +198,10 @@ export const extractInChild: Extract = (
       finish();
     });
 
-    child.send({ bytes, reportRss: process.platform !== "linux" }, (error) => {
+    child.send({ task, bytes, reportRss: process.platform !== "linux" }, (error) => {
       if (error) fail("failed", UNREADABLE);
     });
   });
+
+/** Extracts a PDF's or PPTX's text in a subprocess (see runInChild). */
+export const extractInChild: Extract = (bytes, options) => runInChild("document", bytes, parseDocument, options);

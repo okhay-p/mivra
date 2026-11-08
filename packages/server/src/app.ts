@@ -38,6 +38,7 @@ import { courseLessons, createLessonGenerator, lessonRevision, lessonView, recon
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
 import { importVault, importView, resolveGraph } from "./notes/vault-import.js";
+import { createZipImporter, type UnzipVault, type ZipImportError } from "./notes/vault-zip-import.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
 import { createNoteStore, type NoteRow } from "./store/note-store.js";
 import { createSettingsStore } from "./store/settings-store.js";
@@ -59,6 +60,8 @@ export interface AppDeps {
   plugins?: Plugin[];
   /** Defaults to extracting on a worker thread. */
   extractDocument?: Extract;
+  /** Defaults to unpacking in the same kind of subprocess. */
+  unzipVault?: UnzipVault;
 }
 
 const Session = z
@@ -532,6 +535,44 @@ const deleteImport = createRoute({
   },
 });
 
+const ZipUpload = z.object({ file: z.string().openapi({ format: "binary" }) });
+const zipErrors = {
+  400: errorResponse("Not a multipart upload with one file field, or it didn't finish"),
+  413: errorResponse("Zip, or its notes unpacked, too large"),
+  415: errorResponse("Not a zip"),
+  422: errorResponse("Damaged, password-protected, too many entries, unsafe entry names, or no notes"),
+  429: errorResponse("Another vault is importing"),
+} as const;
+
+/** Documented only: the handler streams the body, which the request validator would buffer whole. */
+const createImportFromZip = createRoute({
+  method: "post",
+  path: "/imports/zip",
+  description:
+    "Imports a vault uploaded as a .zip of up to 64 MB, for browsers that can't pick a folder. Only `.md` entries outside hidden folders are unpacked, in memory and in a subprocess with limits; symbolic links and attachments are skipped. When every entry sits in one top folder, that folder is dropped from the paths. `name` defaults to the zip's file name.",
+  request: {
+    body: { content: { "multipart/form-data": { schema: ZipUpload.extend({ name: z.string().optional() }) } } },
+  },
+  responses: {
+    201: { description: "What the import stored", content: { "application/json": { schema: VaultImportResult } } },
+    409: errorResponse("An import with this name already exists"),
+    ...zipErrors,
+  },
+});
+
+/** Documented only, as createImportFromZip. */
+const replaceImportFromZip = createRoute({
+  method: "put",
+  path: "/imports/{id}/zip",
+  description: "Re-imports a vault from a .zip as a snapshot, with the same limits as POST /imports/zip.",
+  request: { params: ImportParams, body: { content: { "multipart/form-data": { schema: ZipUpload } } } },
+  responses: {
+    200: { description: "What the re-import changed", content: { "application/json": { schema: VaultImportResult } } },
+    404: errorResponse("Unknown import"),
+    ...zipErrors,
+  },
+});
+
 const getImportGraph = createRoute({
   method: "get",
   path: "/imports/{id}/graph",
@@ -553,6 +594,11 @@ const getNote = createRoute({
     404: errorResponse("Unknown note"),
   },
 });
+
+const zipImportErrorStatus = { not_found: 404, duplicate_name: 409, bad_request: 400, too_large: 413, wrong_type: 415, unreadable: 422, busy: 429 } as const satisfies Record<
+  ZipImportError["kind"],
+  number
+>;
 
 const attachErrorStatus = { not_found: 404, bad_request: 400, limit: 409, too_large: 413, wrong_type: 415, unreadable: 422, busy: 429 } as const satisfies Record<
   AttachError["kind"],
@@ -643,7 +689,9 @@ function toDocumentJson(row: DocumentRow): DocumentView {
   };
 }
 
-export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse], extractDocument }: AppDeps) {
+const uploadOf = (c: Context) => ({ body: c.req.raw.body, contentType: c.req.header("content-type"), contentLength: c.req.header("content-length") });
+
+export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse], extractDocument, unzipVault }: AppDeps) {
   const store = createSessionStore(db);
   const { credentials, check, isLocal = isLoopbackPeer } = providers;
   const providerKeys = (c: Context) => ({ providers: credentials.views(), canEdit: isLocal(c) });
@@ -671,9 +719,12 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   const attachDocument = createDocumentAttacher({ store, ...(extractDocument ? { extract: extractDocument } : {}) });
 
   const noteStore = createNoteStore(db);
+  const importZip = createZipImporter({ store: noteStore, ...(unzipVault ? { unzip: unzipVault } : {}) });
 
   const base = new OpenAPIHono();
   base.openAPIRegistry.registerPath(uploadDocument);
+  base.openAPIRegistry.registerPath(createImportFromZip);
+  base.openAPIRegistry.registerPath(replaceImportFromZip);
   // A vault arrives as one JSON body; refuse anything larger before it's read, let alone parsed.
   const vaultBodyLimit = bodyLimit({
     maxSize: MAX_VAULT_BYTES,
@@ -889,11 +940,21 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .post("/sessions/:id/documents", async (c) => {
       const result = await attachDocument(
         c.req.param("id"),
-        { body: c.req.raw.body, contentType: c.req.header("content-type"), contentLength: c.req.header("content-length") },
+        uploadOf(c),
         c.req.raw.signal,
       );
       if (!result.ok) return c.json({ error: result.error.message }, attachErrorStatus[result.error.kind]);
       return c.json(toDocumentJson(result.document), 201);
+    })
+    .post("/imports/zip", async (c) => {
+      const outcome = await importZip({ new: true }, uploadOf(c), c.req.raw.signal);
+      if (!outcome.ok) return c.json({ error: outcome.error.message }, zipImportErrorStatus[outcome.error.kind]);
+      return c.json(outcome.result, 201);
+    })
+    .put("/imports/:id/zip", async (c) => {
+      const outcome = await importZip({ importId: c.req.param("id") }, uploadOf(c), c.req.raw.signal);
+      if (!outcome.ok) return c.json({ error: outcome.error.message }, zipImportErrorStatus[outcome.error.kind]);
+      return c.json(outcome.result, 200);
     });
 
 

@@ -17,7 +17,7 @@ process.once("message", () => {
       process.stderr.write("ready\n");
       break;
     case "malformed":
-      process.send!({ ok: true, document: { kind: "exe", pages: "lots" } });
+      process.send!({ ok: true, value: { kind: "exe", pages: "lots" } });
       setInterval(() => {}, 1000);
       break;
     case "allocate": {
