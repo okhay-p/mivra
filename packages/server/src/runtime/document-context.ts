@@ -23,10 +23,11 @@ const IGNORED_TERMS = new Set(
 /**
  * An FTS5 query for a message, or undefined if it has no useful words. Only letters and digits survive,
  * each one quoted, so learner text can't cause a syntax error or act as an operator such as AND or NEAR.
+ * `keep` can drop more terms, as long as they stay letters and digits.
  */
-export function ftsQuery(text: string): string | undefined {
+export function ftsQuery(text: string, keep: (term: string) => boolean = () => true): string | undefined {
   const terms = new Set(
-    (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((term) => !IGNORED_TERMS.has(term)),
+    (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((term) => !IGNORED_TERMS.has(term) && keep(term)),
   );
   return terms.size > 0 ? [...terms].slice(0, MAX_QUERY_TERMS).map((term) => `"${term}"`).join(" OR ") : undefined;
 }

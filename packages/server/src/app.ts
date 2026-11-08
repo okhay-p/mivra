@@ -659,7 +659,8 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   const lessons = createLessonStore(db);
   lessons.recoverInterrupted();
   const registry = createCapabilityRegistry(plugins);
-  const turns = createTurnRunner({ store, registry, model, models, lessons });
+  const noteStore = createNoteStore(db);
+  const turns = createTurnRunner({ store, registry, model, models, lessons, notes: noteStore });
   const generator = createLessonGenerator({ store, lessons, registry, model, models });
   lessons.onChange(generator.changed);
   const lessonJson = (id: string) => {
@@ -669,8 +670,6 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     return { lesson, revision: lessonRevision(lesson) };
   };
   const attachDocument = createDocumentAttacher({ store, ...(extractDocument ? { extract: extractDocument } : {}) });
-
-  const noteStore = createNoteStore(db);
 
   const base = new OpenAPIHono();
   base.openAPIRegistry.registerPath(uploadDocument);

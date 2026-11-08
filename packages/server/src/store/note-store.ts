@@ -158,6 +158,31 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
         order by f.rank
         limit ${limit}`);
     },
+
+    /** How many notes every import holds together. */
+    countNotes(): number {
+      return db.select({ value: count() }).from(notes).get()?.value ?? 0;
+    },
+
+    /** Up to `limit` of a note's links and embeds, in the order they're written. */
+    noteLinks(noteId: string, limit: number): NoteLinkRow[] {
+      return db.all<NoteLinkRow>(sql`select note_id as noteId, target, kind from note_links where note_id = ${noteId} order by rowid limit ${limit}`);
+    },
+
+    /**
+     * The notes in an import that a link written as one of `nameKeys` could resolve to: those with that title or
+     * alias. A note's title is its file name, so a link with a folder needs only its last part here. Passing these
+     * to resolveGraph resolves the links exactly as the whole import would, without reading every note.
+     */
+    linkCandidates(importId: string, nameKeys: string[]) {
+      if (nameKeys.length === 0) return [];
+      const keys = sql.join(nameKeys.map((key) => sql`${key}`), sql`, `);
+      return db.all<{ id: string; path: string; title: string; titleKey: string; aliases: string }>(sql`
+        select id, path, title, title_key as titleKey, aliases from notes
+        where import_id = ${importId}
+          and (title_key in (${keys}) or (aliases != '[]' and exists (select 1 from json_each(aliases) where value in (${keys}))))`)
+        .map((n) => ({ ...n, aliases: JSON.parse(n.aliases) as string[], tags: [] as string[] }));
+    },
   };
 }
 
