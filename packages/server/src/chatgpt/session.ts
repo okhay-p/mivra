@@ -153,9 +153,16 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
     };
   }
 
-  function endSession(notice: string) {
-    const file = load();
-    save({ ...file, tokens: null, notice });
+  /** Whether `refreshToken` still belongs to the session on disk: a sign-out or new sign-in may have replaced it. */
+  const stillCurrent = (clientId: string, refreshToken: string) => {
+    const file = store.load();
+    return file?.registration?.clientId === clientId && file.tokens?.refreshToken === refreshToken;
+  };
+
+  /** Ends the session that `refreshToken` belongs to, unless another has replaced it meanwhile. */
+  function endSession(clientId: string, refreshToken: string, notice: string) {
+    if (!stillCurrent(clientId, refreshToken)) return;
+    save({ ...load(), tokens: null, notice });
   }
 
   async function refresh(): Promise<string> {
@@ -164,12 +171,19 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
     if (!file.tokens || !file.registration) throw new ChatGptError("signed_out", SIGNED_OUT);
     if (file.tokens.expiresAt - clock() > REFRESH_MARGIN_MS) return file.tokens.accessToken;
     const { clientId, subject } = file.registration;
+    const spent = file.tokens.refreshToken;
     let tokens: Tokens;
     try {
       tokens = await oauth.refresh(clientId, file.tokens);
     } catch (error) {
-      if (error instanceof ChatGptError && (TERMINAL_REFRESH_ERRORS.has(error.code) || error.code === "scope_not_granted")) endSession(error.message);
+      if (error instanceof ChatGptError && (TERMINAL_REFRESH_ERRORS.has(error.code) || error.code === "scope_not_granted")) endSession(clientId, spent, error.message);
       throw error;
+    }
+    // The learner signed out (or in to another account) while this refresh was out: don't bring the old session
+    // back. End the renewed one at OpenAI too, since revoking the old token didn't cover it.
+    if (!stillCurrent(clientId, spent)) {
+      void oauth.revoke(clientId, tokens.refreshToken);
+      throw new ChatGptError("signed_out", SIGNED_OUT);
     }
     // The old refresh token is spent: save the new one before anything else can fail.
     save({ ...load(), tokens, notice: null });
@@ -180,7 +194,7 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
       } catch (error) {
         // An unreachable key service doesn't make the tokens wrong; a bad or foreign identity does.
         if (!(error instanceof ChatGptError) || error.retryable) return tokens.accessToken;
-        endSession("ChatGPT's renewed sign-in couldn't be verified. Sign in again under Model providers.");
+        endSession(clientId, tokens.refreshToken, "ChatGPT's renewed sign-in couldn't be verified. Sign in again under Model providers.");
         throw error;
       }
     }
@@ -294,9 +308,14 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
         response.setHeader("Cache-Control", "no-store");
         response.setHeader("Referrer-Policy", "no-referrer");
         response.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'");
-        const url = new URL(request.url ?? "/", redirectUri);
+        let url: URL | undefined;
+        try {
+          url = new URL(request.url ?? "/", redirectUri);
+        } catch {
+          // A malformed target (`//[/`, say) must not take the server down.
+        }
         // Only the browser coming back to this exact address; anything else on the port is ignored.
-        if (request.method !== "GET" || request.headers.host !== `127.0.0.1:${port}` || url.pathname !== CALLBACK_PATH || current.settled) {
+        if (!url || request.method !== "GET" || request.headers.host !== `127.0.0.1:${port}` || url.pathname !== CALLBACK_PATH || current.settled) {
           response.writeHead(404).end("Not found");
           return;
         }

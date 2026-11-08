@@ -86,11 +86,17 @@ export function resolveModel(id: string, registry = defaultRegistry): LanguageMo
 }
 
 /** Per-call options for a selection: its effort, in the form each provider takes (ADR-012). */
-export function callOptionsFor(selection: ModelSelection): { reasoning?: ReasoningEffort; providerOptions?: ProviderOptions } {
+export function callOptionsFor(selection: ModelSelection): { reasoning?: ReasoningEffort; providerOptions?: ProviderOptions; maxRetries?: number } {
   // The ChatGPT route stores nothing and rejects system-role items (ADR-015). Without stored responses the SDK
   // asks for encrypted reasoning, so a later turn can replay it.
   if (selection.model.startsWith("chatgpt:")) {
-    return { ...(selection.effort ? { reasoning: selection.effort } : {}), providerOptions: { openai: { store: false, systemMessageMode: "developer" } } };
+    // No automatic retries, as in OpenAI's own example: a usage limit comes back as a 429, and repeating it only
+    // spends time and requests before the learner hears about it.
+    return {
+      ...(selection.effort ? { reasoning: selection.effort } : {}),
+      providerOptions: { openai: { store: false, systemMessageMode: "developer" } },
+      maxRetries: 0,
+    };
   }
   if (!selection.effort) return {};
   // OpenRouter takes effort in its own request field; the AI SDK's `reasoning` option doesn't reach it.

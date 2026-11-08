@@ -1,4 +1,4 @@
-import { APICallError, LoadAPIKeyError, NoSuchModelError, RetryError } from "ai";
+import { APICallError, LoadAPIKeyError, NoSuchModelError, RetryError, StreamProviderError } from "ai";
 import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
 import { ChatGptError, errorCode } from "../chatgpt/oauth.js";
 
@@ -30,16 +30,25 @@ const CHATGPT_ERRORS: Record<string, string> = {
   chatpass_v2_invalid_authorization_context: SIGN_IN_AGAIN,
 };
 
-/** OpenAI's error code in an API error's body, or in a streamed `response.failed` or `error` event. */
+/** A code in an error body or event: `{ error }`, or a `response.failed` frame's `{ response: { error } }`. */
+const codeIn = (value: unknown) => errorCode(value) ?? errorCode((value as { response?: unknown } | null)?.response);
+
+/**
+ * OpenAI's error code, wherever the SDK put it: an HTTP error's body, or a streamed `response.failed` / `error`
+ * event, which the SDK turns into an APICallError (before any output) or a StreamProviderError (after).
+ */
 function openAiErrorCode(error: unknown): string | undefined {
   if (APICallError.isInstance(error)) {
+    let body: unknown;
     try {
-      return errorCode(JSON.parse(error.responseBody ?? "")) ?? errorCode(error.data);
+      body = JSON.parse(error.responseBody ?? "");
     } catch {
-      return errorCode(error.data);
+      body = undefined;
     }
+    return codeIn(body) ?? codeIn(error.data);
   }
-  if (error && typeof error === "object") return errorCode(error) ?? errorCode((error as { response?: unknown }).response);
+  if (StreamProviderError.isInstance(error)) return codeIn({ error: { code: error.code } }) ?? codeIn(error.data);
+  if (error && typeof error === "object") return codeIn(error);
   return undefined;
 }
 

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APICallError, streamText } from "ai";
+import { APICallError, StreamProviderError, streamText } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
 import { afterEach, describe, expect, it } from "vitest";
@@ -99,6 +99,23 @@ describe("signing in with ChatGPT", () => {
     expect((await started.done).signedIn).toBe(true);
     // The code is spent: a replay finds no sign-in waiting.
     await expect(visit(back)).rejects.toThrow();
+  });
+
+  it("survives a malformed request to the callback listener", async () => {
+    const ctx = setup();
+    const started = await ctx.session.startSignIn();
+    const port = new URL(new URL(started.url).searchParams.get("redirect_uri")!).port;
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port, path: "//[/", headers: { host: `127.0.0.1:${port}` } }, (res) => {
+        res.resume();
+        resolve(res.statusCode!);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    expect(status).toBe(404);
+    expect(ctx.session.view().pending).toBe(true);
+    expect((await visit(ctx.auth.approve(started.url))).status).toBe(200);
   });
 
   it("refuses a sign-in that doesn't grant use of the plan", async () => {
@@ -207,6 +224,27 @@ describe("keeping the ChatGPT token fresh", () => {
     expect(ctx.auth.state.refreshes).toBe(1);
   });
 
+  it("doesn't bring a session back when the learner signs out while it's being renewed", async () => {
+    const auth = fakeAuth();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const slowFetch: typeof fetch = async (input, init) => {
+      if (String(input).endsWith("/oauth/token")) await held;
+      return auth.fetch(input, init);
+    };
+    const store = memoryChatGptStore(signedIn(Date.now() - 1000));
+    const session = createChatGptSession({ store, oauth: createOAuthClient({ fetch: slowFetch }), callbackPort: 0 });
+    const renewing = session.accessToken();
+    await session.signOut();
+    release();
+    await expect(renewing).rejects.toThrow("Sign in with ChatGPT");
+    expect(session.view().signedIn).toBe(false);
+    expect(store.current()!.tokens).toBeNull();
+    // Both the old and the renewed refresh tokens are revoked.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(auth.state.revoked).toEqual(expect.arrayContaining(["refresh-1", "refresh-2"]));
+  });
+
   it("signs the learner out when the session can't be renewed", async () => {
     const ctx = setup({}, { initial: signedIn(Date.now() - 1000) });
     ctx.auth.state.refreshError = "refresh_token_expired";
@@ -264,6 +302,45 @@ describe("the ChatGPT model provider", () => {
     });
     expect(publicErrorText(error)).toBe(CHATGPT_USAGE_LIMIT_ERROR);
     expect(publicErrorText({ type: "response.failed", response: { error: { code: "subscription_sharing_usage_unavailable" } } })).toContain("Try again shortly");
+  });
+
+  it("recognises a usage limit however the SDK reports it, and doesn't retry it", async () => {
+    let calls = 0;
+    const limited: typeof fetch = async () => {
+      calls++;
+      return json({ error: { code: "subscription_sharing_usage_limit_exceeded", message: "limit" } }, 429);
+    };
+    let failure: unknown;
+    const model = "chatgpt:gpt-6.1-sol";
+    await streamText({
+      model: resolveModel(model, createRegistry({ chatgptToken: async () => "t", fetch: limited })),
+      ...callOptionsFor({ model, effort: null }),
+      prompt: "hi",
+      onError: ({ error }) => (failure = error),
+    }).consumeStream();
+    expect(calls).toBe(1);
+    expect(publicErrorText(failure)).toBe(CHATGPT_USAGE_LIMIT_ERROR);
+
+    // After output has started, a `response.failed` event arrives mid-stream.
+    const created = { type: "response.created", sequence_number: 0, response: { id: "r1", created_at: 1, model: "gpt-6.1-sol", status: "in_progress", output: [] } };
+    const delta = { type: "response.output_text.delta", sequence_number: 1, item_id: "m1", output_index: 0, content_index: 0, delta: "Hel", logprobs: [] };
+    const failed = {
+      type: "response.failed",
+      sequence_number: 2,
+      response: { id: "r1", created_at: 1, model: "gpt-6.1-sol", status: "failed", output: [], error: { code: "subscription_sharing_usage_limit_exceeded", message: "limit" }, usage: null },
+    };
+    const midStream: typeof fetch = async () =>
+      new Response([created, delta, failed].map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+    failure = undefined;
+    await streamText({
+      model: resolveModel(model, createRegistry({ chatgptToken: async () => "t", fetch: midStream })),
+      ...callOptionsFor({ model, effort: null }),
+      prompt: "hi",
+      onError: ({ error }) => (failure ??= error),
+    }).consumeStream();
+    expect(failure).toBeDefined();
+    expect(publicErrorText(failure)).toBe(CHATGPT_USAGE_LIMIT_ERROR);
+    expect(publicErrorText(new StreamProviderError({ message: "x", code: "subscription_sharing_usage_unavailable" }))).toContain("Try again shortly");
   });
 
   it("prefers ChatGPT as the default once the learner signs in", () => {
