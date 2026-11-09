@@ -10,6 +10,7 @@ import { createOAuthClient } from "../server/src/chatgpt/oauth.js";
 import { createChatGptSession, memoryChatGptStore } from "../server/src/chatgpt/session.js";
 import { memoryCredentials } from "../server/src/credentials.js";
 import { fakeAuth } from "../server/test/support/fake-chatgpt-auth.js";
+import { createFakeCompatible } from "../server/test/support/fake-compatible.js";
 import { staticCatalog } from "../server/src/models/catalog.js";
 import { runs, memories } from "../server/src/db/schema.js";
 import { openDb } from "../server/src/db/client.js";
@@ -759,6 +760,11 @@ app.get("/e2e/state", (c) => c.json({
   pendingMemories: db.select({ status: memories.status }).from(memories).all().filter((m) => m.status === "pending").length,
   modelAborts, controlledStarts,
 }));
+// A stand-in OpenAI-compatible service for custom providers (issue #69), at <origin>/e2e/compat/v1. Custom models are
+// called for real through it, not through the scripted model.
+const compatible = createFakeCompatible({ name: "the fake", key: "sk-fake-e2e-key-0000FAKE", models: ["fake-chat", "fake-mini"] });
+app.route("/e2e/compat", compatible.app);
+app.get("/e2e/compat-requests", (c) => c.json(compatible.requests.map((r) => ({ path: r.path, authorization: r.authorization }))));
 app.get("/e2e/chatgpt/approve", (c) => c.text(chatgptAuth.approve(c.req.query("url")!)));
 // Lets a test finish a held reply once it has seen the state it wants to check.
 app.post("/e2e/release", (c) => {

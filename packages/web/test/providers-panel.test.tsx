@@ -12,6 +12,7 @@ const view = (
   chatgpt: Partial<ChatGpt> | null = {},
 ): ProviderKeysView => ({
   canEdit,
+  custom: [],
   chatgpt: chatgpt && { ...signedOut, ...chatgpt },
   providers: (["openrouter", "anthropic", "openai"] as const).map((id) => ({
     id,
@@ -129,6 +130,37 @@ describe("ProvidersPanel", () => {
     expect(screen.getByRole("button", { name: "Continue with ChatGPT" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Use a different account" })).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toBe("Your ChatGPT sign-in has expired.");
+  });
+
+  it("shows a custom provider without its key, and tests a model", async () => {
+    const provider: ProviderKeysView["custom"][number] = {
+      id: "local",
+      name: "Local Box",
+      baseUrl: { value: "http://127.0.0.1:11434/v1", source: "saved", env: "http://127.0.0.1:9999/v1", error: null },
+      key: { source: "saved", hint: "WXYZ" },
+      envNames: { baseUrl: "MIVRA_PROVIDER_LOCAL_BASE_URL", key: "MIVRA_PROVIDER_LOCAL_API_KEY" },
+      models: [{ id: "qwen", modelId: "custom:local/qwen", contextLength: 32000, maxOutputTokens: null, verification: { status: "unverified", message: null, at: null } }],
+      discovery: { state: "failed", ids: [], error: "This provider has no model list at http://127.0.0.1:11434/v1/models (HTTP 404). Enter model ids by hand; chat may still work.", fetchedAt: null },
+    };
+    const withCustom = (status: "verified" | "unverified") => ({
+      ...view(),
+      custom: [{ ...provider, models: [{ ...provider.models[0]!, verification: { status, message: null, at: null } }] }],
+    });
+    const fetch = openPanel({}, json(withCustom("unverified")), json({ result: { ok: true, message: "Streaming, tool calling and continuing after a tool result all work." }, providers: withCustom("verified") }));
+    const card = await screen.findByRole("region", { name: "Local Box" });
+    expect(card.textContent).toContain("http://127.0.0.1:11434/v1 · saved");
+    expect(card.textContent).toContain("Key saved · ends in WXYZ.");
+    expect(card.textContent).toContain("no model list");
+    expect(card.textContent).toContain("32,000 context");
+    // A saved URL overrides the environment's, which the learner can go back to.
+    expect(screen.getByRole("button", { name: "Use MIVRA_PROVIDER_LOCAL_BASE_URL" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Test model qwen" }));
+    expect(await screen.findByText("Streaming, tool calling and continuing after a tool result all work.")).toBeTruthy();
+    expect(screen.getByText("Works")).toBeTruthy();
+    const input = fetch.mock.calls[1]![0];
+    expect(String(input instanceof Request ? input.url : input)).toMatch(/\/settings\/providers\/custom\/local\/test$/);
+    const { hasAnyKey } = await import("../src/ProvidersPanel.js");
+    expect(hasAnyKey(withCustom("verified"))).toBe(true);
   });
 
   it("counts a ChatGPT sign-in as a provider", async () => {

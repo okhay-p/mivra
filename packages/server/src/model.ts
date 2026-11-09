@@ -14,6 +14,11 @@ export type ReasoningEffort = (typeof reasoningEfforts)[number];
 export interface ModelSelection {
   model: string;
   effort: ReasoningEffort | null;
+  /**
+   * Set by the server for a run on a custom provider's model (issue #69): a fingerprint of the endpoint it calls.
+   * Recorded with the run, never sent to a client, and never part of the saved selection.
+   */
+  endpoint?: string;
 }
 
 export interface RegistryOptions {

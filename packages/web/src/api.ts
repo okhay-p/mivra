@@ -281,3 +281,28 @@ export const renameSession = (id: string, title: string) =>
 
 /** Deletes a session and all that belongs only to it; for a course, its lessons and their chats too. */
 export const deleteSession = (id: string) => request(() => api.sessions[":id"].$delete({ param: { id } }), () => undefined);
+
+/** A custom OpenAI-compatible provider (issue #69): its URL, key status, models and their test results. Never its key. */
+export type CustomProvider = ProviderKeysView["custom"][number];
+export type CustomModelEntry = { id: string; contextLength?: number | null; maxOutputTokens?: number | null };
+
+export const createCustomProvider = (body: { name: string; baseUrl?: string | null; key?: string; models?: CustomModelEntry[] }) =>
+  request(() => api.settings.providers.custom.$post({ json: body }), readProviderKeys);
+
+export const updateCustomProvider = (id: string, body: { name?: string; baseUrl?: string | null; key?: string | null; models?: CustomModelEntry[] }) =>
+  request(() => api.settings.providers.custom[":id"].$put({ param: { id }, json: body }), readProviderKeys);
+
+export const removeCustomProvider = (id: string) => request(() => api.settings.providers.custom[":id"].$delete({ param: { id } }), readProviderKeys);
+
+/** Loads the provider's model list from <base URL>/models. */
+export const refreshCustomModels = (id: string) => request(() => api.settings.providers.custom[":id"].refresh.$post({ param: { id } }), readProviderKeys);
+
+/** Tests one model for streamed tool calling; it may spend a few tokens. Aborting the signal cancels it. */
+export const testCustomModel = (id: string, model: string, signal?: AbortSignal) =>
+  request(
+    () => api.settings.providers.custom[":id"].test.$post({ param: { id }, json: { model } }, { init: { signal } }),
+    async (res) => {
+      window.dispatchEvent(new Event(PROVIDERS_CHANGED));
+      return (await res.json()) as { result: { ok: boolean; reason?: string; message: string }; providers: ProviderKeysView };
+    },
+  );

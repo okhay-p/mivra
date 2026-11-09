@@ -48,6 +48,13 @@ export interface CredentialStore {
   set(provider: ProviderId, key: string): { ok: true } | { ok: false; reason: "env" };
   /** Removes a saved key; true if there was one. */
   remove(provider: ProviderId): boolean | "env";
+  /**
+   * A custom provider's key (issue #69): its environment variable, else the one saved under `custom:<id>`. Kept
+   * apart from the built-in keys, so a custom endpoint never receives another provider's key.
+   */
+  customKey(id: string, envName: string): { key: string | undefined; source: "env" | "saved" | null };
+  setCustomKey(id: string, key: string): void;
+  removeCustomKey(id: string): boolean;
 }
 
 const hintFor = (key: string) => (key.length >= 12 ? key.slice(-4) : null);
@@ -57,7 +64,9 @@ interface SavedKeys {
   save(keys: Record<string, string>): void;
 }
 
-function credentialStore(fromEnv: (provider: ProviderId) => string | undefined, saved: SavedKeys): CredentialStore {
+function credentialStore(envVar: (name: string) => string | undefined, saved: SavedKeys): CredentialStore {
+  const fromEnv = (provider: ProviderId) => envVar(PROVIDER_ENV[provider]);
+  const customName = (id: string) => `custom:${id}`;
   return {
     keys() {
       const stored = saved.load();
@@ -87,6 +96,22 @@ function credentialStore(fromEnv: (provider: ProviderId) => string | undefined, 
       saved.save(stored);
       return true;
     },
+    customKey(id, envName) {
+      const env = envVar(envName);
+      if (env) return { key: env, source: "env" };
+      const key = saved.load()[customName(id)];
+      return key ? { key, source: "saved" } : { key: undefined, source: null };
+    },
+    setCustomKey(id, key) {
+      saved.save({ ...saved.load(), [customName(id)]: ApiKey.parse(key) });
+    },
+    removeCustomKey(id) {
+      const stored = saved.load();
+      if (!(customName(id) in stored)) return false;
+      delete stored[customName(id)];
+      saved.save(stored);
+      return true;
+    },
   };
 }
 
@@ -99,7 +124,7 @@ export function createCredentialStore({ dataDir, env = process.env }: { dataDir:
   const path = join(dataDir, CREDENTIALS_FILE);
   // The file is read on every lookup; warn about a broken one once, not on every run.
   let warned = false;
-  return credentialStore((provider) => env[PROVIDER_ENV[provider]]?.trim() || undefined, {
+  return credentialStore((name) => env[name]?.trim() || undefined, {
     load() {
       let text: string;
       try {
@@ -132,10 +157,14 @@ export function createCredentialStore({ dataDir, env = process.env }: { dataDir:
   });
 }
 
-/** Keys held in memory, for tests and the e2e harness: `env` keys act like environment variables. */
-export function memoryCredentials({ env = {}, saved = {} }: { env?: ProviderKeys; saved?: ProviderKeys } = {}): CredentialStore {
+/**
+ * Keys held in memory, for tests and the e2e harness: `env` keys act like environment variables, as do `vars`
+ * (by variable name, for custom providers' keys).
+ */
+export function memoryCredentials({ env = {}, saved = {}, vars = {} }: { env?: ProviderKeys; saved?: ProviderKeys & Record<string, string>; vars?: Record<string, string> } = {}): CredentialStore {
   let stored: Record<string, string> = { ...saved } as Record<string, string>;
-  return credentialStore((provider) => env[provider], {
+  const byName = Object.fromEntries(providerIds.flatMap((p) => (env[p] ? [[PROVIDER_ENV[p], env[p]]] : [])));
+  return credentialStore((name) => byName[name] ?? vars[name], {
     load: () => ({ ...stored }),
     save: (keys) => (stored = { ...keys }),
   });

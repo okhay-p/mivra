@@ -28,6 +28,7 @@ import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
 import { reasoningEfforts, type ModelSelection } from "./model.js";
 import { staticCatalog, type ModelCatalog } from "./models/catalog.js";
+import { CUSTOM_PREFIX, CustomProviderError, CustomProviderNotFound, createCustomProviders } from "./models/custom-providers.js";
 import type { KeyCheck } from "./models/key-check.js";
 import { MAX_PINNED, ModelId, SelectionInput, createModelSettings } from "./models/selection.js";
 import type { Extract } from "./documents/extract-in-child.js";
@@ -66,6 +67,11 @@ export interface AppDeps {
     chatgpt?: ChatGptSession;
     /** Override fetch for the ChatGPT check, for tests. */
     fetch?: typeof fetch;
+    /**
+     * Custom OpenAI-compatible providers (issue #69): `env` reads the variables that may set a provider's URL and key
+     * (`MIVRA_PROVIDER_<ID>_BASE_URL`, `_API_KEY`); `fetch` is for their lists, tests and model calls.
+     */
+    custom?: { env?: (name: string) => string | undefined; fetch?: typeof fetch };
   };
   /** Defaults to the first-party core-learning, core-memory and core-course plugins. */
   plugins?: Plugin[];
@@ -105,6 +111,10 @@ const CatalogModel = z
     contextLength: z.number().nullable(),
     price: z.object({ input: z.number(), output: z.number() }).nullable().openapi({ description: "US dollars per million tokens" }),
     reasoning: z.object({ efforts: z.array(z.enum(reasoningEfforts)), defaultEffort: z.enum(reasoningEfforts).nullable() }).nullable(),
+    verification: z
+      .enum(["unverified", "verified", "failed"])
+      .optional()
+      .openapi({ description: "A custom provider's model only: whether its last compatibility test, for the URL and key in use, passed" }),
   })
   .openapi("CatalogModel");
 const ModelPicker = z
@@ -115,6 +125,10 @@ const ModelPicker = z
     suggested: z.array(z.string()),
     models: z.array(CatalogModel),
     catalog: z.enum(["fresh", "stale", "unavailable"]),
+    providers: z
+      .array(z.object({ id: z.string(), name: z.string(), removed: z.boolean() }))
+      .openapi({ description: "Custom providers' names by the prefix of their model ids (`custom:<id>`), removed ones included so old replies stay labelled" }),
+    unavailable: z.string().nullable().openapi({ description: "Why the current model can't run any more (its custom provider was removed, say); choose another" }),
   })
   .openapi("ModelPicker");
 
@@ -333,9 +347,42 @@ const ChatGptView = z
     welcome: z.boolean().openapi({ description: "Signed in, and the one-time welcome dialog hasn't been shown" }),
   })
   .openapi("ChatGptSignIn");
+const Verification = z.object({
+  status: z.enum(["unverified", "verified", "failed"]),
+  message: z.string().nullable(),
+  at: z.string().datetime().nullable(),
+});
+const CustomProvider = z
+  .object({
+    id: z.string().openapi({ description: "Stable: renaming the provider doesn't change it, and its models are custom:<id>/<model id>" }),
+    name: z.string(),
+    baseUrl: z.object({
+      value: z.string().nullable(),
+      source: z.enum(["saved", "env"]).nullable(),
+      env: z.string().nullable().openapi({ description: "The URL its environment variable sets, which a saved URL overrides" }),
+      error: z.string().nullable(),
+    }),
+    key: z.object({ source: z.enum(["env", "saved"]).nullable(), hint: z.string().nullable() }),
+    envNames: z.object({ baseUrl: z.string(), key: z.string() }),
+    models: z.array(z.object({
+      id: z.string(),
+      modelId: z.string(),
+      contextLength: z.number().nullable(),
+      maxOutputTokens: z.number().nullable(),
+      verification: Verification,
+    })),
+    discovery: z.object({
+      state: z.enum(["none", "fresh", "stale", "failed"]),
+      ids: z.array(z.string()),
+      error: z.string().nullable(),
+      fetchedAt: z.string().datetime().nullable(),
+    }).openapi({ description: "The provider's own model list from <base URL>/models, separate from any compatibility test" }),
+  })
+  .openapi("CustomProvider");
 const ProviderKeys = z
   .object({
     providers: z.array(ProviderKey),
+    custom: z.array(CustomProvider).openapi({ description: "Custom OpenAI-compatible providers (issue #69). Keys are never returned" }),
     chatgpt: ChatGptView.nullable().openapi({ description: "Sign in with ChatGPT (ADR-015); null when this server doesn't offer it" }),
     canEdit: z.boolean().openapi({ description: "Whether this client may change keys: only from the server's own machine" }),
   })
@@ -390,6 +437,110 @@ const checkProviderKeyRoute = createRoute({
 });
 
 const providersResponse = { description: "Each provider's status", content: { "application/json": { schema: ProviderKeys } } };
+
+const CustomModelBody = z.object({
+  id: z.string().max(1000),
+  contextLength: z.number().nullable().optional(),
+  maxOutputTokens: z.number().nullable().optional(),
+});
+const CustomParams = z.object({ id: z.string().max(100) });
+
+const createCustomProvider = createRoute({
+  method: "post",
+  path: "/settings/providers/custom",
+  description:
+    "Add an OpenAI-compatible provider (Chat Completions). Only accepted from the server's own machine. The key goes in the credential store, never the database; leave it out for a local server that needs none.",
+  request: {
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            name: z.string().max(1000),
+            baseUrl: z.string().max(2000).nullable().optional(),
+            key: z.string().max(1000).optional(),
+            models: z.array(CustomModelBody).max(1000).optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    201: providersResponse,
+    400: errorResponse("A name, URL, key or model id isn't valid"),
+    403: errorResponse("Providers can only be changed on the server's own machine"),
+  },
+});
+
+const updateCustomProvider = createRoute({
+  method: "put",
+  path: "/settings/providers/custom/{id}",
+  description:
+    "Change a custom provider. Only accepted from the server's own machine. `baseUrl: null` goes back to the environment's URL and `key: null` removes the saved key. A new URL or key clears its model list and test results. Applies from the next run.",
+  request: {
+    params: CustomParams,
+    body: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            name: z.string().max(1000).optional(),
+            baseUrl: z.string().max(2000).nullable().optional(),
+            key: z.string().max(1000).nullable().optional(),
+            models: z.array(CustomModelBody).max(1000).optional(),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: providersResponse,
+    400: errorResponse("A name, URL, key or model id isn't valid"),
+    403: errorResponse("Providers can only be changed on the server's own machine"),
+    404: errorResponse("No such provider"),
+  },
+});
+
+const removeCustomProvider = createRoute({
+  method: "delete",
+  path: "/settings/providers/custom/{id}",
+  description: "Remove a custom provider and its saved key. Only accepted from the server's own machine. Replies it wrote keep naming it.",
+  request: { params: CustomParams },
+  responses: {
+    200: providersResponse,
+    403: errorResponse("Providers can only be changed on the server's own machine"),
+    404: errorResponse("No such provider"),
+  },
+});
+
+const refreshCustomModels = createRoute({
+  method: "post",
+  path: "/settings/providers/custom/{id}/refresh",
+  description: "Load the provider's model list from <base URL>/models, with only its own key. A failure is reported in `discovery` and keeps the last good list.",
+  request: { params: CustomParams },
+  responses: { 200: providersResponse, 400: errorResponse("No base URL set"), 404: errorResponse("No such provider") },
+});
+
+const testCustomModel = createRoute({
+  method: "post",
+  path: "/settings/providers/custom/{id}/test",
+  description:
+    "Check that a configured model streams, calls a tool and continues after the tool's result, as Mivra needs. It spends a few tokens. The result applies to the URL and key in use now.",
+  request: { params: CustomParams, body: { content: { "application/json": { schema: z.object({ model: z.string().max(1000) }) } } } },
+  responses: {
+    200: {
+      description: "The test's outcome, and every provider's status",
+      content: {
+        "application/json": {
+          schema: z.object({
+            result: z.object({ ok: z.boolean(), reason: z.string().optional(), message: z.string() }),
+            providers: ProviderKeys,
+          }),
+        },
+      },
+    },
+    400: errorResponse("Not one of the provider's models, or no base URL"),
+    404: errorResponse("No such provider"),
+  },
+});
 const notOffered = errorResponse("This server doesn't offer sign-in with ChatGPT");
 const startChatGptSignIn = createRoute({
   method: "post",
@@ -803,22 +954,46 @@ const uploadOf = (c: Context) => ({ body: c.req.raw.body, contentType: c.req.hea
 export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse], extractDocument, unzipVault }: AppDeps) {
   const store = createSessionStore(db);
   const { credentials, check, isLocal = isLoopbackPeer, chatgpt, fetch: fetchImpl = fetch } = providers;
-  const providerKeys = (c: Context) => ({ providers: credentials.views(), chatgpt: chatgpt?.view() ?? null, canEdit: isLocal(c) });
+  const settingsStore = createSettingsStore(db);
+  // Custom OpenAI-compatible providers (issue #69): configuration in settings, keys in the credential store.
+  const custom = createCustomProviders({ settings: settingsStore, credentials, env: providers.custom?.env, fetch: providers.custom?.fetch });
+  const providerKeys = (c: Context) => ({ providers: credentials.views(), custom: custom.list(), chatgpt: chatgpt?.view() ?? null, canEdit: isLocal(c) });
   const notLocal = "API keys can only be changed on the computer running Mivra. Use `mivra auth set` there.";
   const fromEnv = "This key comes from an environment variable. Change or unset it there.";
+  const notLocalProvider = "Providers can only be changed on the computer running Mivra.";
+  const builtInCatalog = modelOptions.catalog ?? staticCatalog([]);
   const models = createModelSettings({
-    settings: createSettingsStore(db),
-    catalog: modelOptions.catalog ?? staticCatalog([]),
+    settings: settingsStore,
+    // Custom providers' models join the catalog, each under its own provider (issue #69).
+    catalog: {
+      async list() {
+        const { models: listed, state } = await builtInCatalog.list();
+        const own = custom.catalog();
+        return { models: [...own, ...listed], state: state === "unavailable" && own.length > 0 ? "stale" : state };
+      },
+    },
     defaults: modelOptions.defaults,
     suggested: modelOptions.suggested,
   });
+  // A custom model is called with its own provider's URL and key, never through the built-in registry; anything
+  // else goes to `model`. The configuration is read when a run starts, so a run keeps it to the end.
+  const resolveModel = (selection: ModelSelection): LanguageModel =>
+    selection.model.startsWith(CUSTOM_PREFIX) ? custom.languageModel(selection) : model(selection);
+  // A custom model's run records its endpoint, so reasoning never replays to another destination.
+  const runModels = {
+    forRun(): ModelSelection {
+      const selection = models.forRun();
+      const endpoint = selection.model.startsWith(CUSTOM_PREFIX) ? custom.endpointFor(selection.model) : undefined;
+      return endpoint ? { ...selection, endpoint } : selection;
+    },
+  };
   store.recoverInterruptedRuns();
   const lessons = createLessonStore(db);
   lessons.recoverInterrupted();
   const registry = createCapabilityRegistry(plugins);
   const noteStore = createNoteStore(db);
-  const turns = createTurnRunner({ store, registry, model, models, lessons, notes: noteStore });
-  const generator = createLessonGenerator({ store, lessons, registry, model, models, notes: noteStore });
+  const turns = createTurnRunner({ store, registry, model: resolveModel, models: runModels, lessons, notes: noteStore });
+  const generator = createLessonGenerator({ store, lessons, registry, model: resolveModel, models: runModels, notes: noteStore });
   lessons.onChange(generator.changed);
   const lessonJson = (id: string) => {
     const row = lessons.findLesson(id);
@@ -1002,7 +1177,10 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       // Cast for the same reason as messages: hono's JSON typing recurses too deeply on the view type.
       return c.json(result.view as never, 201);
     })
-    .openapi(listModels, async (c) => c.json(await models.picker(), 200))
+    .openapi(listModels, async (c) => {
+      const picker = await models.picker();
+      return c.json({ ...picker, providers: custom.names(), unavailable: custom.unavailable(picker.current.model) }, 200);
+    })
     .openapi(selectModel, async (c) => {
       const result = await models.select(c.req.valid("json"));
       if (!result.ok) return c.json({ error: result.message }, result.kind === "invalid" ? 400 : 503);
@@ -1022,6 +1200,62 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       if (removed === "env") return c.json({ error: fromEnv }, 409);
       if (!removed) return c.json({ error: "No saved key for this provider" }, 404);
       return c.json(providerKeys(c), 200);
+    })
+    .openapi(createCustomProvider, (c) => {
+      if (!isLocal(c)) return c.json({ error: notLocalProvider }, 403);
+      const body = c.req.valid("json");
+      try {
+        custom.create({ name: body.name, baseUrl: body.baseUrl || null, ...(body.key ? { key: body.key } : {}), models: body.models });
+      } catch (error) {
+        if (error instanceof CustomProviderError) return c.json({ error: error.message }, 400);
+        throw error;
+      }
+      return c.json(providerKeys(c), 201);
+    })
+    .openapi(updateCustomProvider, (c) => {
+      if (!isLocal(c)) return c.json({ error: notLocalProvider }, 403);
+      const body = c.req.valid("json");
+      try {
+        custom.update(c.req.valid("param").id, {
+          ...body,
+          // An empty field means "not set": no saved URL (so the environment's applies), or no saved key.
+          ...(body.baseUrl === "" ? { baseUrl: null } : {}),
+          ...(body.key === "" ? { key: null } : {}),
+        });
+      } catch (error) {
+        if (error instanceof CustomProviderNotFound) return c.json({ error: "No such provider" }, 404);
+        if (error instanceof CustomProviderError) return c.json({ error: error.message }, 400);
+        throw error;
+      }
+      return c.json(providerKeys(c), 200);
+    })
+    .openapi(removeCustomProvider, (c) => {
+      if (!isLocal(c)) return c.json({ error: notLocalProvider }, 403);
+      if (!custom.remove(c.req.valid("param").id)) return c.json({ error: "No such provider" }, 404);
+      return c.json(providerKeys(c), 200);
+    })
+    // Listing and testing use the URL and key already set on this machine, like Check, so any client may ask.
+    .openapi(refreshCustomModels, async (c) => {
+      try {
+        await custom.refresh(c.req.valid("param").id);
+      } catch (error) {
+        if (error instanceof CustomProviderNotFound) return c.json({ error: "No such provider" }, 404);
+        if (error instanceof CustomProviderError) return c.json({ error: error.message }, 400);
+        throw error;
+      }
+      return c.json(providerKeys(c), 200);
+    })
+    .openapi(testCustomModel, async (c) => {
+      let result;
+      try {
+        // Closing the request (the learner cancelled) aborts the test.
+        result = await custom.test(c.req.valid("param").id, c.req.valid("json").model, c.req.raw.signal);
+      } catch (error) {
+        if (error instanceof CustomProviderNotFound) return c.json({ error: "No such provider" }, 404);
+        if (error instanceof CustomProviderError) return c.json({ error: error.message }, 400);
+        throw error;
+      }
+      return c.json({ result, providers: providerKeys(c) }, 200);
     })
     .openapi(checkProviderKeyRoute, async (c) => {
       const provider = c.req.valid("param").id;

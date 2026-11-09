@@ -24,6 +24,7 @@ import {
   type ProviderKeysView,
 } from "./api.js";
 import { ContinueWithChatGptButton, ManageUsageLink } from "./ChatGpt.js";
+import { CustomProviders } from "./CustomProviders.js";
 
 const DETAILS: Record<ProviderId, { env: string; keysUrl: string; note: string }> = {
   openrouter: { env: "OPENROUTER_API_KEY", keysUrl: "https://openrouter.ai/keys", note: "One key reaches every model." },
@@ -32,7 +33,8 @@ const DETAILS: Record<ProviderId, { env: string; keysUrl: string; note: string }
 };
 
 /** Whether any provider is set up (a key, or a ChatGPT sign-in); with none, the app opens this panel as first-run setup. */
-export const hasAnyKey = (view: ProviderKeysView) => view.providers.some((p) => p.source !== null) || Boolean(view.chatgpt?.signedIn);
+export const hasAnyKey = (view: ProviderKeysView) =>
+  view.providers.some((p) => p.source !== null) || Boolean(view.chatgpt?.signedIn) || view.custom.some((p) => p.baseUrl.value !== null);
 
 /** API keys for the model providers (ADR-013). Keys are write-only: the server only says where each one comes from. */
 export function ProvidersPanel({
@@ -93,6 +95,7 @@ export function ProvidersPanel({
           {view?.providers.map((provider) => (
             <ProviderRow key={provider.id} provider={provider} canEdit={view.canEdit} onChange={setView} />
           ))}
+          {view && <CustomProviders custom={view.custom} canEdit={view.canEdit} onChange={setView} />}
         </div>
       </SheetContent>
     </Sheet>

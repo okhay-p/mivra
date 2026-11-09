@@ -42,6 +42,9 @@ importers:
       '@ai-sdk/openai':
         specifier: ^4.0.104
         version: 4.0.104(zod@4.6.7)
+      '@ai-sdk/openai-compatible':
+        specifier: ^3.0.80
+        version: 3.0.80(zod@4.6.7)
       '@hono/node-server':
         specifier: ^2.1.5
         version: 2.1.5(hono@4.13.14)
@@ -125,6 +128,9 @@ importers:
       '@ai-sdk/openai':
         specifier: ^4.0.104
         version: 4.0.104(zod@4.6.7)
+      '@ai-sdk/openai-compatible':
+        specifier: ^3.0.80
+        version: 3.0.80(zod@4.6.7)
       '@hono/node-server':
         specifier: ^2.1.5
         version: 2.1.5(hono@4.13.14)
@@ -345,6 +351,12 @@ packages:
 
   '@ai-sdk/mcp@2.0.86':
     resolution: {integrity: sha512-LHpJMW2CR0D6sb1nXsl8KZ4vWmGueYc1arvCRHSf+9wEBmL0X3Qc4Jwqta5UcodP1DVQcnr4OJD5LKYb2WsCBw==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/openai-compatible@3.0.80':
+    resolution: {integrity: sha512-FoFoYodwufDyuOlPrFBnGD6HNA8nIB5a6HofyTJoPUJn9NBtDmloWudbNDyf4hYV8YTPOyR5iPfn1ufK2XD2Zg==}
     engines: {node: '>=22'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -3292,6 +3304,12 @@ snapshots:
       '@ai-sdk/provider-utils': 5.0.70(zod@4.6.7)
       cross-spawn: 7.0.6
       pkce-challenge: 5.0.1
+      zod: 4.6.7
+
+  '@ai-sdk/openai-compatible@3.0.80(zod@4.6.7)':
+    dependencies:
+      '@ai-sdk/provider': 4.0.34
+      '@ai-sdk/provider-utils': 5.0.70(zod@4.6.7)
       zod: 4.6.7
 
   '@ai-sdk/openai@4.0.104(zod@4.6.7)':
