@@ -189,7 +189,7 @@ function CustomProviderCard({ provider, canEdit, onChange }: { provider: CustomP
             )}
             {!confirming && (
               <Button size="sm" variant="ghost" className="text-destructive" disabled={busy} onClick={() => setConfirming(true)}>
-                Remove
+                Remove provider
               </Button>
             )}
           </div>

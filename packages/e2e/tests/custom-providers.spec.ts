@@ -51,7 +51,7 @@ test("custom OpenAI-compatible provider: add, test, select, chat, edit and remov
   await page.getByRole("button", { name: "Model providers" }).click();
   await card.getByRole("button", { name: "Edit" }).click();
   await panel.getByRole("form", { name: "Edit Local Fake" }).getByLabel("Provider name").fill("Renamed Fake");
-  await panel.getByRole("form", { name: "Edit Local Fake" }).getByRole("button", { name: "Save" }).click();
+  await panel.getByRole("form", { name: "Edit Local Fake" }).getByRole("button", { name: "Save", exact: true }).click();
   const renamed = panel.getByRole("region", { name: "Renamed Fake" });
   await expect(renamed).toBeVisible();
   // The test result still applies: the URL and key didn't change.
@@ -61,7 +61,7 @@ test("custom OpenAI-compatible provider: add, test, select, chat, edit and remov
 
   // Removing it asks for another model instead of switching silently; the old reply still names its model.
   await page.getByRole("button", { name: "Model providers" }).click();
-  await renamed.getByRole("button", { name: "Remove" }).click();
+  await renamed.getByRole("button", { name: "Remove provider" }).click();
   await renamed.getByRole("button", { name: "Yes, remove" }).click();
   await expect(renamed).toHaveCount(0);
   await page.keyboard.press("Escape");
