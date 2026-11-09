@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { UIMessage } from "ai";
-import { and, asc, desc, eq, inArray, isNull, isNotNull, max, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, isNotNull, max, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import type { ModelSelection } from "../model.js";
-import { artifacts, attempts, courses, documentChunks, documents, lessons, memories, messages, runs, sessions, syllabusVersions, type RunStatus } from "../db/schema.js";
+import { artifacts, attempts, courses, documentChunks, documents, lessons, memories, messages, notes, runs, sessions, syllabusVersions, vaultImports, type RunStatus } from "../db/schema.js";
 
 export type { RunStatus };
 
@@ -12,6 +12,8 @@ export type ArtifactRow = typeof artifacts.$inferSelect;
 export type AttemptRow = typeof attempts.$inferSelect;
 export type EvidenceRow = Pick<AttemptRow, "id" | "concept" | "correct" | "createdAt">;
 export type MemoryRow = typeof memories.$inferSelect;
+/** The imported note a memory was drawn from. */
+export type MemorySource = { noteId: string; importId: string; importName: string; path: string; title: string };
 export type DocumentRow = typeof documents.$inferSelect;
 export type CourseRow = typeof courses.$inferSelect;
 export type SyllabusRow = typeof syllabusVersions.$inferSelect;
@@ -625,32 +627,57 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
         if (tx.select({ id: memories.id }).from(memories).where(ofThisRun).all().length >= MAX_MEMORIES_PER_RUN) {
           return { ok: false, reason: `A reply can save at most ${MAX_MEMORIES_PER_RUN} memories` };
         }
-        const row = { id: randomUUID(), ...fields, status: "pending" as const, replacesId: replaces, createdAt: new Date(), editedAt: null };
+        const row = { id: randomUUID(), ...fields, status: "pending" as const, replacesId: replaces, noteId: null, createdAt: new Date(), editedAt: null };
         tx.insert(memories).values(row).run();
         return { ok: true, memory: row };
       });
     },
 
-    /** Memories in force for the learner to see, newest first, each marked if it is held. */
-    listMemoriesForLearner(checkKinds: string[]): (MemoryRow & { held: boolean })[] {
+    /** Memories in force for the learner to see, newest first, each marked if it is held, with the note it came from. */
+    listMemoriesForLearner(checkKinds: string[]): (MemoryRow & { held: boolean; source: MemorySource | null })[] {
       return db
-        .select({ memory: memories, held: heldBy(checkKinds) })
+        .select({ memory: memories, held: heldBy(checkKinds), note: { path: notes.path, title: notes.title, importId: notes.importId }, importName: vaultImports.name })
         .from(memories)
+        .leftJoin(notes, eq(notes.id, memories.noteId))
+        .leftJoin(vaultImports, eq(vaultImports.id, notes.importId))
         .where(eq(memories.status, "active"))
-        .orderBy(desc(memories.createdAt), desc(sql`rowid`))
+        .orderBy(desc(memories.createdAt), desc(sql`"memories"."rowid"`))
         .all()
-        .map((row) => ({ ...row.memory, held: Boolean(row.held) }));
+        .map((row) => ({
+          ...row.memory,
+          held: Boolean(row.held),
+          source: row.memory.noteId && row.note ? { noteId: row.memory.noteId, importId: row.note.importId, importName: row.importName ?? "", path: row.note.path, title: row.note.title } : null,
+        }));
     },
 
-    /** Memories in force for the model to see, newest first, leaving out held ones. */
+    /**
+     * Memories in force for the model to see, newest first, leaving out held ones. Those drawn from imported notes are
+     * listed apart (listImportedMemoriesForModel), so a large vault can't crowd out what the learner said or got wrong.
+     */
     listMemoriesForModel(checkKinds: string[], limit: number): MemoryRow[] {
       return db
         .select()
         .from(memories)
-        .where(and(eq(memories.status, "active"), sql`not ${heldBy(checkKinds)}`))
+        .where(and(eq(memories.status, "active"), ne(memories.basis, "import"), sql`not ${heldBy(checkKinds)}`))
         .orderBy(desc(memories.createdAt), desc(sql`rowid`))
         .limit(limit)
         .all();
+    },
+
+    /** Memories drawn from imported notes, for the model: goals and misconceptions first, then `known`, newest first. */
+    listImportedMemoriesForModel(limit: number): MemoryRow[] {
+      return db
+        .select()
+        .from(memories)
+        .where(and(eq(memories.status, "active"), eq(memories.basis, "import")))
+        .orderBy(sql`case ${memories.kind} when 'known' then 1 else 0 end`, desc(memories.createdAt), desc(sql`rowid`))
+        .limit(limit)
+        .all();
+    },
+
+    /** Permanently deletes every memory with a basis, such as all those drawn from imported notes. Returns how many. */
+    deleteMemoriesByBasis(basis: MemoryRow["basis"]): number {
+      return db.delete(memories).where(eq(memories.basis, basis)).run().changes;
     },
 
     /** The learner's correction of a memory. A held memory can't be edited, since editing would show its text. */

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { NoteGraph, SkipReason, VaultFile, VaultImportResult } from "@mivra/protocol";
+import type { DistillationView, NoteGraph, SkipReason, VaultFile, VaultImportResult } from "@mivra/protocol";
 import { DuplicateImportName, type NoteStore, type PreparedNote, type VaultImportRow } from "../store/note-store.js";
 import { noteKey, parseNote } from "./parse.js";
 import { cleanVaultPath, type SkippedFile } from "./vault-path.js";
@@ -25,9 +25,12 @@ export type ImportOutcome =
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
-export function importView(row: VaultImportRow): VaultImportResult["import"] {
-  return { id: row.id, name: row.name, source: row.source, noteCount: row.noteCount, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
+export function importView(row: VaultImportRow, distillation: DistillationView): VaultImportResult["import"] {
+  return { id: row.id, name: row.name, source: row.source, noteCount: row.noteCount, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(), distillation };
 }
+
+/** Called once a vault is stored: starts distilling its changed notes (ADR-014) and says where that stands. */
+export type AfterImport = (importId: string) => DistillationView;
 
 /** How long parsing runs before letting other requests (such as a streaming reply) through. */
 const YIELD_EVERY_MS = 20;
@@ -100,6 +103,7 @@ export async function importVault(
   store: NoteStore,
   input: { name: string; files: VaultFile[] } | { importId: string; files: VaultFile[] },
   alreadySkipped: SkippedFile[] = [],
+  after: AfterImport,
 ): Promise<ImportOutcome> {
   const previous = "importId" in input ? store.noteHashes(input.importId) : new Map<string, string>();
   const { snapshot, skipped, truncated } = await prepare(input.files, previous);
@@ -118,7 +122,7 @@ export async function importVault(
   return {
     ok: true,
     result: {
-      import: importView(stored.row),
+      import: importView(stored.row, after(stored.row.id)),
       added: stored.added,
       updated: stored.updated,
       removed: stored.removed,

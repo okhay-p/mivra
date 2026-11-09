@@ -26,7 +26,7 @@ import { createContinuationStream } from "./continuation-stream.js";
 import { courseContext } from "./course-context.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
-import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
+import { MAX_EVIDENCE, MAX_IMPORTED_MEMORIES, MAX_MEMORIES, learnerContext } from "./learner-context.js";
 import { noteContext } from "./note-context.js";
 
 // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
@@ -123,7 +123,7 @@ const defaultAssembleContext =
         documents?.excerpts,
       ),
       instructions: [
-        learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES), imported ? notes.listImports() : []),
+        learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES), imported ? notes.listImports() : [], undefined, store.listImportedMemoriesForModel(MAX_IMPORTED_MEMORIES)),
         courseContext(store, sessionId, lessons && lessonId ? { lessons, lessonId, registry } : undefined),
         imported?.rules,
         documents?.rules,

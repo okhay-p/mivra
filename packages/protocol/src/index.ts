@@ -142,6 +142,7 @@ export type ArtifactView = z.infer<typeof ArtifactView>;
 export * from "./memory.js";
 export * from "./document.js";
 export * from "./vault.js";
+export * from "./knowledge.js";
 
 /** ChatGPT's page for the learner's plan usage and per-app limits (ADR-015). */
 export const CHATGPT_USAGE_URL = "https://chatgpt.com/settings/usage";
