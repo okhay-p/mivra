@@ -17,15 +17,20 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString
 export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [imports, setImports] = useState<VaultImportView[]>();
   const [error, setError] = useState<string>();
-  /** The dialog, for a new import or a re-import of one. */
-  const [dialog, setDialog] = useState<{ reimport?: VaultImportView }>();
+  /**
+   * The dialog, for a new import or a re-import of one. `key` changes on every opening, so reopening while the last
+   * one is still animating closed mounts a fresh dialog: reusing the closing one left focus outside it, and Radix
+   * closed it again at once. Closing keeps `reimport`, so the title doesn't change during the exit animation.
+   */
+  const [dialog, setDialog] = useState<{ open: boolean; key: number; reimport?: VaultImportView }>({ open: false, key: 0 });
+  const openDialog = (reimport?: VaultImportView) => setDialog((d) => ({ open: true, key: d.key + 1, ...(reimport ? { reimport } : {}) }));
 
   useEffect(() => {
     if (!open) return;
     let stale = false;
     setImports(undefined);
     setError(undefined);
-    setDialog(undefined);
+    setDialog((d) => ({ ...d, open: false }));
     void listImports().then((result) => {
       if (stale) return;
       if (result.ok) setImports(result.value);
@@ -56,7 +61,7 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
         </SheetHeader>
         <div className="flex flex-col gap-4 px-4 pb-4" aria-live="polite">
           {imports && imports.length > 0 && (
-            <Button type="button" className="self-start" onClick={() => setDialog({})}>
+            <Button type="button" className="self-start" onClick={() => openDialog()}>
               <FolderOpen aria-hidden="true" />
               Import a vault
             </Button>
@@ -77,7 +82,7 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
                 <EmptyDescription>Import an Obsidian vault to bring its notes, links and tags into Mivra. Only Markdown notes are read.</EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
-                <Button type="button" onClick={() => setDialog({})}>
+                <Button type="button" onClick={() => openDialog()}>
                   <FolderOpen aria-hidden="true" />
                   Import a vault
                 </Button>
@@ -87,19 +92,20 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
           {imports && imports.length > 0 && (
             <ul className="flex flex-col gap-2" aria-label="Imported vaults">
               {imports.map((entry) => (
-                <ImportEntry key={entry.id} entry={entry} onReimport={() => setDialog({ reimport: entry })} onDelete={() => setImports((all) => all?.filter((i) => i.id !== entry.id))} />
+                <ImportEntry key={entry.id} entry={entry} onReimport={() => openDialog(entry)} onDelete={() => setImports((all) => all?.filter((i) => i.id !== entry.id))} />
               ))}
             </ul>
           )}
         </div>
       </SheetContent>
       <ImportDialog
-        open={dialog !== undefined}
+        key={dialog.key}
+        open={dialog.open}
         onOpenChange={(next) => {
-          if (!next) setDialog(undefined);
+          if (!next) setDialog((d) => ({ ...d, open: false }));
         }}
         imports={imports ?? []}
-        {...(dialog?.reimport ? { reimport: dialog.reimport } : {})}
+        {...(dialog.reimport ? { reimport: dialog.reimport } : {})}
         onImported={imported}
       />
     </Sheet>
