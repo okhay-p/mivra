@@ -15,6 +15,7 @@ import {
   type UIMessageStreamOutcome,
 } from "ai";
 import type { LessonStore } from "../store/lesson-store.js";
+import type { NoteStore } from "../store/note-store.js";
 import { callOptionsFor, type ModelSelection } from "../model.js";
 import type { ModelSettings } from "../models/selection.js";
 import { Conflict, type ReplyMetadata, type RunStatus, type SessionStore } from "../store/session-store.js";
@@ -25,6 +26,7 @@ import { courseContext } from "./course-context.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_MEMORIES, learnerContext } from "./learner-context.js";
+import { noteContext } from "./note-context.js";
 
 // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
 /** How replies and artifact fields render; shared with lesson generation. */
@@ -104,19 +106,23 @@ export type AssembleContext = (
   context: { sessionId: string; lessonId?: string; selection: ModelSelection },
 ) => Promise<{ messages: ModelMessage[]; instructions?: string }>;
 
-/** The whole transcript, plus the learner's record across sessions and the session's documents. Summaries will plug in here. */
+/** The whole transcript, plus the learner's record across sessions, their imported notes and the session's documents. Summaries will plug in here. */
 const defaultAssembleContext =
-  (store: SessionStore, registry: CapabilityRegistry, lessons?: LessonStore): AssembleContext =>
+  (store: SessionStore, registry: CapabilityRegistry, lessons?: LessonStore, notes?: NoteStore): AssembleContext =>
   async (conversation, { sessionId, lessonId, selection }) => {
-    const documents = documentContext(store, sessionId, latestLearnerText(conversation.filter(m => m.id !== "mivra-continuation-event")));
+    const learnerText = latestLearnerText(conversation.filter(m => m.id !== "mivra-continuation-event"));
+    const documents = documentContext(store, sessionId, learnerText);
+    const imported = notes && noteContext(notes, learnerText);
+    // Each goes just before the learner's latest message, so notes come first, then the session's documents.
     return {
       messages: withDocumentExcerpts(
-        await replayMessages(conversation, selection.model),
+        withDocumentExcerpts(await replayMessages(conversation, selection.model), imported?.excerpts),
         documents?.excerpts,
       ),
       instructions: [
-        learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES)),
+        learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES), imported ? notes.listImports() : []),
         courseContext(store, sessionId, lessons && lessonId ? { lessons, lessonId, registry } : undefined),
+        imported?.rules,
         documents?.rules,
       ]
         .filter(Boolean)
@@ -131,6 +137,8 @@ export interface TurnRunnerDeps {
   /** The app-wide model selection (ADR-012). */
   models: Pick<ModelSettings, "forRun">;
   lessons?: LessonStore;
+  /** The learner's imported notes (ADR-014), searched each turn by the default context. */
+  notes?: NoteStore;
   assembleContext?: AssembleContext;
 }
 
@@ -215,7 +223,7 @@ function continuationEvent(): UIMessage {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, models, lessons, assembleContext = defaultAssembleContext(store, registry, lessons) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, models, lessons, notes, assembleContext = defaultAssembleContext(store, registry, lessons, notes) }: TurnRunnerDeps) {
   type ActiveTurn = {
     controller: AbortController;
     stopId: string;

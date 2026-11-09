@@ -10,6 +10,7 @@ export type Command =
   | { name: "auth-remove"; provider: ProviderId }
   | { name: "auth-login"; newAccount: boolean; open: boolean }
   | { name: "auth-logout" }
+  | { name: "import-obsidian"; folder: string; importName?: string }
   | { name: "help" }
   | { name: "version" };
 
@@ -30,6 +31,8 @@ Commands:
     --new-account          Sign in to a different account than last time
     --no-open              Print the sign-in address instead of opening the browser
   auth logout chatgpt      Sign out of ChatGPT
+  import obsidian <folder> Import an Obsidian vault's notes into a running Mivra; run it again to re-import
+    --name <name>          Name the import (default: the folder's name)
 
 Providers: ${providerIds.join(", ")}
 Data lives in ~/.mivra, or MIVRA_DATA_DIR.`;
@@ -52,6 +55,7 @@ export function parseCommand(argv: string[]): Command {
       allowNegative: true,
       options: {
         port: { type: "string" },
+        name: { type: "string" },
         detach: { type: "boolean", default: false },
         open: { type: "boolean", default: true },
         check: { type: "boolean", default: true },
@@ -104,6 +108,11 @@ export function parseCommand(argv: string[]): Command {
         return { name: "auth-status" };
       }
       throw new UsageError(sub ? `Unknown auth command "${sub}". Use set, status, remove, login or logout.` : "Use `mivra auth set|status|remove|login|logout`.");
+    case "import":
+      if (sub !== "obsidian") throw new UsageError(sub ? `Unknown import source "${sub}". Use obsidian.` : "Use `mivra import obsidian <folder>`.");
+      if (!arg) throw new UsageError("Give the vault's folder: `mivra import obsidian <folder>`.");
+      tooMany(3);
+      return { name: "import-obsidian", folder: arg, ...(values.name === undefined ? {} : { importName: values.name }) };
     case "help":
       return { name: "help" };
     default:

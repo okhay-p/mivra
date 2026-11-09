@@ -1,7 +1,25 @@
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import type { LanguageModel } from "ai";
-import { AddToLesson, ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MemoryEdit, MemoryView, StartCourse } from "@mivra/protocol";
+import {
+  AddToLesson,
+  ArtifactView,
+  CourseLessonsView,
+  CourseView,
+  DocumentView,
+  LessonView,
+  MAX_VAULT_BYTES,
+  MemoryEdit,
+  MemoryView,
+  NoteGraph,
+  NoteView,
+  StartCourse,
+  VaultImportInput,
+  VaultImportResult,
+  VaultImportView,
+  VaultSnapshotInput,
+} from "@mivra/protocol";
+import { bodyLimit } from "hono/body-limit";
 import { ChatGptError, CHATGPT_API } from "./chatgpt/oauth.js";
 import type { ChatGptSession } from "./chatgpt/session.js";
 import { ApiKey, memoryCredentials, providerIds, type CredentialStore, type ProviderId } from "./credentials.js";
@@ -21,7 +39,10 @@ import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js
 import { courseLessons, createLessonGenerator, lessonRevision, lessonView, reconcileCompletion } from "./runtime/lessons.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
+import { importVault, importView, resolveGraph } from "./notes/vault-import.js";
+import { createZipImporter, type UnzipVault, type ZipImportError } from "./notes/vault-zip-import.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
+import { createNoteStore, type NoteRow } from "./store/note-store.js";
 import { createSettingsStore } from "./store/settings-store.js";
 import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
 
@@ -49,6 +70,8 @@ export interface AppDeps {
   plugins?: Plugin[];
   /** Defaults to extracting on a worker thread. */
   extractDocument?: Extract;
+  /** Defaults to unpacking in the same kind of subprocess. */
+  unzipVault?: UnzipVault;
 }
 
 const Session = z
@@ -539,6 +562,120 @@ const deleteDocument = createRoute({
   },
 });
 
+const ImportParams = z.object({ id: z.string() });
+
+const listImports = createRoute({
+  method: "get",
+  path: "/imports",
+  description: "Imported Obsidian vaults, oldest first (ADR-014).",
+  responses: {
+    200: { description: "The imports", content: { "application/json": { schema: z.array(VaultImportView) } } },
+  },
+});
+
+const createImport = createRoute({
+  method: "post",
+  path: "/imports",
+  description:
+    "Imports an Obsidian vault from its Markdown files. Only `.md` files outside hidden folders such as `.obsidian` are read; anything else is skipped and reported. No model runs: notes, links, tags and searchable chunks come from the text alone.",
+  request: { body: { content: { "application/json": { schema: VaultImportInput } } } },
+  responses: {
+    201: { description: "What the import stored", content: { "application/json": { schema: VaultImportResult } } },
+    400: errorResponse("Invalid files"),
+    409: errorResponse("An import with this name already exists"),
+    413: errorResponse("Request too large"),
+  },
+});
+
+const replaceImportFiles = createRoute({
+  method: "put",
+  path: "/imports/{id}/files",
+  description: "Re-imports a vault as a snapshot: changed notes are rewritten, new ones added, and notes no longer sent removed. Unchanged notes are left as they are.",
+  request: { params: ImportParams, body: { content: { "application/json": { schema: VaultSnapshotInput } } } },
+  responses: {
+    200: { description: "What the re-import changed", content: { "application/json": { schema: VaultImportResult } } },
+    400: errorResponse("Invalid files"),
+    404: errorResponse("Unknown import"),
+    413: errorResponse("Request too large"),
+  },
+});
+
+const deleteImport = createRoute({
+  method: "delete",
+  path: "/imports/{id}",
+  description: "Removes an import and all of its notes from storage and search.",
+  request: { params: ImportParams },
+  responses: {
+    204: { description: "Deleted" },
+    404: errorResponse("Unknown import"),
+  },
+});
+
+const ZipUpload = z.object({ file: z.string().openapi({ format: "binary" }) });
+const zipErrors = {
+  400: errorResponse("Not a multipart upload with one file field, or it didn't finish"),
+  413: errorResponse("Zip, or its notes unpacked, too large"),
+  415: errorResponse("Not a zip"),
+  422: errorResponse("Damaged, password-protected, too many entries, unsafe entry names, or no notes"),
+  429: errorResponse("Another vault is importing"),
+} as const;
+
+/** Documented only: the handler streams the body, which the request validator would buffer whole. */
+const createImportFromZip = createRoute({
+  method: "post",
+  path: "/imports/zip",
+  description:
+    "Imports a vault uploaded as a .zip of up to 64 MB, for browsers that can't pick a folder. Only `.md` entries outside hidden folders are unpacked, in memory and in a subprocess with limits; symbolic links and attachments are skipped. When every entry sits in one top folder, that folder is dropped from the paths. `name` defaults to the zip's file name.",
+  request: {
+    body: { content: { "multipart/form-data": { schema: ZipUpload.extend({ name: z.string().optional() }) } } },
+  },
+  responses: {
+    201: { description: "What the import stored", content: { "application/json": { schema: VaultImportResult } } },
+    409: errorResponse("An import with this name already exists"),
+    ...zipErrors,
+  },
+});
+
+/** Documented only, as createImportFromZip. */
+const replaceImportFromZip = createRoute({
+  method: "put",
+  path: "/imports/{id}/zip",
+  description: "Re-imports a vault from a .zip as a snapshot, with the same limits as POST /imports/zip.",
+  request: { params: ImportParams, body: { content: { "multipart/form-data": { schema: ZipUpload } } } },
+  responses: {
+    200: { description: "What the re-import changed", content: { "application/json": { schema: VaultImportResult } } },
+    404: errorResponse("Unknown import"),
+    ...zipErrors,
+  },
+});
+
+const getImportGraph = createRoute({
+  method: "get",
+  path: "/imports/{id}/graph",
+  description: "An import's notes and the links between them. Links to notes that aren't in the vault have `to: null`.",
+  request: { params: ImportParams },
+  responses: {
+    200: { description: "The graph", content: { "application/json": { schema: NoteGraph } } },
+    404: errorResponse("Unknown import"),
+  },
+});
+
+const getNote = createRoute({
+  method: "get",
+  path: "/notes/{id}",
+  description: "One imported note. Notes are read-only: they change only when their vault is imported again.",
+  request: { params: z.object({ id: z.string() }) },
+  responses: {
+    200: { description: "The note", content: { "application/json": { schema: NoteView } } },
+    404: errorResponse("Unknown note"),
+  },
+});
+
+const zipImportErrorStatus = { not_found: 404, duplicate_name: 409, bad_request: 400, too_large: 413, wrong_type: 415, unreadable: 422, busy: 429 } as const satisfies Record<
+  ZipImportError["kind"],
+  number
+>;
+
 const attachErrorStatus = { not_found: 404, bad_request: 400, limit: 409, too_large: 413, wrong_type: 415, unreadable: 422, busy: 429 } as const satisfies Record<
   AttachError["kind"],
   number
@@ -600,6 +737,19 @@ function toMemoryJson(row: MemoryRow & { held: boolean }): MemoryView {
   };
 }
 
+function toNoteJson(row: NoteRow & { tags: string[] }): NoteView {
+  return {
+    id: row.id,
+    importId: row.importId,
+    path: row.path,
+    title: row.title,
+    aliases: row.aliases,
+    tags: row.tags,
+    body: row.body,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
 function toDocumentJson(row: DocumentRow): DocumentView {
   return {
     id: row.id,
@@ -615,7 +765,9 @@ function toDocumentJson(row: DocumentRow): DocumentView {
   };
 }
 
-export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse], extractDocument }: AppDeps) {
+const uploadOf = (c: Context) => ({ body: c.req.raw.body, contentType: c.req.header("content-type"), contentLength: c.req.header("content-length") });
+
+export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse], extractDocument, unzipVault }: AppDeps) {
   const store = createSessionStore(db);
   const { credentials, check, isLocal = isLoopbackPeer, chatgpt, fetch: fetchImpl = fetch } = providers;
   const providerKeys = (c: Context) => ({ providers: credentials.views(), chatgpt: chatgpt?.view() ?? null, canEdit: isLocal(c) });
@@ -631,7 +783,8 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   const lessons = createLessonStore(db);
   lessons.recoverInterrupted();
   const registry = createCapabilityRegistry(plugins);
-  const turns = createTurnRunner({ store, registry, model, models, lessons });
+  const noteStore = createNoteStore(db);
+  const turns = createTurnRunner({ store, registry, model, models, lessons, notes: noteStore });
   const generator = createLessonGenerator({ store, lessons, registry, model, models });
   lessons.onChange(generator.changed);
   const lessonJson = (id: string) => {
@@ -642,8 +795,19 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   };
   const attachDocument = createDocumentAttacher({ store, ...(extractDocument ? { extract: extractDocument } : {}) });
 
+  const importZip = createZipImporter({ store: noteStore, ...(unzipVault ? { unzip: unzipVault } : {}) });
+
   const base = new OpenAPIHono();
   base.openAPIRegistry.registerPath(uploadDocument);
+  base.openAPIRegistry.registerPath(createImportFromZip);
+  base.openAPIRegistry.registerPath(replaceImportFromZip);
+  // A vault arrives as one JSON body; refuse anything larger before it's read, let alone parsed.
+  const vaultBodyLimit = bodyLimit({
+    maxSize: MAX_VAULT_BYTES,
+    onError: (c) => c.json({ error: `An import can send at most ${MAX_VAULT_BYTES / (1024 * 1024)} MB. Leave attachments out, or import the vault in parts.` }, 413),
+  });
+  base.use("/imports", vaultBodyLimit);
+  base.use("/imports/:id/files", vaultBodyLimit);
   const api = base
     .openapi(health, (c) => c.json({ ok: true as const }, 200))
     .openapi(listSessions, (c) => c.json(store.listSessions().map(toSessionJson), 200))
@@ -870,14 +1034,45 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .openapi(deleteDocument, (c) =>
       store.deleteDocument(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Document not found" }, 404),
     )
+    .openapi(listImports, (c) => c.json(noteStore.listImports().map(importView), 200))
+    .openapi(createImport, async (c) => {
+      const outcome = await importVault(noteStore, c.req.valid("json"));
+      if (!outcome.ok) return c.json({ error: outcome.message }, 409);
+      return c.json(outcome.result, 201);
+    })
+    .openapi(replaceImportFiles, async (c) => {
+      const outcome = await importVault(noteStore, { importId: c.req.valid("param").id, files: c.req.valid("json").files });
+      if (!outcome.ok) return c.json({ error: outcome.message }, 404);
+      return c.json(outcome.result, 200);
+    })
+    .openapi(deleteImport, (c) => (noteStore.deleteImport(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Import not found" }, 404)))
+    .openapi(getImportGraph, (c) => {
+      const { id } = c.req.valid("param");
+      if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
+      return c.json(resolveGraph(noteStore.importGraph(id)), 200);
+    })
+    .openapi(getNote, (c) => {
+      const note = noteStore.findNote(c.req.valid("param").id);
+      return note ? c.json(toNoteJson(note), 200) : c.json({ error: "Note not found" }, 404);
+    })
     .post("/sessions/:id/documents", async (c) => {
       const result = await attachDocument(
         c.req.param("id"),
-        { body: c.req.raw.body, contentType: c.req.header("content-type"), contentLength: c.req.header("content-length") },
+        uploadOf(c),
         c.req.raw.signal,
       );
       if (!result.ok) return c.json({ error: result.error.message }, attachErrorStatus[result.error.kind]);
       return c.json(toDocumentJson(result.document), 201);
+    })
+    .post("/imports/zip", async (c) => {
+      const outcome = await importZip({ new: true }, uploadOf(c), c.req.raw.signal);
+      if (!outcome.ok) return c.json({ error: outcome.error.message }, zipImportErrorStatus[outcome.error.kind]);
+      return c.json(outcome.result, 201);
+    })
+    .put("/imports/:id/zip", async (c) => {
+      const outcome = await importZip({ importId: c.req.param("id") }, uploadOf(c), c.req.raw.signal);
+      if (!outcome.ok) return c.json({ error: outcome.error.message }, zipImportErrorStatus[outcome.error.kind]);
+      return c.json(outcome.result, 200);
     });
 
 

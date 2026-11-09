@@ -4,7 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
 import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
-import { Brain, GraduationCap, KeyRound, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
+import { Brain, GraduationCap, KeyRound, Library, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
@@ -14,6 +14,7 @@ import { LessonPage, TopicList, type LessonSection } from "./Lesson.js";
 import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
+import { ImportsPanel } from "./ImportsPanel.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ModelPicker, modelLabel, useModelPicker } from "./ModelPicker.js";
 import { ProvidersPanel, hasAnyKey } from "./ProvidersPanel.js";
@@ -97,6 +98,7 @@ export function App() {
   const [theme, setTheme] = useTheme();
   // Lives here for the same reason: it has to stay open after the mobile sidebar closes.
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [importsOpen, setImportsOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
   // With no API key anywhere, the providers panel opens as first-run setup (ADR-013).
   const [firstRun, setFirstRun] = useState(false);
@@ -121,9 +123,11 @@ export function App() {
         onNew={newSession}
         onNewCourse={() => setActiveId(undefined)}
         onOpenMemory={() => setMemoryOpen(true)}
+        onOpenImports={() => setImportsOpen(true)}
         onOpenProviders={() => setProvidersOpen(true)}
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
+      <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} />
       <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
       <ChatGptWelcome />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
@@ -166,6 +170,7 @@ function SessionSidebar({
   onNew,
   onNewCourse,
   onOpenMemory,
+  onOpenImports,
   onOpenProviders,
 }: {
   sessions: Session[];
@@ -176,6 +181,7 @@ function SessionSidebar({
   onNew: () => void;
   onNewCourse: () => void;
   onOpenMemory: () => void;
+  onOpenImports: () => void;
   onOpenProviders: () => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
@@ -258,6 +264,19 @@ function SessionSidebar({
             >
               <Brain />
               <span>Memory</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Imported notes"
+              data-imports-trigger
+              onClick={() => {
+                onOpenImports();
+                closeOnMobile();
+              }}
+            >
+              <Library />
+              <span>Imported notes</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>

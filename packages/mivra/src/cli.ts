@@ -13,6 +13,7 @@ import { PortInUseError, startServer } from "../../server/src/start.js";
 import { USAGE, UsageError, parseCommand, type Command } from "./args.js";
 import { LOG_FILE, STATE_FILE, claim, clearState, isAlive, readState, running, waitForHolder, writeState } from "./state.js";
 import { openBrowser, readSecret } from "./terminal.js";
+import { importObsidian } from "./vault.js";
 
 /** The package root: dist/ or src/ sits one level below it. */
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -71,6 +72,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return authLogin(command.newAccount, command.open, config);
     case "auth-logout":
       return authLogout(config);
+    case "import-obsidian":
+      return importObsidian(command.folder, command.importName, config.dataDir, { out, err });
   }
 }
 
