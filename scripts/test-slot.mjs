@@ -72,10 +72,36 @@ if (slots > 0 && env.MIVRA_TEST_SLOT_HELD !== "1") {
   }
 }
 
-const child = spawn(command, args, { stdio: "inherit", env, shell: process.platform === "win32" });
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => child.kill(signal));
+// In its own process group, so a signal reaches everything the command started (pnpm, Vitest and their workers),
+// not just its first process; the slot stays held until the command itself exits.
+const windows = process.platform === "win32";
+const child = spawn(command, args, { stdio: "inherit", env, shell: windows, detached: !windows });
+const forward = (signal) => {
+  try {
+    if (windows) child.kill(signal);
+    else process.kill(-child.pid, signal);
+  } catch {
+    // Already gone.
+  }
+};
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(signal, () => forward(signal));
 child.once("error", (error) => {
   console.error(`[test-slot] Couldn't run ${command}: ${error.message}`);
   process.exit(1);
 });
-child.once("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
+/** Whether anything in the command's process group is still running, such as Vitest finishing after a signal. */
+const groupAlive = () => {
+  if (windows) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+child.once("exit", async (code, signal) => {
+  // Keep the slot until the whole group has gone, so a cancelled run never overlaps the next one (up to 15 s).
+  const deadline = Date.now() + 15_000;
+  while (groupAlive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 200));
+  process.exit(code ?? (signal ? 1 : 0));
+});

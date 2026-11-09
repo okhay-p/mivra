@@ -132,32 +132,32 @@ async function startForeground(command: Start, base: Config, env: NodeJS.Process
     }
     throw error;
   }
+  // Listen for Ctrl+C before saying it works: a signal sent as soon as the message appears must stop Mivra cleanly.
+  let stopping = false;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    // Exit for real, even with lesson generation or a reply still running: stopping must stop the spending.
+    // Runs cut short are marked interrupted and recovered at the next start. The record goes last, so
+    // `mivra stop` and a new start see this process until it's gone.
+    const exit = () => {
+      clearState(config.dataDir, process.pid);
+      process.exit(0);
+    };
+    setTimeout(exit, 5000).unref();
+    void server.close().then(exit, exit);
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  process.once("SIGHUP", shutdown);
+
   // Keep the claim's start time: it tells this run's record from a previous run's with the same pid.
   writeState(config.dataDir, { pid: process.pid, port: server.port, url: server.url, startedAt: readState(config.dataDir)?.startedAt ?? new Date().toISOString() });
   if (server.port !== config.port) err(`Port ${config.port} is in use, so Mivra is on ${server.port}.`);
   out(`Mivra is running at ${server.url}`);
   out(env.MIVRA_DETACHED === "1" ? `Data: ${config.dataDir}` : `Data: ${config.dataDir}. Press Ctrl+C to stop.`);
   if (command.open) openBrowser(server.url);
-
-  return new Promise(() => {
-    let stopping = false;
-    const shutdown = () => {
-      if (stopping) return;
-      stopping = true;
-      // Exit for real, even with lesson generation or a reply still running: stopping must stop the spending.
-      // Runs cut short are marked interrupted and recovered at the next start. The record goes last, so
-      // `mivra stop` and a new start see this process until it's gone.
-      const exit = () => {
-        clearState(config.dataDir, process.pid);
-        process.exit(0);
-      };
-      setTimeout(exit, 5000).unref();
-      void server.close().then(exit, exit);
-    };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
-    process.once("SIGHUP", shutdown);
-  });
+  return new Promise(() => {});
 }
 
 /** How long a detached start waits for the server to come up before giving up. */
