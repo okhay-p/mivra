@@ -7,9 +7,6 @@ import { ChatGptError } from "../../server/src/chatgpt/oauth.js";
 import { CHATGPT_FILE, chatGptFileStore, createChatGptSession } from "../../server/src/chatgpt/session.js";
 import { loadConfig, type Config } from "../../server/src/config.js";
 import { ApiKey, CREDENTIALS_FILE, PROVIDER_ENV, PROVIDER_LABELS, createCredentialStore, type ProviderId } from "../../server/src/credentials.js";
-import { checkProviderKey } from "../../server/src/models/key-check.js";
-import { NewerDatabaseError } from "../../server/src/db/client.js";
-import { PortInUseError, startServer } from "../../server/src/start.js";
 import { USAGE, UsageError, parseCommand, type Command } from "./args.js";
 import { LOG_FILE, STATE_FILE, claim, clearState, isAlive, readState, running, waitForHolder, writeState } from "./state.js";
 import { openBrowser, readSecret } from "./terminal.js";
@@ -113,6 +110,9 @@ async function startForeground(command: Start, base: Config, env: NodeJS.Process
       return 1;
     }
   }
+  // Loaded only to start: the server pulls in the database, model SDKs and API layer, which take seconds to load,
+  // and every other command (version, status, auth, import) should answer at once.
+  const [{ PortInUseError, startServer }, { NewerDatabaseError }] = await Promise.all([import("../../server/src/start.js"), import("../../server/src/db/client.js")]);
   let server;
   try {
     server = await startServer({ config, env, webDist: webDist(), migrationsFolder: migrations(), portFallback: true, log: err });
@@ -270,6 +270,7 @@ async function authSet(provider: ProviderId, check: boolean, config: Config, env
   out(`Saved the ${PROVIDER_LABELS[provider]} key to ${join(config.dataDir, CREDENTIALS_FILE)}. A running Mivra uses it from the next reply.`);
   if (!check) return 0;
   const baseUrl = provider === "anthropic" ? env.ANTHROPIC_BASE_URL : provider === "openai" ? env.OPENAI_BASE_URL : undefined;
+  const { checkProviderKey } = await import("../../server/src/models/key-check.js");
   const result = await checkProviderKey(provider, key.data, { baseUrl });
   if (result.ok) {
     out("The key works.");

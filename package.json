@@ -11,9 +11,10 @@
     "dev": "pnpm --parallel --filter \"./packages/*\" dev",
     "build": "pnpm --filter @mivra/protocol build && pnpm --filter @mivra/web build && pnpm --filter @mivra/server build && pnpm --filter ./packages/mivra build",
     "start": "pnpm --filter @mivra/server start",
-    "test": "pnpm -r test",
-    "test:e2e": "pnpm --filter @mivra/e2e test:e2e",
-    "test:e2e:all": "pnpm --filter @mivra/e2e test:e2e:all",
+    "test": "node scripts/test-slot.mjs pnpm -r test",
+    "test:changed": "node scripts/test-slot.mjs node scripts/test-changed.mjs",
+    "test:e2e": "node scripts/test-slot.mjs pnpm --filter @mivra/e2e test:e2e",
+    "test:e2e:all": "node scripts/test-slot.mjs pnpm --filter @mivra/e2e test:e2e:all",
     "typecheck": "pnpm -r typecheck"
   },
   "pnpm": {

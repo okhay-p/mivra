@@ -30,6 +30,8 @@ await build({
   bundle: true,
   platform: "node",
   format: "esm",
+  // Separate chunks, so a dynamic import (the server, in cli.ts) also defers the packages only it imports.
+  splitting: true,
   target: "node22",
   conditions: ["@mivra/source"],
   sourcemap: "linked",

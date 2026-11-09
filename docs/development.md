@@ -37,6 +37,8 @@ The picker under the message box chooses the model and reasoning effort for ever
 | `pnpm typecheck` | Type-check all packages |
 | `pnpm --filter @mivra/server db:generate` | Generate a migration after editing `src/db/schema.ts` |
 
+`pnpm test`, `pnpm test:e2e` and `pnpm test:e2e:all` run through `scripts/test-slot.mjs`, which lets one test run at a time use the machine, across every worktree. The others print that they're waiting and start when it's done. The suites are CPU-bound, so runs that overlap only slow each other down, and tests that wait on timers or other processes start timing out. Each run holds a slot by listening on a loopback port (4180 upwards, `MIVRA_TEST_SLOT_PORT`), which the system frees however the run ends. `MIVRA_TEST_SLOTS=2` allows two runs at once and gives each its share of the CPUs (`MIVRA_TEST_WORKERS` for Vitest, `MIVRA_E2E_WORKERS` for Playwright), and `MIVRA_TEST_SLOTS=0` turns the wait off. Running Vitest or Playwright directly in a package skips the wait.
+
 Workspace packages resolve to their TypeScript source in dev, tests and type-checking through the `@mivra/source` export condition, so `pnpm dev` needs no prebuild. `pnpm build` compiles `packages/protocol` first; the production server loads its `dist`.
 
 The pnpm patch for `@openrouter/ai-sdk-provider@3.1.0` handles a discarded stream-cancellation rejection that can exit Node after a client disconnect. Remove it when an upstream version handles that rejection and passes `packages/server/test/openrouter-exit.test.ts`.
