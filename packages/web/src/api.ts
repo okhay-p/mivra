@@ -228,6 +228,22 @@ export const selectModel = (selection: ModelSelection) =>
 export const setPinnedModels = (models: string[]) =>
   request(() => api.settings["pinned-models"].$put({ json: { models } }), async (res) => ((await res.json()) as { pinned: string[] }).pinned);
 
+/** A background task's model (ADR-012, option D): its override, or null to follow the main model. */
+export type ModelTaskView = InferResponseType<typeof api.settings.tasks.$get, 200>["tasks"][number];
+export type ModelTaskId = ModelTaskView["id"];
+
+export const getModelTasks = () => request(() => api.settings.tasks.$get(), async (res) => ((await res.json()) as { tasks: ModelTaskView[] }).tasks);
+
+export const setModelTask = (task: ModelTaskId, selection: ModelSelection) =>
+  request(() => api.settings.tasks[":task"].$put({ param: { task }, json: selection }), async (res) => (await res.json()) as ModelTaskView);
+
+/** Back to the main model, followed from then on. */
+export const resetModelTask = (task: ModelTaskId) =>
+  request(() => api.settings.tasks[":task"].$delete({ param: { task } }), async (res) => (await res.json()) as ModelTaskView);
+
+/** Asks the app to open Settings, from anywhere (a failed lesson's "Lesson model settings", say). */
+export const OPEN_SETTINGS = "mivra:open-settings";
+
 /** Which providers have an API key, and whether this client may change them (ADR-013). Keys never come back. */
 export type ProviderKeysView = InferResponseType<typeof api.settings.providers.$get, 200>;
 export type ProviderKey = ProviderKeysView["providers"][number];

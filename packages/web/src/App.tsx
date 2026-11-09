@@ -4,9 +4,9 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
 import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
-import { Brain, GraduationCap, KeyRound, Library, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
+import { Brain, GraduationCap, KeyRound, Library, MessageSquare, MessagesSquare, Plus, Settings, SquarePlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
-import { addToLesson, undoSyllabusChange, api, authHeaders, createSession, errorMessage, type Session, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
+import { OPEN_SETTINGS, addToLesson, undoSyllabusChange, api, authHeaders, createSession, errorMessage, type Session, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
@@ -19,6 +19,7 @@ import { ImportsPanel } from "./ImportsPanel.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ModelPicker, modelLabel, useModelPicker, type ModelPickerState } from "./ModelPicker.js";
 import { ProvidersPanel, hasAnyKey } from "./ProvidersPanel.js";
+import { SettingsPanel } from "./SettingsPanel.js";
 import { ChatGptWelcome, UsageLimitNotice } from "./ChatGpt.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
@@ -121,6 +122,12 @@ export function App() {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [importsOpen, setImportsOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    const show = () => setSettingsOpen(true);
+    window.addEventListener(OPEN_SETTINGS, show);
+    return () => window.removeEventListener(OPEN_SETTINGS, show);
+  }, []);
   // With no API key anywhere, the providers panel opens as first-run setup (ADR-013).
   const [firstRun, setFirstRun] = useState(false);
   useEffect(() => {
@@ -149,10 +156,12 @@ export function App() {
         onOpenMemory={() => setMemoryOpen(true)}
         onOpenImports={() => setImportsOpen(true)}
         onOpenProviders={() => setProvidersOpen(true)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
       <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} />
       <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
+      <SettingsPanel open={settingsOpen} onOpenChange={setSettingsOpen} />
       <ChatGptWelcome />
       <DeleteSessionDialog session={deleting} onClose={() => setDeleting(undefined)} onDeleted={deleted} />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
@@ -202,6 +211,7 @@ function SessionSidebar({
   onOpenMemory,
   onOpenImports,
   onOpenProviders,
+  onOpenSettings,
 }: {
   sessions: Session[];
   activeId: string | undefined;
@@ -218,6 +228,7 @@ function SessionSidebar({
   onOpenMemory: () => void;
   onOpenImports: () => void;
   onOpenProviders: () => void;
+  onOpenSettings: () => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
   // The entry whose title is being edited in place.
@@ -341,6 +352,19 @@ function SessionSidebar({
             >
               <KeyRound />
               <span>Model providers</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Settings"
+              data-settings-trigger
+              onClick={() => {
+                onOpenSettings();
+                closeOnMobile();
+              }}
+            >
+              <Settings />
+              <span>Settings</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

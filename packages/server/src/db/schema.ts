@@ -239,6 +239,8 @@ export const syllabusVersions = sqliteTable(
 );
 
 export const lessonStatuses = ["generating", "ready", "failed", "finished"] as const;
+/** What the learner can do about a failed lesson, when it's more than retrying: fix the lesson model's override (issue #71). */
+export const lessonErrorActions = ["lesson-model"] as const;
 
 /**
  * One lesson per syllabus topic (ADR-011). Generation runs in the lesson's own hidden session, so its
@@ -260,6 +262,8 @@ export const lessons = sqliteTable(
       .references(() => sessions.id, { onDelete: "cascade" }),
     status: text("status", { enum: lessonStatuses }).notNull(),
     error: text("error"),
+    /** Set with `error` when that message is Mivra's own and names a fix; the lesson then shows it. */
+    errorAction: text("error_action", { enum: lessonErrorActions }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     finishedAt: integer("finished_at", { mode: "timestamp_ms" }),
   },

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db/client.js";
-import { artifacts, attempts, lessonSections, lessonVersions, lessons, sessions } from "../db/schema.js";
+import { artifacts, attempts, lessonSections, lessonVersions, lessons, sessions, type lessonErrorActions } from "../db/schema.js";
 
 export type LessonRow = typeof lessons.$inferSelect;
 
@@ -57,7 +57,7 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
         const now = clock();
         const sessionId = randomUUID();
         tx.insert(sessions).values({ id: sessionId, title: `Lesson: ${input.topicTitle}`.slice(0, 60), createdAt: now, updatedAt: now }).run();
-        const lesson = { id: randomUUID(), ...input, sessionId, status: "generating" as const, error: null, createdAt: now, finishedAt: null };
+        const lesson = { id: randomUUID(), ...input, sessionId, status: "generating" as const, error: null, errorAction: null, createdAt: now, finishedAt: null };
         tx.insert(lessons).values(lesson).run();
         return { lesson, created: true };
       });
@@ -88,7 +88,7 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
 
     /** Marks a failed lesson as generating again, to resume where it stopped. */
     restartLesson(id: string): boolean {
-      return db.update(lessons).set({ status: "generating", error: null }).where(and(eq(lessons.id, id), eq(lessons.status, "failed"))).run().changes > 0;
+      return db.update(lessons).set({ status: "generating", error: null, errorAction: null }).where(and(eq(lessons.id, id), eq(lessons.status, "failed"))).run().changes > 0;
     },
 
     /** Lessons left generating by a previous server process stopped part-way; they can be resumed. */
@@ -96,9 +96,9 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
       db.update(lessons).set({ status: "failed", error: "The server stopped before the lesson was finished" }).where(eq(lessons.status, "generating")).run();
     },
 
-    setStatus(id: string, status: "ready" | "failed", error?: string) {
+    setStatus(id: string, status: "ready" | "failed", error?: string, errorAction?: (typeof lessonErrorActions)[number]) {
       db.update(lessons)
-        .set({ status, error: error ?? null })
+        .set({ status, error: error ?? null, errorAction: errorAction ?? null })
         .where(and(eq(lessons.id, id), eq(lessons.status, "generating")))
         .run();
     },

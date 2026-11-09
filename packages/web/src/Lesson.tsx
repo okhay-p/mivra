@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { finishLesson, getLesson, retryLesson } from "./api.js";
+import { OPEN_SETTINGS, finishLesson, getLesson, retryLesson } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { mergeViews } from "./chat-artifacts.js";
 import { MathText } from "./MathText.js";
@@ -280,10 +280,17 @@ export function LessonPage({
         <Alert variant="destructive">
           <AlertTitle>{lesson.error}</AlertTitle>
           <AlertDescription>
-            <p>The sections above are kept. Mivra can carry on from here.</p>
-            <Button className="mt-2" size="sm" disabled={busy} onClick={() => void run(() => retryLesson(lessonId))}>
-              Continue writing
-            </Button>
+            <p>The sections above are kept. Mivra can carry on from here{lesson.errorAction === "lesson-model" ? " once the lesson model can be used" : ""}.</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {lesson.errorAction === "lesson-model" && (
+                <Button size="sm" variant="outline" onClick={() => window.dispatchEvent(new Event(OPEN_SETTINGS))}>
+                  Lesson model settings
+                </Button>
+              )}
+              <Button size="sm" disabled={busy} onClick={() => void run(() => retryLesson(lessonId))}>
+                Continue writing
+              </Button>
+            </div>
           </AlertDescription>
         </Alert>
       )}

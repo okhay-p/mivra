@@ -94,6 +94,8 @@ export const LessonView = z
     /** Whether the learner can finish it now: fully written and every check answered. */
     canFinish: z.boolean(),
     error: z.string().nullable(),
+    /** A failure the learner fixes elsewhere: "lesson-model" means the lesson model chosen in Settings can't be used. */
+    errorAction: z.enum(["lesson-model"]).nullable(),
     createdAt: z.string().datetime(),
     finishedAt: z.string().datetime().nullable(),
   })
