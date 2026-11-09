@@ -7,9 +7,6 @@ import { ChatGptError } from "../../server/src/chatgpt/oauth.js";
 import { CHATGPT_FILE, chatGptFileStore, createChatGptSession } from "../../server/src/chatgpt/session.js";
 import { loadConfig, type Config } from "../../server/src/config.js";
 import { ApiKey, CREDENTIALS_FILE, PROVIDER_ENV, PROVIDER_LABELS, createCredentialStore, type ProviderId } from "../../server/src/credentials.js";
-import { checkProviderKey } from "../../server/src/models/key-check.js";
-import { NewerDatabaseError } from "../../server/src/db/client.js";
-import { PortInUseError, startServer } from "../../server/src/start.js";
 import { USAGE, UsageError, parseCommand, type Command } from "./args.js";
 import { LOG_FILE, STATE_FILE, claim, clearState, isAlive, readState, running, waitForHolder, writeState } from "./state.js";
 import { openBrowser, readSecret } from "./terminal.js";
@@ -113,6 +110,9 @@ async function startForeground(command: Start, base: Config, env: NodeJS.Process
       return 1;
     }
   }
+  // Loaded only to start: the server pulls in the database, model SDKs and API layer, which take seconds to load,
+  // and every other command (version, status, auth, import) should answer at once.
+  const [{ PortInUseError, startServer }, { NewerDatabaseError }] = await Promise.all([import("../../server/src/start.js"), import("../../server/src/db/client.js")]);
   let server;
   try {
     server = await startServer({ config, env, webDist: webDist(), migrationsFolder: migrations(), portFallback: true, log: err });
@@ -132,32 +132,32 @@ async function startForeground(command: Start, base: Config, env: NodeJS.Process
     }
     throw error;
   }
+  // Listen for Ctrl+C before saying it works: a signal sent as soon as the message appears must stop Mivra cleanly.
+  let stopping = false;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    // Exit for real, even with lesson generation or a reply still running: stopping must stop the spending.
+    // Runs cut short are marked interrupted and recovered at the next start. The record goes last, so
+    // `mivra stop` and a new start see this process until it's gone.
+    const exit = () => {
+      clearState(config.dataDir, process.pid);
+      process.exit(0);
+    };
+    setTimeout(exit, 5000).unref();
+    void server.close().then(exit, exit);
+  };
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  process.once("SIGHUP", shutdown);
+
   // Keep the claim's start time: it tells this run's record from a previous run's with the same pid.
   writeState(config.dataDir, { pid: process.pid, port: server.port, url: server.url, startedAt: readState(config.dataDir)?.startedAt ?? new Date().toISOString() });
   if (server.port !== config.port) err(`Port ${config.port} is in use, so Mivra is on ${server.port}.`);
   out(`Mivra is running at ${server.url}`);
   out(env.MIVRA_DETACHED === "1" ? `Data: ${config.dataDir}` : `Data: ${config.dataDir}. Press Ctrl+C to stop.`);
   if (command.open) openBrowser(server.url);
-
-  return new Promise(() => {
-    let stopping = false;
-    const shutdown = () => {
-      if (stopping) return;
-      stopping = true;
-      // Exit for real, even with lesson generation or a reply still running: stopping must stop the spending.
-      // Runs cut short are marked interrupted and recovered at the next start. The record goes last, so
-      // `mivra stop` and a new start see this process until it's gone.
-      const exit = () => {
-        clearState(config.dataDir, process.pid);
-        process.exit(0);
-      };
-      setTimeout(exit, 5000).unref();
-      void server.close().then(exit, exit);
-    };
-    process.once("SIGINT", shutdown);
-    process.once("SIGTERM", shutdown);
-    process.once("SIGHUP", shutdown);
-  });
+  return new Promise(() => {});
 }
 
 /** How long a detached start waits for the server to come up before giving up. */
@@ -270,6 +270,7 @@ async function authSet(provider: ProviderId, check: boolean, config: Config, env
   out(`Saved the ${PROVIDER_LABELS[provider]} key to ${join(config.dataDir, CREDENTIALS_FILE)}. A running Mivra uses it from the next reply.`);
   if (!check) return 0;
   const baseUrl = provider === "anthropic" ? env.ANTHROPIC_BASE_URL : provider === "openai" ? env.OPENAI_BASE_URL : undefined;
+  const { checkProviderKey } = await import("../../server/src/models/key-check.js");
   const result = await checkProviderKey(provider, key.data, { baseUrl });
   if (result.ok) {
     out("The key works.");
