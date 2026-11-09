@@ -781,10 +781,14 @@ function Chat({
   };
   const checkRef = useRef(checkContinuation);
   checkRef.current = checkContinuation;
+  // A session opened to send its first message has no continuation to find, and checking for one
+  // would race that send: resuming replaces the SDK's active request before its status says busy, so
+  // the 204 would end the chat's reply on screen while it still runs on the server.
+  const sendsFirst = useRef(Boolean(start?.message) && initialMessages.length === 0);
   useEffect(() => {
     mounted.current = true;
     const check = () => { if (document.visibilityState === "visible") void checkRef.current(); };
-    check();
+    if (!sendsFirst.current) check();
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", check);
     return () => {
