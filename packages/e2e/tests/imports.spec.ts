@@ -103,4 +103,50 @@ test.describe("imported notes", () => {
     await dialog.getByRole("button", { name: "Re-import" }).click();
     await expect(page.getByText(`Re-imported ${name}: 1 note in all.`)).toBeVisible(UNPACK);
   });
+
+  test("reads imported notes for concepts and memories, can cancel it, and deleting the import removes them", async ({ page }) => {
+    const stamp = Date.now();
+    const name = `Distilled ${stamp}`;
+    const topic = `Topic${stamp}`;
+    const vault = makeVault(name, { [`${topic}.md`]: `#cs All about ${topic}.`, "Slow/Later.md": "#zz slowdistil" });
+    try {
+      const panel = await openImports(page);
+      await panel.getByRole("button", { name: "Import a vault" }).click();
+      const dialog = page.getByRole("dialog", { name: "Import an Obsidian vault" });
+      await dialog.getByTestId("vault-folder-input").setInputFiles(vault.path);
+      await dialog.getByRole("button", { name: "Import", exact: true }).click();
+      await expect(dialog.getByText(`Imported ${name}: 2 notes in all.`)).toBeVisible();
+      await dialog.getByRole("button", { name: "Done" }).click();
+
+      // The #cs group is read; the #zz group holds until it's cancelled.
+      const entry = panel.getByRole("listitem", { name });
+      await expect(entry.getByText("Reading notes for concepts… group 2 of 2")).toBeVisible();
+      await expect(entry.getByRole("progressbar")).toBeVisible();
+      await entry.getByRole("button", { name: "Cancel" }).click();
+      await expect(entry.getByText("Cancelled. 1 note not read for concepts yet.")).toBeVisible();
+      await expect(entry.getByText("So far: 1 concept and 1 memory drawn from these notes.")).toBeVisible();
+      await expect(entry.getByRole("button", { name: "Resume" })).toBeVisible();
+
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Memory", exact: true }).click();
+      const memory = page.getByRole("dialog", { name: "Memory" });
+      await expect(memory.getByText(`Has notes on ${topic}.`)).toBeVisible();
+      await expect(memory.getByText(`From your note ${topic}`)).toBeVisible();
+      await memory.getByRole("button", { name: "From notes" }).click();
+      await expect(memory.getByRole("button", { name: "Delete all from notes" })).toBeVisible();
+      await page.keyboard.press("Escape");
+
+      await page.getByRole("button", { name: "Imported notes" }).click();
+      const again = page.getByRole("dialog", { name: "Imported notes" }).getByRole("listitem", { name });
+      await again.getByRole("button", { name: "Delete" }).click();
+      await again.getByRole("button", { name: "Yes, delete" }).click();
+      await expect(again).toHaveCount(0);
+      await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Memory", exact: true }).click();
+      await expect(page.getByRole("dialog", { name: "Memory" }).getByText(/^(No memories yet|Goals|Preferences|Misconceptions|Known from your notes)$/).first()).toBeVisible();
+      await expect(page.getByRole("dialog", { name: "Memory" }).getByText(`Has notes on ${topic}.`)).toHaveCount(0);
+    } finally {
+      vault.remove();
+    }
+  });
 });

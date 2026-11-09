@@ -902,7 +902,7 @@ const createImport = createRoute({
   method: "post",
   path: "/imports",
   description:
-    "Imports an Obsidian vault from its Markdown files. Only `.md` files outside hidden folders such as `.obsidian` are read; anything else is skipped and reported. No model runs: notes, links, tags and searchable chunks come from the text alone.",
+    "Imports an Obsidian vault from its Markdown files. Only `.md` files outside hidden folders such as `.obsidian` are read; anything else is skipped and reported. No model runs during the import: notes, links, tags and searchable chunks come from the text alone. Afterwards the new and changed notes are distilled into concepts and memories in the background (see `/imports/{id}/distillation`).",
   request: { body: { content: { "application/json": { schema: VaultImportInput } } } },
   responses: {
     201: { description: "What the import stored", content: { "application/json": { schema: VaultImportResult } } },

@@ -37,9 +37,14 @@ export function clearDistilled(tx: Db | Tx, noteIds: string[]) {
   dropUnsupportedConcepts(tx);
 }
 
-/** Deletes concepts no note supports any more; their edges follow by cascade. */
+/**
+ * Deletes concepts no note supports any more: none lists it as a source, and no edge a note drew touches it. An edge
+ * keeps its ends, so rewriting one note doesn't break the edges other notes drew to its concepts.
+ */
 export function dropUnsupportedConcepts(tx: Db | Tx) {
-  tx.run(sql`delete from concepts where not exists (select 1 from concept_sources s where s.concept_id = concepts.id)`);
+  tx.run(sql`
+    delete from concepts where not exists (select 1 from concept_sources s where s.concept_id = concepts.id)
+      and not exists (select 1 from concept_edges e where e.from_id = concepts.id or e.to_id = concepts.id)`);
 }
 
 /**
@@ -150,16 +155,15 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
         let savedMemories = 0;
         for (const memory of distilled.memories) {
           if (!current.has(memory.noteId)) continue;
-          const active = tx.select({ text: memories.text, concept: memories.concept, noteId: memories.noteId }).from(memories).where(and(eq(memories.kind, memory.kind), eq(memories.status, "active"))).all();
-          if (active.some((m) => sameText(m.text, memory.text))) continue;
+          // Repeats are skipped: of what the learner said, or of what this import's notes already gave. Another import
+          // may say the same and keeps its own copy, so deleting one import doesn't take the other's.
+          const importId = tx.select({ importId: notes.importId }).from(notes).where(eq(notes.id, memory.noteId)).get()?.importId ?? "";
+          const alike = tx.all<{ text: string; concept: string | null }>(sql`
+            select m.text, m.concept from memories m left join notes n on n.id = m.note_id
+            where m.kind = ${memory.kind} and m.status = 'active' and (m.basis != 'import' or n.import_id = ${importId})`);
+          if (alike.some((m) => sameText(m.text, memory.text))) continue;
           // One `known` memory per concept per import: many notes covering it don't need saying many times.
-          if (memory.kind === "known" && memory.conceptKey) {
-            const importId = tx.select({ importId: notes.importId }).from(notes).where(eq(notes.id, memory.noteId)).get()?.importId;
-            const known = tx.all<{ concept: string }>(sql`
-              select m.concept from memories m join notes n on n.id = m.note_id
-              where m.kind = 'known' and m.status = 'active' and n.import_id = ${importId} and m.concept is not null`);
-            if (known.some((m) => conceptKey(m.concept) === memory.conceptKey)) continue;
-          }
+          if (memory.kind === "known" && memory.conceptKey && alike.some((m) => m.concept && conceptKey(m.concept) === memory.conceptKey)) continue;
           tx.insert(memories)
             .values({ id: randomUUID(), kind: memory.kind, text: memory.text, concept: memory.concept, basis: "import", noteId: memory.noteId, status: "active", createdAt: now })
             .run();

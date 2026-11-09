@@ -560,6 +560,23 @@ const LESSON_STEPS: Step[] = [
 
 function nextStep(prompt: PromptMessage[], effort?: string): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
+  // Distilling imported notes (ADR-014): a concept and a known memory per note, named by its title. A note saying
+  // "slowdistil" holds the call until it's cancelled.
+  if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra distillation request")) {
+    if (prompt.slice(lastUser).some((m) => m.role === "tool")) return { text: "" };
+    const content = prompt[lastUser]!.content as { type: string; text?: string }[];
+    const block = /<notes>\n([\s\S]*?)\n<\/notes>/.exec(content.find((p) => p.type === "text")?.text ?? "")?.[1] ?? "";
+    const notes = block.split("\n").filter(Boolean).map((line) => JSON.parse(line) as { ref: string; title: string; text: string });
+    if (notes.some((n) => n.text.includes("slowdistil"))) return { controlled: "cancelthinking" };
+    return {
+      tool: "record_from_notes",
+      input: {
+        concepts: notes.map((n) => ({ name: n.title, notes: [n.ref] })),
+        edges: [],
+        memories: notes.map((n) => ({ kind: "known", text: `Has notes on ${n.title}.`, concept: n.title, note: n.ref })),
+      },
+    };
+  }
   if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra lesson request")) {
     const done = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
     const system = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");

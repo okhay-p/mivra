@@ -407,7 +407,7 @@ describe("known memories in the tutor's context", () => {
   it("reach a chat turn", async () => {
     const t = setup(byTitle);
     await t.importVault("Vault", vault);
-    const session = (await (await t.send("POST", "/sessions")).json()) as { id: string };
+    const session = (await (await t.send("POST", "/sessions", {})).json()) as { id: string };
     const calls = t.model.doStreamCalls.length;
     await (await t.send("POST", `/sessions/${session.id}/chat`, { message: { id: "u1", role: "user", parts: [{ type: "text", text: "hello" }] } })).text();
     await vi.waitFor(() => expect(t.model.doStreamCalls.length).toBe(calls + 1));

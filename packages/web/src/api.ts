@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, VaultImportResult, VaultImportView, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, VaultImportResult, VaultImportView, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -98,6 +98,13 @@ export const deleteMemory = (id: string) =>
     () => undefined,
   );
 
+/** Deletes every memory drawn from imported notes. */
+export const deleteImportedMemories = () =>
+  request(
+    () => api.memories.$delete({ query: { basis: "import" } }),
+    async (res) => ((await res.json()) as { deleted: number }).deleted,
+  );
+
 export const listDocuments = (sessionId: string) =>
   request(
     () => api.sessions[":id"].documents.$get({ param: { id: sessionId } }),
@@ -130,6 +137,18 @@ export const deleteImport = (id: string) =>
   request(
     () => api.imports[":id"].$delete({ param: { id } }),
     () => undefined,
+  );
+
+export const startDistillation = (id: string) =>
+  request(
+    () => api.imports[":id"].distillation.$post({ param: { id } }),
+    async (res) => DistillationView.parse(await res.json()),
+  );
+
+export const cancelDistillation = (id: string) =>
+  request(
+    () => api.imports[":id"].distillation.$delete({ param: { id } }),
+    async (res) => DistillationView.parse(await res.json()),
   );
 
 /** A new import with this name, or a re-import of an existing one. */
