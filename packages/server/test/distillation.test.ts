@@ -147,8 +147,9 @@ describe("groupNotes", () => {
     const groups = groupNotes(notes, []);
     expect(groups.map((g) => g.notes.length)).toEqual([MAX_GROUP_NOTES, 3]);
     expect(groupNotes([...notes].reverse(), [])).toEqual(groups);
-    const long = [pending("a.md", ["cs"], "x".repeat(20_000)), pending("b.md", ["cs"], "x".repeat(20_000))];
-    expect(groupNotes(long, []).length).toBe(2);
+    // Each note counts only the 6,000 characters the model reads, so five long notes need two calls.
+    const long = Array.from({ length: 5 }, (_, i) => pending(`${i}.md`, ["cs"], "x".repeat(20_000)));
+    expect(groupNotes(long, []).map((g) => g.notes.length)).toEqual([4, 1]);
   });
 });
 
