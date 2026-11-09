@@ -110,6 +110,34 @@ describe("imported notes in the tutor's context", () => {
     }
   });
 
+  describe("relevance cut-off", () => {
+    const diary: VaultFile = { path: "Diary/Monday.md", text: `${"Walked to the market, bought apples and talked with friends about the weather. ".repeat(12)}Someone mentioned memoization once.\n` };
+    const memoization: VaultFile = { path: "CS/Memoization.md", text: "# Memoization\nMemoization caches the results of a function so repeated calls are fast. Memoization trades memory for time.\n" };
+    const notesFor = async (files: VaultFile[], text: string) => {
+      const { importVault, newSession, turn } = setup();
+      await importVault("My vault", files);
+      const { notes } = await turn(await newSession(), text);
+      return new Set(rows(notes).map((r) => r.note));
+    };
+
+    it("drops a note matching only one of several topic words, and keeps the note matching several", async () => {
+      const pizza: VaultFile = { path: "Cooking/Pizza.md", text: "Stretch the dough into a thin base, then bake it hot.\n" };
+      // "recursive", "function", "base" and "case": the pizza note matches only "base", the memoization note only "function".
+      expect(await notesFor([...vault, pizza, memoization], "Why does a recursive function need a base case?")).toEqual(new Set(["Recursion"]));
+    });
+
+    it("keeps a match on one word when the message has only one or two topic words", async () => {
+      expect(await notesFor(vault, "How long do I knead?")).toEqual(new Set(["Bread"]));
+    });
+
+    it("drops a weak single-word match once a much stronger one exists", async () => {
+      // A passing mention in a long, unrelated note scores well under a third of the note about the topic.
+      expect(await notesFor([diary, memoization], "What is memoization?")).toEqual(new Set(["Memoization"]));
+      // The cut-off is relative to the best match, so the passing mention alone still comes in.
+      expect(await notesFor([diary], "What is memoization?")).toEqual(new Set(["Monday"]));
+    });
+  });
+
   it("adds nothing about notes when there are none", async () => {
     const { newSession, turn } = setup();
     const { instructions, notes } = await turn(await newSession(), "recursion base case");

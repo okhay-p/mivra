@@ -26,10 +26,14 @@ const IGNORED_TERMS = new Set(
  * `keep` can drop more terms, as long as they stay letters and digits.
  */
 export function ftsQuery(text: string, keep: (term: string) => boolean = () => true): string | undefined {
-  const terms = new Set(
-    (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((term) => !IGNORED_TERMS.has(term) && keep(term)),
-  );
-  return terms.size > 0 ? [...terms].slice(0, MAX_QUERY_TERMS).map((term) => `"${term}"`).join(" OR ") : undefined;
+  const terms = queryTerms(text, keep);
+  return terms.length > 0 ? terms.map((term) => `"${term}"`).join(" OR ") : undefined;
+}
+
+/** The distinct words ftsQuery searches for, letters and digits only, in the order they first appear. */
+export function queryTerms(text: string, keep: (term: string) => boolean = () => true): string[] {
+  const terms = new Set((text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((term) => !IGNORED_TERMS.has(term) && keep(term)));
+  return [...terms].slice(0, MAX_QUERY_TERMS);
 }
 
 export function latestLearnerText(conversation: UIMessage[]): string {
