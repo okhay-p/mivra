@@ -139,6 +139,36 @@ describe("signing in with ChatGPT", () => {
     expect(session.view()).toMatchObject({ signedIn: true, pending: false });
   });
 
+  it("honours a cancel that comes while the code is being exchanged, and settles a replaced sign-in", async () => {
+    const auth = fakeAuth();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const slowFetch: typeof fetch = async (input, init) => {
+      if (String(input).endsWith("/oauth/token")) await held;
+      return auth.fetch(input, init);
+    };
+    const store = memoryChatGptStore();
+    const session = createChatGptSession({ store, oauth: createOAuthClient({ fetch: slowFetch }), callbackPort: 0 });
+    sessions.push(session);
+    const started = await session.startSignIn();
+    const page = visit(auth.approve(started.url));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    session.cancelSignIn();
+    expect((await started.done).signedIn).toBe(false);
+    release();
+    await page;
+    expect(session.view()).toMatchObject({ signedIn: false, pending: false });
+    expect(store.current()?.tokens ?? null).toBeNull();
+    // The session the late exchange produced is ended at OpenAI.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(auth.state.revoked).toEqual(["refresh-1"]);
+
+    // Starting again replaces a waiting sign-in, whose `done` still settles.
+    const first = await session.startSignIn();
+    await session.startSignIn();
+    expect(await first.done).toMatchObject({ signedIn: false, pending: false });
+  });
+
   it("refuses a sign-in that doesn't grant use of the plan", async () => {
     const ctx = setup({ scope: "openid profile email offline_access" });
     const { page, view } = await signIn(ctx);

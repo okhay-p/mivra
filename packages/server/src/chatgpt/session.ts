@@ -208,6 +208,11 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
   async function finish(current: Pending, callback: { code: string; clientId: string }): Promise<ChatGptView> {
     try {
       const { tokens, identity } = await oauth.exchange(current.auth, callback);
+      // Cancelled or replaced while the code was being exchanged: honour that, and end the session it produced.
+      if (current.settled) {
+        void oauth.revoke(callback.clientId, tokens.refreshToken);
+        return { ...view(), pending: false };
+      }
       const file = load();
       if (current.auth.clientId && file.registration && file.registration.subject !== identity.subject) {
         throw new ChatGptError("account_mismatch", `You signed in to a different account than ${file.registration.email ?? "before"}. To switch accounts, choose "Use a different account".`);
@@ -222,13 +227,17 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
     return result;
   }
 
-  /** Stops listening. A reply being written still goes out; idle browser connections are dropped. */
+  /**
+   * Stops listening and settles the attempt's `done` (a no-op if it already settled with its result). A reply
+   * being written still goes out; idle browser connections are dropped.
+   */
   function close(current: Pending) {
     current.settled = true;
     clearTimeout(current.timer);
     current.server.close();
     current.server.closeIdleConnections();
     if (pending === current) pending = undefined;
+    current.finish({ ...view(), pending: false });
   }
 
   async function listen(server: Server): Promise<number> {
@@ -299,10 +308,10 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
         claimed: false,
         finish: resolveDone,
         timer: setTimeout(() => {
-          if (current.settled) return;
+          // An exchange under way finishes (or fails) on its own, within its request timeouts.
+          if (current.settled || current.claimed) return;
           lastError = "Sign-in timed out. Start it again when you're ready.";
           close(current);
-          resolveDone(view());
         }, signInTimeoutMs),
       };
       current.timer.unref();
@@ -387,10 +396,7 @@ export function createChatGptSession({ store, oauth = createOAuthClient(), clock
     },
 
     cancelSignIn() {
-      const current = pending;
-      if (!current) return;
-      close(current);
-      current.finish(view());
+      if (pending) close(pending);
     },
 
     /** Signs out: ends the session at OpenAI and forgets the tokens, keeping the registration for next time. */
