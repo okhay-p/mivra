@@ -406,6 +406,13 @@ function CourseSession(props: SessionProps) {
   useEffect(() => {
     if (lessonSyllabus && shownSyllabus && lessonSyllabus !== shownSyllabus) void refresh();
   }, [lessonSyllabus, shownSyllabus, refresh]);
+  // The open lesson follows its generation; the lesson list doesn't, so it's fetched again when the two
+  // disagree (say generating → ready or failed), and the sidebar stops showing it as being written.
+  const openStatus = openLesson?.status;
+  const listedStatus = openLesson && lessons?.topics.find((t) => t.lesson?.id === openLesson.id)?.lesson?.status;
+  useEffect(() => {
+    if (openStatus && listedStatus && openStatus !== listedStatus) void refresh();
+  }, [openStatus, listedStatus, refresh]);
 
   const undo = async () => {
     if (!course?.syllabus) return undefined;
