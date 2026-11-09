@@ -22,7 +22,7 @@ import { ChatGptWelcome, UsageLimitNotice } from "./ChatGpt.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
-import { DeleteSessionDialog, SessionMenu } from "./SessionActions.js";
+import { DeleteSessionDialog, SessionMenu, SessionTitleEditor } from "./SessionActions.js";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "@/components/ui/empty";
@@ -142,6 +142,7 @@ export function App() {
         drafting={pane.kind === "draft"}
         onSelect={(id) => setPane({ kind: "session", id })}
         onDelete={setDeleting}
+        onRenamed={(renamed) => setSessions((prev) => prev.map((s) => (s.id === renamed.id ? { ...s, title: renamed.title } : s)))}
         onNew={openDraft}
         onNewCourse={() => setPane({ kind: "start" })}
         onOpenMemory={() => setMemoryOpen(true)}
@@ -194,6 +195,7 @@ function SessionSidebar({
   onThemeChange,
   onSelect,
   onDelete,
+  onRenamed,
   onNew,
   onNewCourse,
   onOpenMemory,
@@ -208,6 +210,8 @@ function SessionSidebar({
   onThemeChange: (theme: ThemeChoice) => void;
   onSelect: (id: string) => void;
   onDelete: (session: Session) => void;
+  /** A session was renamed; the sidebar and the header take the new title from here. */
+  onRenamed: (session: Session) => void;
   onNew: () => void;
   onNewCourse: () => void;
   onOpenMemory: () => void;
@@ -215,6 +219,13 @@ function SessionSidebar({
   onOpenProviders: () => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
+  // The entry whose title is being edited in place.
+  const [renamingId, setRenamingId] = useState<string>();
+  const doneRenaming = (id: string) => {
+    setRenamingId(undefined);
+    // Give focus back to the entry, which replaces the field once this renders.
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(id)}"]`)?.focus());
+  };
   // On mobile the sidebar is an overlay, so close it once the choice is made.
   const closeOnMobile = () => {
     if (isMobile) setOpenMobile(false);
@@ -265,18 +276,25 @@ function SessionSidebar({
             <SidebarMenu>
               {group.sessions.map((s) => (
                 <SidebarMenuItem key={s.id}>
-                  <SidebarMenuButton
-                    isActive={s.id === activeId}
-                    tooltip={s.title}
-                    onClick={() => {
-                      onSelect(s.id);
-                      closeOnMobile();
-                    }}
-                  >
-                    {s.courseId ? <GraduationCap aria-label="Course" /> : <MessageSquare />}
-                    <span>{s.title}</span>
-                  </SidebarMenuButton>
-                  <SessionMenu session={s} onDelete={() => onDelete(s)} />
+                  {renamingId === s.id ? (
+                    <SessionTitleEditor session={s} onRenamed={onRenamed} onDone={() => doneRenaming(s.id)} />
+                  ) : (
+                    <>
+                      <SidebarMenuButton
+                        data-session-id={s.id}
+                        isActive={s.id === activeId}
+                        tooltip={s.title}
+                        onClick={() => {
+                          onSelect(s.id);
+                          closeOnMobile();
+                        }}
+                      >
+                        {s.courseId ? <GraduationCap aria-label="Course" /> : <MessageSquare />}
+                        <span>{s.title}</span>
+                      </SidebarMenuButton>
+                      <SessionMenu onRename={() => setRenamingId(s.id)} onDelete={() => onDelete(s)} />
+                    </>
+                  )}
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
