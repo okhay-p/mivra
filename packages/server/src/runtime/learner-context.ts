@@ -56,7 +56,13 @@ export const dataRows = (rows: object[]) => rows.map((row) => JSON.stringify(row
  * memories came from the model, so they are passed as escaped data that can't close a block. The model
  * is told to treat them as data, though escaping can't guarantee it will.
  */
-export function learnerContext(attempts: EvidenceRow[], memories: MemoryRow[] = [], imports: { name: string; noteCount: number }[] = []): string | undefined {
+export function learnerContext(
+  attempts: EvidenceRow[],
+  memories: MemoryRow[] = [],
+  imports: { name: string; noteCount: number }[] = [],
+  /** When note excerpts are sent: on chat turns, or for a lesson's topic. */
+  excerptsWhen = "on turns where their latest message matches a note",
+): string | undefined {
   const concepts = deriveConceptState(attempts).slice(0, MAX_CONCEPTS);
   const withNotes = imports.filter((i) => i.noteCount > 0);
   if (concepts.length === 0 && memories.length === 0 && withNotes.length === 0) return undefined;
@@ -86,7 +92,7 @@ export function learnerContext(attempts: EvidenceRow[], memories: MemoryRow[] = 
   if (withNotes.length > 0) {
     const total = withNotes.reduce((sum, i) => sum + i.noteCount, 0);
     sections.push(
-      `Their imported notes: ${total} notes from their own vault, so they have studied some topics before. Excerpts come only on turns where their latest message matches a note.`,
+      `Their imported notes: ${total} notes from their own vault, so they have studied some topics before. Excerpts come only ${excerptsWhen}.`,
       `<learner_imports>\n${dataRows(withNotes.slice(0, MAX_IMPORTS).map((i) => ({ import: i.name, notes: i.noteCount })))}\n</learner_imports>`,
     );
   }
