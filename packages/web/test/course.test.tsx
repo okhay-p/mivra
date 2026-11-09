@@ -55,23 +55,37 @@ describe("PlacementQuestion", () => {
 });
 
 describe("StartCourseForm", () => {
-  it("asks what to learn and starts a course with the goal", async () => {
+  const pickerView = {
+    current: { model: "chatgpt:gpt-6.1-sol", effort: null },
+    recent: [],
+    pinned: [],
+    suggested: [],
+    models: [{ id: "chatgpt:gpt-6.1-sol", name: "GPT-6.1-Sol", contextLength: null, price: null, reasoning: null }],
+    catalog: "fresh",
+  };
+  /** Answers the model picker's request, and `course` for everything else. */
+  const serve = (course: Response) =>
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => (String(input).includes("/api/models") ? json(pickerView) : course));
+
+  it("asks what to learn, offers the model choice, and starts a course with the goal", async () => {
     const session = { id: "s1", title: "Calculus", updatedAt: placement.createdAt, courseId: "c1" };
-    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    const fetch = serve(
       json({ course: { id: "c1", sessionId: "s1", goal: "Calculus", status: "interviewing", syllabus: null, interviewMessageId: null, createdAt: placement.createdAt }, session }, 201),
     );
     const onStarted = vi.fn();
     render(<StartCourseForm onStarted={onStarted} onFreeChat={() => {}} />);
     expect(screen.getByRole("heading", { name: "What do you want to learn?" })).toBeTruthy();
+    // The course is planned and taught by the model chosen here (it's the app-wide selection).
+    expect(await screen.findByRole("button", { name: "Model: GPT-6.1-Sol (ChatGPT). Change model" })).toBeTruthy();
     fireEvent.change(screen.getByRole("textbox", { name: "Learning goal" }), { target: { value: "  Calculus " } });
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await waitFor(() => expect(onStarted).toHaveBeenCalledWith({ session, goal: "Calculus" }));
-    expect(String(fetch.mock.calls[0]![0])).toMatch(/\/api\/courses$/);
-    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ goal: "Calculus" });
+    const start = fetch.mock.calls.find(([url]) => /\/api\/courses$/.test(String(url)))!;
+    expect(JSON.parse(String(start[1]?.body))).toEqual({ goal: "Calculus" });
   });
 
   it("shows the server's error", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(json({ error: "Invalid goal" }, 400));
+    serve(json({ error: "Invalid goal" }, 400));
     render(<StartCourseForm onStarted={() => {}} onFreeChat={() => {}} />);
     fireEvent.change(screen.getByRole("textbox", { name: "Learning goal" }), { target: { value: "x" } });
     fireEvent.click(screen.getByRole("button", { name: "Start" }));

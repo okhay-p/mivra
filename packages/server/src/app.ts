@@ -20,6 +20,8 @@ import {
   VaultSnapshotInput,
 } from "@mivra/protocol";
 import { bodyLimit } from "hono/body-limit";
+import { ChatGptError, CHATGPT_API } from "./chatgpt/oauth.js";
+import type { ChatGptSession } from "./chatgpt/session.js";
 import { ApiKey, memoryCredentials, providerIds, type CredentialStore, type ProviderId } from "./credentials.js";
 import type { Db } from "./db/client.js";
 import { createDocumentAttacher, type AttachError } from "./documents/attach.js";
@@ -55,7 +57,15 @@ export interface AppDeps {
    * Provider API keys (ADR-013). `check` asks the provider whether it accepts a key; `isLocal` says whether a
    * request may change keys, by default when it comes from a loopback address. Defaults to no keys in memory.
    */
-  providers?: { credentials: CredentialStore; check?: (provider: ProviderId, key: string) => Promise<KeyCheck>; isLocal?: (c: Context) => boolean };
+  providers?: {
+    credentials: CredentialStore;
+    check?: (provider: ProviderId, key: string) => Promise<KeyCheck>;
+    isLocal?: (c: Context) => boolean;
+    /** The learner's ChatGPT sign-in (ADR-015). Without it, the ChatGPT routes answer 404. */
+    chatgpt?: ChatGptSession;
+    /** Override fetch for the ChatGPT check, for tests. */
+    fetch?: typeof fetch;
+  };
   /** Defaults to the first-party core-learning, core-memory and core-course plugins. */
   plugins?: Plugin[];
   /** Defaults to extracting on a worker thread. */
@@ -281,9 +291,21 @@ const ProviderKey = z
     hint: z.string().nullable().openapi({ description: "The key's last four characters" }),
   })
   .openapi("ProviderKey");
+const ChatGptView = z
+  .object({
+    signedIn: z.boolean(),
+    email: z.string().nullable(),
+    name: z.string().nullable(),
+    pending: z.boolean().openapi({ description: "A sign-in is waiting for the browser to come back" }),
+    previous: z.string().nullable().openapi({ description: "The account a new sign-in reuses, when signed out" }),
+    notice: z.string().nullable().openapi({ description: "Why the last sign-in failed, or why Mivra signed the learner out" }),
+    welcome: z.boolean().openapi({ description: "Signed in, and the one-time welcome dialog hasn't been shown" }),
+  })
+  .openapi("ChatGptSignIn");
 const ProviderKeys = z
   .object({
     providers: z.array(ProviderKey),
+    chatgpt: ChatGptView.nullable().openapi({ description: "Sign in with ChatGPT (ADR-015); null when this server doesn't offer it" }),
     canEdit: z.boolean().openapi({ description: "Whether this client may change keys: only from the server's own machine" }),
   })
   .openapi("ProviderKeys");
@@ -333,6 +355,60 @@ const checkProviderKeyRoute = createRoute({
       content: { "application/json": { schema: z.object({ ok: z.boolean(), reason: z.enum(["rejected", "unreachable"]).optional(), message: z.string().optional() }) } },
     },
     404: errorResponse("No key set for this provider"),
+  },
+});
+
+const providersResponse = { description: "Each provider's status", content: { "application/json": { schema: ProviderKeys } } };
+const notOffered = errorResponse("This server doesn't offer sign-in with ChatGPT");
+const startChatGptSignIn = createRoute({
+  method: "post",
+  path: "/settings/chatgpt/sign-in",
+  description:
+    "Start signing in with ChatGPT (ADR-015). Returns the URL to open; the server listens on 127.0.0.1 for the browser to come back, and the status shows `pending` until it does. A browser on another machine finishes by posting the address it ended on to /complete.",
+  request: { body: { content: { "application/json": { schema: z.object({ newAccount: z.boolean().optional() }) } } } },
+  responses: {
+    200: { description: "The ChatGPT sign-in page to open", content: { "application/json": { schema: z.object({ url: z.string().url() }) } } },
+    404: notOffered,
+    502: errorResponse("ChatGPT's sign-in service couldn't be reached"),
+  },
+});
+
+const completeChatGptSignIn = createRoute({
+  method: "post",
+  path: "/settings/chatgpt/sign-in/complete",
+  description: "Finish the pending sign-in from the address the browser ended on, when it couldn't reach 127.0.0.1 on this machine.",
+  request: { body: { content: { "application/json": { schema: z.object({ address: z.string().max(8000) }) } } } },
+  responses: { 200: providersResponse, 400: errorResponse("Not the address of the pending sign-in"), 404: notOffered },
+});
+
+const cancelChatGptSignIn = createRoute({
+  method: "delete",
+  path: "/settings/chatgpt/sign-in",
+  description: "Stop waiting for a sign-in.",
+  responses: { 200: providersResponse, 404: notOffered },
+});
+
+const signOutChatGpt = createRoute({
+  method: "delete",
+  path: "/settings/chatgpt",
+  description: "Sign out of ChatGPT: ends the session at OpenAI and forgets its tokens.",
+  responses: { 200: providersResponse, 404: notOffered },
+});
+
+const chatGptWelcomed = createRoute({
+  method: "post",
+  path: "/settings/chatgpt/welcomed",
+  description: "Record that the one-time ChatGPT plan welcome was shown.",
+  responses: { 200: providersResponse, 404: notOffered },
+});
+
+const checkChatGpt = createRoute({
+  method: "post",
+  path: "/settings/chatgpt/check",
+  description: "Ask ChatGPT whether the sign-in works, by listing its models (spends no usage).",
+  responses: {
+    200: { description: "Whether ChatGPT accepted the sign-in", content: { "application/json": { schema: z.object({ ok: z.boolean(), message: z.string().optional() }) } } },
+    404: notOffered,
   },
 });
 
@@ -693,8 +769,8 @@ const uploadOf = (c: Context) => ({ body: c.req.raw.body, contentType: c.req.hea
 
 export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse], extractDocument, unzipVault }: AppDeps) {
   const store = createSessionStore(db);
-  const { credentials, check, isLocal = isLoopbackPeer } = providers;
-  const providerKeys = (c: Context) => ({ providers: credentials.views(), canEdit: isLocal(c) });
+  const { credentials, check, isLocal = isLoopbackPeer, chatgpt, fetch: fetchImpl = fetch } = providers;
+  const providerKeys = (c: Context) => ({ providers: credentials.views(), chatgpt: chatgpt?.view() ?? null, canEdit: isLocal(c) });
   const notLocal = "API keys can only be changed on the computer running Mivra. Use `mivra auth set` there.";
   const fromEnv = "This key comes from an environment variable. Change or unset it there.";
   const models = createModelSettings({
@@ -896,6 +972,48 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       if (!check) return c.json({ ok: true }, 200);
       return c.json(await check(provider, key), 200);
     })
+    // Unlike API keys (ADR-013), any client the host guard lets in may sign in with ChatGPT (ADR-015): a tailnet
+    // browser finishes by pasting the address back, and the code in it is useless without the server's PKCE
+    // verifier. Tokens still never leave the server.
+    .openapi(startChatGptSignIn, async (c) => {
+      if (!chatgpt) return c.json({ error: "Sign-in with ChatGPT isn't offered here" }, 404);
+      try {
+        const started = await chatgpt.startSignIn({ newAccount: c.req.valid("json").newAccount });
+        // Nobody awaits it here: the client polls the status.
+        void started.done;
+        return c.json({ url: started.url }, 200);
+      } catch (error) {
+        return c.json({ error: error instanceof ChatGptError ? error.message : "Couldn't start signing in with ChatGPT. Try again." }, 502);
+      }
+    })
+    .openapi(completeChatGptSignIn, async (c) => {
+      if (!chatgpt) return c.json({ error: "Sign-in with ChatGPT isn't offered here" }, 404);
+      try {
+        await chatgpt.completeSignIn(c.req.valid("json").address);
+      } catch (error) {
+        return c.json({ error: error instanceof ChatGptError ? error.message : "Couldn't finish signing in. Try again." }, 400);
+      }
+      return c.json(providerKeys(c), 200);
+    })
+    .openapi(cancelChatGptSignIn, (c) => {
+      if (!chatgpt) return c.json({ error: "Sign-in with ChatGPT isn't offered here" }, 404);
+      chatgpt.cancelSignIn();
+      return c.json(providerKeys(c), 200);
+    })
+    .openapi(signOutChatGpt, async (c) => {
+      if (!chatgpt) return c.json({ error: "Sign-in with ChatGPT isn't offered here" }, 404);
+      await chatgpt.signOut();
+      return c.json(providerKeys(c), 200);
+    })
+    .openapi(chatGptWelcomed, (c) => {
+      if (!chatgpt) return c.json({ error: "Sign-in with ChatGPT isn't offered here" }, 404);
+      chatgpt.welcomed();
+      return c.json(providerKeys(c), 200);
+    })
+    .openapi(checkChatGpt, async (c) => {
+      if (!chatgpt) return c.json({ error: "Sign-in with ChatGPT isn't offered here" }, 404);
+      return c.json(await checkChatGptSignIn(chatgpt, fetchImpl), 200);
+    })
     .openapi(setPinnedModels, (c) => c.json({ pinned: models.setPinned(c.req.valid("json").models) }, 200))
     .openapi(listMemories, (c) => c.json(store.listMemoriesForLearner(registry.checkKinds()).map(toMemoryJson), 200))
     .openapi(editMemory, (c) => {
@@ -971,3 +1089,23 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
 }
 
 export type AppType = ReturnType<typeof createApp>;
+
+/** Lists ChatGPT's models with the current token: a check that spends none of the plan's usage. */
+async function checkChatGptSignIn(chatgpt: ChatGptSession, fetchImpl: typeof fetch): Promise<{ ok: boolean; message?: string }> {
+  let token: string;
+  try {
+    token = await chatgpt.accessToken();
+  } catch (error) {
+    return { ok: false, message: error instanceof ChatGptError ? error.message : "Couldn't renew the ChatGPT sign-in. Try again." };
+  }
+  let response: Response;
+  try {
+    response = await fetchImpl(`${CHATGPT_API}/models`, { headers: { authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(10_000) });
+  } catch {
+    return { ok: false, message: "Couldn't reach ChatGPT. Check your connection and try again." };
+  }
+  await response.body?.cancel().catch(() => {});
+  if (response.ok) return { ok: true };
+  if (response.status === 401 || response.status === 403) return { ok: false, message: "ChatGPT didn't accept the sign-in. Sign out and sign in again." };
+  return { ok: false, message: `ChatGPT answered ${response.status}. Try again later.` };
+}

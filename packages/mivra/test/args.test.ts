@@ -12,6 +12,10 @@ describe("the command line", () => {
     expect(parseCommand(["auth", "set", "anthropic", "--no-check"])).toEqual({ name: "auth-set", provider: "anthropic", check: false });
     expect(parseCommand(["auth", "status"])).toEqual({ name: "auth-status" });
     expect(parseCommand(["auth", "remove", "openai"])).toEqual({ name: "auth-remove", provider: "openai" });
+    expect(parseCommand(["auth", "login", "chatgpt"])).toEqual({ name: "auth-login", newAccount: false, open: true });
+    expect(parseCommand(["auth", "login", "--new-account", "--no-open"])).toEqual({ name: "auth-login", newAccount: true, open: false });
+    expect(parseCommand(["auth", "logout", "chatgpt"])).toEqual({ name: "auth-logout" });
+    expect(() => parseCommand(["auth", "login", "openrouter"])).toThrow(UsageError);
   });
 
   it("reads the import command", () => {

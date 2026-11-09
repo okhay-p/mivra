@@ -87,6 +87,24 @@ describe("ModelPicker", () => {
     // Renders 50 rows: about 2 s alone, and far more when every suite runs at once.
   }, 20_000);
 
+  it("lists every model of the learner's ChatGPT plan without searching", async () => {
+    const plan = ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna", "gpt-5.6-terra"].map((slug) => ({ ...model(slug, slug), id: `chatgpt:${slug}`, price: null }));
+    serve(picker({ models: [sonnet, flash, ...plan], recent: [sonnet.id, "chatgpt:gpt-6.1-sol"], suggested: ["chatgpt:gpt-6-luna", flash.id] }));
+    render(<Harness />);
+    fireEvent.click(await screen.findByRole("button", { name: "Model: Claude Sonnet 5.5. Change model" }));
+    const list = await screen.findByRole("listbox");
+    const group = within(list).getByText("ChatGPT plan").closest("[cmdk-group]") as HTMLElement;
+    // Recent already holds Sol; the rest of the plan shows here, and isn't repeated under Suggested.
+    expect(within(group).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      expect.stringContaining("gpt-6-astra"),
+      expect.stringContaining("gpt-6-luna"),
+      expect.stringContaining("gpt-5.6-terra"),
+    ]);
+    expect(within(list).getAllByText(/your ChatGPT plan/).length).toBeGreaterThan(0);
+    const suggested = within(list).getByText("Suggested").closest("[cmdk-group]") as HTMLElement;
+    expect(within(suggested).getAllByRole("option").map((o) => o.textContent)).toEqual([expect.stringContaining("Gemini 3.8 Flash")]);
+  });
+
   it("groups search results by provider when more than one provider matches", async () => {
     const direct = { ...sonnet, id: "anthropic:claude-sonnet-5-5" };
     serve(picker({ models: [sonnet, flash, plain, direct] }));

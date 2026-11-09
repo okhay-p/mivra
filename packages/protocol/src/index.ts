@@ -142,3 +142,11 @@ export type ArtifactView = z.infer<typeof ArtifactView>;
 export * from "./memory.js";
 export * from "./document.js";
 export * from "./vault.js";
+
+/** ChatGPT's page for the learner's plan usage and per-app limits (ADR-015). */
+export const CHATGPT_USAGE_URL = "https://chatgpt.com/settings/usage";
+/**
+ * The reply error when the learner's ChatGPT plan has hit a usage limit. The UI recognises it and offers
+ * "Manage usage", as OpenAI's guidelines ask (ADR-015).
+ */
+export const CHATGPT_USAGE_LIMIT_ERROR = "ChatGPT usage limit reached. Review your plan or this app's limit in ChatGPT settings.";

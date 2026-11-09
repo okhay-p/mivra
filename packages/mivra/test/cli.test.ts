@@ -62,6 +62,8 @@ describe("mivra", () => {
     expect(run(dir, ["auth", "status"]).stdout).toMatch(/OpenRouter\s+saved, ends in WXYZ/);
     expect(run(dir, ["auth", "remove", "openrouter"]).stdout).toContain("Removed");
     expect(run(dir, ["auth", "status"]).stdout).toMatch(/OpenRouter\s+not set/);
+    expect(run(dir, ["auth", "status"]).stdout).toMatch(/ChatGPT\s+not signed in/);
+    expect(run(dir, ["auth", "logout", "chatgpt"]).stdout).toContain("Not signed in to ChatGPT.");
   });
 
   it("won't save a key the environment overrides, or text that isn't a key", () => {

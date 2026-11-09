@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ChatGptError } from "../../server/src/chatgpt/oauth.js";
+import { CHATGPT_FILE, chatGptFileStore, createChatGptSession } from "../../server/src/chatgpt/session.js";
 import { loadConfig, type Config } from "../../server/src/config.js";
 import { ApiKey, CREDENTIALS_FILE, PROVIDER_ENV, PROVIDER_LABELS, createCredentialStore, type ProviderId } from "../../server/src/credentials.js";
 import { checkProviderKey } from "../../server/src/models/key-check.js";
@@ -65,6 +68,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return authStatus(config, env);
     case "auth-remove":
       return authRemove(command.provider, config, env);
+    case "auth-login":
+      return authLogin(command.newAccount, command.open, config);
+    case "auth-logout":
+      return authLogout(config);
     case "import-obsidian":
       return importObsidian(command.folder, command.importName, config.dataDir, { out, err });
   }
@@ -278,6 +285,51 @@ function authStatus(config: Config, env: NodeJS.ProcessEnv): number {
     const status = view.source === "env" ? `from ${PROVIDER_ENV[view.id]}${hint}` : view.source === "saved" ? `saved${hint}` : "not set";
     out(`${view.label.padEnd(11)} ${status}`);
   }
+  const chatgpt = createChatGptSession({ store: chatGptFileStore(config.dataDir) }).view();
+  out(`${"ChatGPT".padEnd(11)} ${chatgpt.signedIn ? `signed in${chatgpt.email ? ` as ${chatgpt.email}` : ""}` : "not signed in"}`);
+  return 0;
+}
+
+/**
+ * Signs in with ChatGPT (ADR-015): opens the browser and waits for it to come back to 127.0.0.1. When the
+ * browser is on another computer (Mivra over SSH, or in Docker), the learner pastes the address it ended on.
+ */
+async function authLogin(newAccount: boolean, open: boolean, config: Config): Promise<number> {
+  const session = createChatGptSession({ store: chatGptFileStore(config.dataDir) });
+  let started;
+  try {
+    started = await session.startSignIn({ newAccount });
+  } catch (error) {
+    err(error instanceof ChatGptError ? error.message : "Couldn't start signing in with ChatGPT. Try again.");
+    return 1;
+  }
+  out(`${open ? "Opening ChatGPT in your browser. If it doesn't open, visit" : "To sign in, visit"}:\n\n  ${started.url}\n`);
+  out("Approve Mivra there. If the browser then can't load the page (it's on another computer), copy its whole address, paste it here and press Enter.");
+  if (open) openBrowser(started.url);
+  const lines = createInterface({ input: process.stdin, terminal: false });
+  lines.on("line", (line) => {
+    if (!line.trim()) return;
+    session.completeSignIn(line).catch((error: unknown) => err(error instanceof ChatGptError ? error.message : "That address didn't work. Try again."));
+  });
+  const result = await started.done;
+  lines.close();
+  process.stdin.pause();
+  if (!result.signedIn) {
+    err(result.notice ?? "Sign-in didn't finish.");
+    return 1;
+  }
+  out(`Signed in to ChatGPT${result.email ? ` as ${result.email}` : ""}, saved in ${join(config.dataDir, CHATGPT_FILE)}. A running Mivra uses it from the next reply.`);
+  return 0;
+}
+
+async function authLogout(config: Config): Promise<number> {
+  const session = createChatGptSession({ store: chatGptFileStore(config.dataDir) });
+  if (!session.view().signedIn) {
+    out("Not signed in to ChatGPT.");
+    return 0;
+  }
+  const { revoked } = await session.signOut();
+  out(revoked ? "Signed out of ChatGPT." : "Signed out of ChatGPT here, but ChatGPT didn't confirm it. To be sure, disconnect Mivra in ChatGPT's settings.");
   return 0;
 }
 

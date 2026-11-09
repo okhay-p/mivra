@@ -1,4 +1,6 @@
-import { APICallError, LoadAPIKeyError, NoSuchModelError } from "ai";
+import { APICallError, LoadAPIKeyError, NoSuchModelError, RetryError, StreamProviderError } from "ai";
+import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
+import { ChatGptError, errorCode } from "../chatgpt/oauth.js";
 
 /** Full error detail. Server-side only: stored in runs.error, never sent to a client. */
 export function errorText(error: unknown): string {
@@ -13,6 +15,43 @@ const STATUS_HINTS: Record<number, string> = {
   429: "the provider is rate-limiting requests; try again shortly",
 };
 
+const SIGN_IN_AGAIN = "ChatGPT didn't accept Mivra's sign-in. Sign in again under Model providers.";
+
+/** Errors from the ChatGPT route (ADR-015), by OpenAI's error code. The messages are Mivra's own. */
+const CHATGPT_ERRORS: Record<string, string> = {
+  subscription_sharing_usage_limit_exceeded: CHATGPT_USAGE_LIMIT_ERROR,
+  subscription_sharing_usage_unavailable: "ChatGPT couldn't check your plan's usage just now. Try again shortly.",
+  subscription_sharing_user_unavailable: "Your ChatGPT account is temporarily unavailable. Try again shortly.",
+  subscription_sharing_user_not_eligible: "This ChatGPT account can't share its plan with apps. Sign-in with ChatGPT needs an eligible Plus or Pro plan.",
+  subscription_sharing_unsupported_capability: "ChatGPT's plan route doesn't support part of this request. Choose a model from another provider.",
+  subscription_sharing_route_not_supported: "ChatGPT's plan route doesn't support this request. Choose a model from another provider.",
+  subscription_sharing_invalid_user: SIGN_IN_AGAIN,
+  chatpass_v2_scope_not_authorized: SIGN_IN_AGAIN,
+  chatpass_v2_invalid_authorization_context: SIGN_IN_AGAIN,
+};
+
+/** A code in an error body or event: `{ error }`, or a `response.failed` frame's `{ response: { error } }`. */
+const codeIn = (value: unknown) => errorCode(value) ?? errorCode((value as { response?: unknown } | null)?.response);
+
+/**
+ * OpenAI's error code, wherever the SDK put it: an HTTP error's body, or a streamed `response.failed` / `error`
+ * event, which the SDK turns into an APICallError (before any output) or a StreamProviderError (after).
+ */
+function openAiErrorCode(error: unknown): string | undefined {
+  if (APICallError.isInstance(error)) {
+    let body: unknown;
+    try {
+      body = JSON.parse(error.responseBody ?? "");
+    } catch {
+      body = undefined;
+    }
+    return codeIn(body) ?? codeIn(error.data);
+  }
+  if (StreamProviderError.isInstance(error)) return codeIn({ error: { code: error.code } }) ?? codeIn(error.data);
+  if (error && typeof error === "object") return codeIn(error);
+  return undefined;
+}
+
 /**
  * An error message safe to show a client. Error text from providers can echo request content,
  * including private tool inputs such as a check's answer key, and an error's class doesn't
@@ -20,6 +59,12 @@ const STATUS_HINTS: Record<number, string> = {
  * class and HTTP status; the original text stays server-side.
  */
 export function publicErrorText(error: unknown): string {
+  // After retries, the SDK wraps the last failure.
+  if (RetryError.isInstance(error)) return publicErrorText(error.lastError);
+  // ChatGPT sign-in errors carry messages Mivra wrote (ADR-015).
+  if (error instanceof ChatGptError) return error.message;
+  const code = openAiErrorCode(error);
+  if (code && code in CHATGPT_ERRORS) return CHATGPT_ERRORS[code]!;
   // Configuration problems the learner can fix.
   if (LoadAPIKeyError.isInstance(error)) {
     return "The model provider's API key is missing. Set it in .env (see .env.example) and restart the server.";
