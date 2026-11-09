@@ -281,6 +281,10 @@ export function createTurnRunner({ store, registry, model, models, lessons, note
       stopped.add(JSON.stringify([sessionId, messageId]));
       if (stopped.size > 256) stopped.delete(stopped.values().next().value!);
     },
+    /** Stops whatever reply is running in the session, if any: used before the session is deleted. */
+    stopSession(sessionId: string) {
+      active.get(sessionId)?.controller.abort();
+    },
     async startTurn({ sessionId, message: input, documentIds, lessonId: requestedLesson, abortSignal, continuation = false }: StartTurnInput): Promise<StartTurnResult> {
       const session = store.findSession(sessionId);
       if (!session) return { ok: false, error: { kind: "not_found", message: "Session not found" } };

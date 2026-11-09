@@ -152,6 +152,19 @@ const createSession = createRoute({
   },
 });
 
+const deleteSession = createRoute({
+  method: "delete",
+  path: "/sessions/{id}",
+  description:
+    "Delete a session with its messages, artifacts and documents; for a course also its syllabus, lessons and each lesson's own chat. A reply in progress is stopped first. Memories are kept, no longer linked to the session.",
+  request: { params: SessionParams },
+  responses: {
+    204: { description: "Deleted" },
+    404: errorResponse("Unknown session"),
+    409: errorResponse("A lesson's chat is deleted with its course"),
+  },
+});
+
 const startCourse = createRoute({
   method: "post",
   path: "/courses",
@@ -814,6 +827,21 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .openapi(createSession, async (c) => {
       const body = c.req.header("content-type")?.includes("application/json") ? c.req.valid("json") : {};
       return c.json(toSessionJson(store.createSession(body?.title)), 201);
+    })
+    .openapi(deleteSession, (c) => {
+      const { id } = c.req.valid("param");
+      if (!store.findSession(id)) return c.json({ error: "Session not found" }, 404);
+      if (lessons.findLessonBySession(id)) return c.json({ error: "A lesson's chat is deleted with its course" }, 409);
+      // Stop running replies and lesson generation first, so nothing writes into the deleted rows.
+      // Their endings run later and find nothing to record.
+      const course = store.findCourseBySession(id);
+      const lessonIds = course ? lessons.listLessons(course.id).map((l) => l.id) : [];
+      for (const lessonId of lessonIds) generator.stop(lessonId);
+      for (const sessionId of store.ownedSessionIds(id)) turns.stopSession(sessionId);
+      if (!store.deleteSession(id)) return c.json({ error: "Session not found" }, 404);
+      // Wake anyone waiting on a deleted lesson, so they see it is gone.
+      for (const lessonId of lessonIds) generator.changed(lessonId);
+      return c.body(null, 204);
     })
     .openapi(startCourse, (c) => {
       const { course, session } = store.createCourse(c.req.valid("json").goal);

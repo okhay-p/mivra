@@ -70,6 +70,18 @@ function firstText(message: UIMessage): string | undefined {
  * All persistence for sessions, messages and runs. With lesson-store.ts and note-store.ts, the only code that talks to Drizzle
  * (ADR-007), so the storage engine and schema can change without touching the runtime or routes.
  */
+/** The session's id, then the ids of its course's lesson sessions, if it is a course. */
+function ownedSessionIds(db: Pick<Db, "select">, id: string): string[] {
+  const lessonSessions = db
+    .select({ id: lessons.sessionId })
+    .from(lessons)
+    .innerJoin(courses, eq(courses.id, lessons.courseId))
+    .where(eq(courses.sessionId, id))
+    .all()
+    .map((row) => row.id);
+  return [id, ...lessonSessions];
+}
+
 export function createSessionStore(db: Db, clock: () => Date = () => new Date()) {
   type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
   const nextSeq = (tx: Tx, sessionId: string) =>
@@ -361,6 +373,31 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       return db.select().from(sessions).where(eq(sessions.id, id)).get();
     },
 
+    /** The session and, for a course, every lesson's own session: everything deleting it removes. */
+    ownedSessionIds(id: string): string[] {
+      return ownedSessionIds(db, id);
+    },
+
+    /**
+     * Deletes a session with everything that belongs only to it, in one transaction. For a course that
+     * includes each lesson's own session, which the course's cascade alone would leave behind. Memories
+     * are kept (their session_id becomes null), except those still pending on one of its runs.
+     * Returns the deleted session ids, or undefined if there was no such session.
+     */
+    deleteSession(id: string): string[] | undefined {
+      return db.transaction((tx) => {
+        if (!tx.select({ id: sessions.id }).from(sessions).where(eq(sessions.id, id)).get()) return undefined;
+        const ids = ownedSessionIds(tx, id);
+        // A pending memory waits on its run to finish; with the run gone it never would.
+        const runIds = tx.select({ id: runs.id }).from(runs).where(inArray(runs.sessionId, ids)).all().map((r) => r.id);
+        if (runIds.length > 0) tx.delete(memories).where(and(eq(memories.status, "pending"), inArray(memories.runId, runIds))).run();
+        // Lesson sessions first: once the course cascade runs, the lessons that name them are gone.
+        tx.delete(sessions).where(inArray(sessions.id, ids.slice(1))).run();
+        tx.delete(sessions).where(eq(sessions.id, id)).run();
+        return ids;
+      });
+    },
+
     /** Messages in conversation order. A reply's metadata names the model that wrote it, when that was recorded (ADR-012). */
     loadMessages(sessionId: string, forModel = false): UIMessage<ReplyMetadata>[] {
       const replyRuns = db.select({ id: runs.assistantMessageId, status: runs.status, model: runs.model }).from(runs)
@@ -461,6 +498,8 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
      */
     finishRun(runId: string, sessionId: string, status: RunStatus, reply?: UIMessage, error?: string) {
       db.transaction((tx) => {
+        // The session may have been deleted while this run was stopping; then there's nothing to record.
+        if (!tx.select({ id: runs.id }).from(runs).where(eq(runs.id, runId)).get()) return;
         const now = clock();
         let assistantMessageId: string | undefined;
         if (status === "cancelled" && reply) {

@@ -163,7 +163,8 @@ export function reconcileCompletion(courseId: string, deps: Pick<LessonDeps, "st
 
 /** Generates lessons, one at a time per lesson, and lets clients wait for the next change. */
 export function createLessonGenerator({ store, lessons, registry, model, models, notes }: LessonDeps) {
-  const active = new Set<string>();
+  /** Lessons being generated, each with the controller that stops it. */
+  const active = new Map<string, AbortController>();
   const waiters = new Map<string, Set<() => void>>();
   const changed = (lessonId: string) => {
     for (const wake of waiters.get(lessonId) ?? []) wake();
@@ -341,7 +342,7 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
     return tools;
   }
 
-  async function generate(lesson: LessonRow) {
+  async function generate(lesson: LessonRow, abortSignal: AbortSignal) {
     const session = store.findSession(lesson.sessionId)!;
     const message: UIMessage = {
       id: randomUUID(),
@@ -365,6 +366,7 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
         tools: toolsFor(lesson, runId),
         ...callOptionsFor(selection),
         stopWhen: stepCountIs(LESSON_MAX_STEPS),
+        abortSignal,
         onError: ({ error }) => {
           streamError ??= error;
         },
@@ -397,8 +399,13 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
     start(lessonId: string) {
       const lesson = lessons.findLesson(lessonId);
       if (!lesson || lesson.status !== "generating" || active.has(lessonId)) return;
-      active.add(lessonId);
-      void generate(lesson);
+      const controller = new AbortController();
+      active.set(lessonId, controller);
+      void generate(lesson, controller.signal);
+    },
+    /** Stops generating a lesson, if it is being generated: used before its course is deleted. */
+    stop(lessonId: string) {
+      active.get(lessonId)?.abort();
     },
     isActive: (lessonId: string) => active.has(lessonId),
     /** Wakes anyone waiting on a lesson, e.g. after the learner answers one of its checks. */
