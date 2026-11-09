@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `title_set_by_learner` integer DEFAULT false NOT NULL;

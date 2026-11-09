@@ -152,6 +152,21 @@ const createSession = createRoute({
   },
 });
 
+const renameSession = createRoute({
+  method: "patch",
+  path: "/sessions/{id}",
+  description: "Rename a session or course. A title the learner sets is never replaced by automatic titling.",
+  request: {
+    params: SessionParams,
+    body: { required: true, content: { "application/json": { schema: z.object({ title: z.string().trim().min(1).max(120) }) } } },
+  },
+  responses: {
+    200: { description: "Renamed session", content: { "application/json": { schema: Session } } },
+    400: errorResponse("The title is empty or longer than 120 characters"),
+    404: errorResponse("Unknown session"),
+  },
+});
+
 const deleteSession = createRoute({
   method: "delete",
   path: "/sessions/{id}",
@@ -827,6 +842,15 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .openapi(createSession, async (c) => {
       const body = c.req.header("content-type")?.includes("application/json") ? c.req.valid("json") : {};
       return c.json(toSessionJson(store.createSession(body?.title)), 201);
+    })
+    .openapi(renameSession, (c) => {
+      const { id } = c.req.valid("param");
+      const row = store.renameSession(id, c.req.valid("json").title);
+      if (!row) return c.json({ error: "Session not found" }, 404);
+      return c.json(toSessionJson({ ...row, courseId: store.findCourseBySession(id)?.id ?? null }), 200);
+    }, (result, c) => {
+      // The web UI shows `error` as is, so say what a title needs rather than return Zod's issues.
+      if (!result.success) return c.json({ error: "A title needs 1 to 120 characters." }, 400);
     })
     .openapi(deleteSession, (c) => {
       const { id } = c.req.valid("param");
