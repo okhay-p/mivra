@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "../fixtures.js";
+import { makePdf } from "../../server/test/support/files.js";
 
 const isDark = (page: Page) => page.evaluate(() => document.documentElement.classList.contains("dark"));
 
@@ -61,6 +62,64 @@ test.describe("sidebar", () => {
     const session = page.locator('[data-slot="sidebar"]').getByRole("button", { name: prompt });
     await expect(session).toHaveAttribute("data-active", "true");
     await expect(page.locator('[data-slot="sidebar-group"]', { hasText: "Today" }).getByRole("button", { name: prompt })).toBeVisible();
+    await expect(page.getByText(/The server says/)).toBeVisible();
+  });
+
+  // Other tests add sessions meanwhile, so these count only what this page created or lists.
+  const sessionEntries = (page: Page) => page.locator('[data-slot="sidebar-content"]').getByRole("button");
+
+  test("New session saves nothing until the draft is sent, and keeps the draft's text", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByRole("button", { name: "Or just chat" })).toBeVisible();
+    const before = await sessionEntries(page).count();
+    const created: string[] = [];
+    page.on("request", (r) => {
+      if (r.method() === "POST" && new URL(r.url()).pathname === "/api/sessions") created.push(r.url());
+    });
+
+    const newSession = page.getByRole("button", { name: "New session" }).first();
+    for (let i = 0; i < 3; i++) await newSession.click();
+    const message = page.getByRole("textbox", { name: "Message" });
+    await expect(page.getByText("Start a conversation", { exact: true })).toBeVisible();
+    const prompt = `draft ${Date.now()}`;
+    await message.fill(prompt);
+
+    // Clicking again keeps the draft, its text and focus, and still saves nothing.
+    await page.getByRole("button", { name: "New course" }).click();
+    await newSession.click();
+    await newSession.click();
+    await expect(message).toHaveValue(prompt);
+    await expect(message).toBeFocused();
+    expect(created).toHaveLength(0);
+    await expect(sessionEntries(page)).toHaveCount(before);
+    await expect(page.locator("main h1")).toHaveText("New session");
+
+    // Free chat from the start screen opens a draft too, and sending it saves the session.
+    await page.reload();
+    await page.getByRole("button", { name: "Or just chat" }).click();
+    await expect(page.getByText("Start a conversation", { exact: true })).toBeVisible();
+    await message.fill(prompt);
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const session = page.locator('[data-slot="sidebar"]').getByRole("button", { name: prompt });
+    await expect(session).toHaveAttribute("data-active", "true");
+    await expect(page.locator('[data-message-role="user"]')).toHaveText(prompt);
+    await expect(page.getByText(/The server says/)).toBeVisible();
+    expect(created).toHaveLength(1);
+  });
+
+  test("attaching a file to a draft saves the session and keeps the typed text", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "New session" }).first().click();
+    const message = page.getByRole("textbox", { name: "Message" });
+    const typed = `typed ${Date.now()}`;
+    await message.fill(typed);
+    const created = page.waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/api/sessions");
+    const uploaded = page.waitForResponse((r) => r.request().method() === "POST" && /\/api\/sessions\/[^/]+\/documents$/.test(new URL(r.url()).pathname));
+    await page.getByTestId("document-input").setInputFiles({ name: "Draft notes.pdf", mimeType: "application/pdf", buffer: makePdf([["Notes attached before anything was sent."]]) });
+    const session = (await (await created).json()) as { id: string };
+    expect(new URL((await uploaded).url()).pathname).toBe(`/api/sessions/${session.id}/documents`);
+    await expect(page.locator('[data-slot="sidebar"] [data-active="true"]')).toHaveText("New session");
+    await expect(message).toHaveValue(typed);
   });
 
   test("is an overlay on mobile that closes after choosing a session", async ({ page }) => {

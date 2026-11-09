@@ -67,6 +67,17 @@ async function request<T>(send: () => Promise<Response>, read: (res: Response) =
   }
 }
 
+/** A chat session as the sidebar lists it. */
+export interface Session {
+  id: string;
+  title: string;
+  updatedAt: string;
+  courseId: string | null;
+}
+
+/** Creates an empty session; the app does this only once a draft is sent or given a file. */
+export const createSession = () => request(() => api.sessions.$post({ json: {} }), async (res) => (await res.json()) as Session);
+
 export const listMemories = () =>
   request(
     () => api.memories.$get(),

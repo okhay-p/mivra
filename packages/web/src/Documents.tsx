@@ -92,7 +92,7 @@ export function useDocuments(sessionId: string) {
   return { documents, uploading, error, upload, remove, refresh };
 }
 
-type Documents = ReturnType<typeof useDocuments>;
+export type Documents = ReturnType<typeof useDocuments>;
 
 function pageLabel({ kind, pageCount, pagesWithText }: DocumentView): string {
   const unit = kind === "pptx" ? "slide" : "page";
