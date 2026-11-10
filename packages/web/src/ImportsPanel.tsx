@@ -1,5 +1,5 @@
 import type { DistillationView, VaultImportResult, VaultImportView } from "@mivra/protocol";
-import { FileArchive, FolderOpen, Library } from "lucide-react";
+import { FileArchive, FolderOpen, Library, Waypoints } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -19,7 +19,9 @@ const DISTIL_POLL_MS = 1500;
 const busy = (view: DistillationView) => view.status === "queued" || view.status === "running";
 
 /** Imported Obsidian vaults (ADR-014): their notes are read-only here and change only when the vault is imported again. */
-export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function ImportsPanel({ open, onOpenChange, onOpenGraph }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenGraph?: (importId: string) => void }) {
+  // Closing to open a graph leaves focus to the graph, not to the button that opened the panel.
+  const openingGraph = useRef(false);
   const [imports, setImports] = useState<VaultImportView[]>();
   const [error, setError] = useState<string>();
   /**
@@ -73,6 +75,11 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
         // The opening button isn't the Sheet's trigger, and on mobile it unmounts with the sidebar.
         onCloseAutoFocus={(e) => {
           e.preventDefault();
+          if (openingGraph.current) {
+            openingGraph.current = false;
+            document.querySelector<HTMLElement>("[data-notes-graph-start]")?.focus();
+            return;
+          }
           const target = document.querySelector<HTMLElement>("[data-imports-trigger]") ?? document.querySelector<HTMLElement>('[data-sidebar="trigger"]');
           target?.focus();
         }}
@@ -118,6 +125,14 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
                   key={entry.id}
                   entry={entry}
                   onReimport={() => openDialog(entry)}
+                  onGraph={
+                    onOpenGraph &&
+                    (() => {
+                      openingGraph.current = true;
+                      onOpenGraph(entry.id);
+                      onOpenChange(false);
+                    })
+                  }
                   onDelete={() => setImports((all) => all?.filter((i) => i.id !== entry.id))}
                   onDistillation={(view) => distillationChanged(entry.id, view)}
                 />
@@ -143,11 +158,13 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
 function ImportEntry({
   entry,
   onReimport,
+  onGraph,
   onDelete,
   onDistillation,
 }: {
   entry: VaultImportView;
   onReimport: () => void;
+  onGraph?: () => void;
   onDelete: () => void;
   onDistillation: (view: DistillationView) => void;
 }) {
@@ -185,7 +202,13 @@ function ImportEntry({
           </Button>
         </div>
       ) : (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {onGraph && entry.noteCount > 0 && (
+            <Button type="button" variant="outline" size="sm" onClick={onGraph}>
+              <Waypoints aria-hidden="true" />
+              Graph
+            </Button>
+          )}
           <Button type="button" variant="outline" size="sm" onClick={onReimport}>
             Re-import
           </Button>
