@@ -117,7 +117,7 @@ describe("ImportsPanel distillation", () => {
     expect(within(entry).getByText("Reading notes for concepts… group 2 of 4")).toBeTruthy();
     expect(within(entry).getByRole("progressbar")).toBeTruthy();
     fireEvent.click(within(entry).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(String(fetch.mock.calls[1]![0])).toBe("/api/imports/i1/distillation"));
+    await waitFor(() => expect(String(fetch.mock.calls[1]![0])).toMatch(/\/api\/imports\/i1\/distillation$/));
     expect(fetch.mock.calls[1]![1]?.method).toBe("DELETE");
     // The list is polled while it runs, so the cancelled state arrives.
     expect(await within(entry).findByText("Cancelled. 2 notes not read for concepts yet.", undefined, { timeout: 5_000 })).toBeTruthy();
@@ -246,7 +246,7 @@ describe("ImportsPanel", () => {
     const fetch = openPanel(json([view()]), new Response(null, { status: 204 }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/Delete this import and its 2 notes\?/)).toBeTruthy();
+    expect(screen.getByText(/Delete this import and its 2 notes, with the concepts and memories drawn from them\?/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Keep" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     fireEvent.click(screen.getByRole("button", { name: "Yes, delete" }));

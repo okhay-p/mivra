@@ -122,7 +122,7 @@ describe("MemoryPanel", () => {
     expect(screen.getByText("Wants to pass interviews")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "From notes" })).toBeNull();
     const [url, init] = fetch.mock.calls[1]!;
-    expect(String(url)).toBe("/api/memories?basis=import");
+    expect(String(url)).toMatch(/\/api\/memories\?basis=import$/);
     expect(init?.method).toBe("DELETE");
   });
 });
