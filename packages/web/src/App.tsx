@@ -453,6 +453,14 @@ function CourseSession(props: SessionProps) {
   const [selected, setSelected] = useState<string>();
   const [focusSection, setFocusSection] = useState<string>();
   const [tutorOpen, setTutorOpen] = useState(false);
+  // When the tutor was last opened. The drawer stays mounted while it slides shut, and Radix dismisses
+  // it on the click that follows a press outside it; so a press that began before this (say on Explain,
+  // while it was closing) must not close the drawer that press's click has just reopened.
+  const openedAt = useRef(0);
+  const openTutor = () => {
+    openedAt.current = performance.now();
+    setTutorOpen(true);
+  };
   const [error, setError] = useState<string>();
   const [prompt, setPrompt] = useState<SessionProps["prompt"]>();
   const [openLesson, setOpenLesson] = useState<LessonView>();
@@ -495,6 +503,7 @@ function CourseSession(props: SessionProps) {
     const toggle = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
+        openedAt.current = performance.now();
         setTutorOpen((open) => !open);
       }
     };
@@ -502,9 +511,12 @@ function CourseSession(props: SessionProps) {
     return () => window.removeEventListener("keydown", toggle);
   }, [lessonId]);
 
+  // Each prompt gets a new nonce, even after the last was used and cleared: a chat that stayed mounted
+  // (the drawer reopened as it closed) has applied the last nonce and would skip a repeat of it.
+  const promptNonce = useRef(0);
   const ask = (text: string, send: boolean) => {
-    setPrompt((p) => ({ text, send, nonce: (p?.nonce ?? 0) + 1 }));
-    setTutorOpen(true);
+    setPrompt({ text, send, nonce: ++promptNonce.current });
+    openTutor();
   };
   const addAnswer = async (messageId: string) => {
     if (!lessonId) return "No lesson is open.";
@@ -568,7 +580,7 @@ function CourseSession(props: SessionProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <CourseBar course={course} onUndo={undo}>
-        <Button size="sm" variant="outline" onClick={() => setTutorOpen(true)} data-tutor-trigger>
+        <Button size="sm" variant="outline" onClick={openTutor} data-tutor-trigger>
           <MessagesSquare aria-hidden /> Tutor
         </Button>
       </CourseBar>
@@ -641,7 +653,12 @@ function CourseSession(props: SessionProps) {
         </div>
       </div>
       <Sheet open={tutorOpen} onOpenChange={setTutorOpen}>
-        <SheetContent className="flex w-full flex-col gap-0 p-0 sm:max-w-lg">
+        <SheetContent
+          className="flex w-full flex-col gap-0 p-0 sm:max-w-lg"
+          onPointerDownOutside={(e) => {
+            if (e.detail.originalEvent.timeStamp < openedAt.current) e.preventDefault();
+          }}
+        >
           <SheetHeader className="border-b">
             <SheetTitle className="font-heading">Tutor</SheetTitle>
             <SheetDescription>
