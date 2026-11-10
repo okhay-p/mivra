@@ -99,16 +99,16 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     },
 
     /** Sessions, most recent first, with the course each one teaches, if any. A lesson's own session is hidden. */
-    listSessions(): (SessionRow & { courseId: string | null })[] {
+    listSessions(): (SessionRow & { courseId: string | null; icon: string | null })[] {
       return db
-        .select({ session: sessions, courseId: courses.id })
+        .select({ session: sessions, courseId: courses.id, icon: courses.icon })
         .from(sessions)
         .leftJoin(courses, eq(courses.sessionId, sessions.id))
         .leftJoin(lessons, eq(lessons.sessionId, sessions.id))
         .where(isNull(lessons.id))
         .orderBy(desc(sessions.updatedAt))
         .all()
-        .map((row) => ({ ...row.session, courseId: row.courseId }));
+        .map((row) => ({ ...row.session, courseId: row.courseId, icon: row.icon }));
     },
 
     /** Starts a course in a new session of its own, titled after the goal. */
@@ -117,7 +117,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
         const now = clock();
         const session = { id: randomUUID(), title: goal.trim().slice(0, 60), titleSetByLearner: false, createdAt: now, updatedAt: now };
         tx.insert(sessions).values(session).run();
-        const course = { id: randomUUID(), sessionId: session.id, goal: goal.trim(), status: "interviewing" as const, createdAt: now, updatedAt: now };
+        const course = { id: randomUUID(), sessionId: session.id, goal: goal.trim(), status: "interviewing" as const, icon: null, createdAt: now, updatedAt: now };
         tx.insert(courses).values(course).run();
         return { course, session };
       });
@@ -336,9 +336,15 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     /**
      * Writes a course's first syllabus at the end of its placement interview, and makes the course active.
      * Returns false if the course isn't interviewing (its syllabus already exists); later versions come
-     * from Change and adaptive edits, not from this.
+     * from Change and adaptive edits, not from this. The tutor's `title` replaces the course's placeholder
+     * title (its goal) unless the learner has renamed it, and its `icon` becomes the course's; both are
+     * checked by the caller, and a missing one leaves things as they were (#58).
      */
-    writeFirstSyllabus(courseId: string, runId: string | null, input: { topics: Omit<SyllabusTopicRow, "id">[]; known: KnownConceptRow[] }): SyllabusRow | undefined {
+    writeFirstSyllabus(
+      courseId: string,
+      runId: string | null,
+      input: { topics: Omit<SyllabusTopicRow, "id">[]; known: KnownConceptRow[]; title?: string; icon?: string },
+    ): SyllabusRow | undefined {
       return db.transaction((tx) => {
         const course = tx.select().from(courses).where(eq(courses.id, courseId)).get();
         if (course?.status !== "interviewing") return undefined;
@@ -357,7 +363,16 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
           createdAt: now,
         };
         tx.insert(syllabusVersions).values(row).run();
-        tx.update(courses).set({ status: "active", updatedAt: now }).where(eq(courses.id, courseId)).run();
+        tx.update(courses)
+          .set({ status: "active", ...(input.icon ? { icon: input.icon } : {}), updatedAt: now })
+          .where(eq(courses.id, courseId))
+          .run();
+        if (input.title) {
+          tx.update(sessions)
+            .set({ title: input.title })
+            .where(and(eq(sessions.id, course.sessionId), eq(sessions.titleSetByLearner, false)))
+            .run();
+        }
         return row;
       });
     },

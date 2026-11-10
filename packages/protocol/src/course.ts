@@ -103,9 +103,63 @@ export const SyllabusTopicInput = z
   })
   .strict();
 
+/**
+ * Subject icons a course can have, by Lucide name (#58). The tutor picks one when it writes the first
+ * syllabus; clients map the name to an icon and fall back to a graduation cap for none or an unknown name.
+ */
+export const courseIcons = [
+  "sigma",
+  "calculator",
+  "code",
+  "terminal",
+  "cpu",
+  "database",
+  "network",
+  "shield",
+  "flask-conical",
+  "atom",
+  "dna",
+  "leaf",
+  "telescope",
+  "globe",
+  "landmark",
+  "book-open",
+  "pen-tool",
+  "languages",
+  "music",
+  "palette",
+  "camera",
+  "brain",
+  "users",
+  "chart-line",
+  "briefcase",
+  "scale",
+  "stethoscope",
+  "heart-pulse",
+  "wrench",
+  "dumbbell",
+] as const;
+export const CourseIcon = z.enum(courseIcons);
+export type CourseIcon = z.infer<typeof CourseIcon>;
+
+/** Most characters in the title the tutor gives a course. */
+export const COURSE_TITLE_MAX = 60;
+
 /** Input of the write_syllabus tool. The server adds ids, version and timestamps. */
 export const SyllabusInput = z
   .object({
+    // Bad values parse as missing rather than failing the call: a syllabus is worth more than its label (#58).
+    title: z
+      .string()
+      .trim()
+      .min(1)
+      .max(COURSE_TITLE_MAX)
+      .optional()
+      .catch(undefined)
+      .describe('A short name for the course, 2-5 words, shown in the sidebar, e.g. "Discrete Math: Induction". Name what the syllabus covers, not the request.'),
+    icon: CourseIcon.optional()
+      .catch(undefined)
+      .describe("The subject icon that best fits the course: sigma = maths, calculator = arithmetic or accounting, code/terminal = programming, cpu = hardware, flask-conical = chemistry, atom = physics, dna = biology, leaf = ecology, telescope = astronomy, globe = geography, landmark = history, book-open = literature, pen-tool = writing, languages = languages, palette = art, brain = psychology, users = sociology, chart-line = economics or statistics, briefcase = business, scale = law, stethoscope/heart-pulse = medicine, wrench = engineering, dumbbell = sport."),
     topics: z.array(SyllabusTopicInput).min(1).max(20).describe("The ordered topics, first to learn first. Each topic gets one lesson."),
     known: z
       .array(

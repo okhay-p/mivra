@@ -51,6 +51,8 @@ const check = {
 };
 
 const syllabus = {
+  title: "Calculus for ML",
+  icon: "sigma",
   topics: [
     { title: "Limits", summary: "What a limit is.", reason: "You weren't sure about limits.", requestedByLearner: false, concepts: ["limit"] },
     { title: "Chain rule", summary: "Derivatives of compositions.", reason: "The next step after the power rule.", requestedByLearner: false, concepts: ["chain rule"] },

@@ -10,6 +10,7 @@ import { addToLesson, undoSyllabusChange, api, authHeaders, createSession, error
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
+import { CourseIcon } from "./CourseIcon.js";
 import { LessonPage, TopicList, type LessonSection } from "./Lesson.js";
 import { AttachButton, DocumentChips, useDocuments, type Documents } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
@@ -289,7 +290,7 @@ function SessionSidebar({
                           closeOnMobile();
                         }}
                       >
-                        {s.courseId ? <GraduationCap aria-label="Course" /> : <MessageSquare />}
+                        {s.courseId ? <CourseIcon icon={s.icon} aria-label="Course" /> : <MessageSquare />}
                         <span>{s.title}</span>
                       </SidebarMenuButton>
                       <SessionMenu onRename={() => setRenamingId(s.id)} onDelete={() => onDelete(s)} />
@@ -392,10 +393,17 @@ function CourseSession(props: SessionProps) {
   // The section the learner last asked about, where Add to lesson puts the answer.
   const explained = useRef<{ lessonId: string; section: LessonSection } | undefined>(undefined);
 
+  const onReply = useRef(props.onReply);
+  onReply.current = props.onReply;
+  const wasInterviewing = useRef(false);
   const refresh = useCallback(async () => {
     const found = await getCourse(sessionId);
     if (!found.ok) return setError(found.error);
     setCourse(found.value);
+    // The syllabus may come from an automatic continuation, which doesn't count as a reply here, and it
+    // brings the tutor's title and icon for the sidebar and header (#58).
+    if (wasInterviewing.current && found.value.status !== "interviewing") onReply.current();
+    wasInterviewing.current = found.value.status === "interviewing";
     if (found.value.status === "interviewing") return;
     const list = await listCourseLessons(found.value.id);
     if (list.ok) setLessons(list.value);

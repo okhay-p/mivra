@@ -77,7 +77,7 @@ export const coreCourse: Plugin = {
       ({ sessionId, runId, store }) =>
         tool({
           description:
-            "Course placement interview only: write the course's syllabus once the placement questions are answered (or the learner asked to skip them). This ends the interview; the syllabus is used straight away, without asking the learner to approve it. Order topics from first to last, give each a reason tied to this learner, and keep it finite: roughly 3-12 topics.",
+            "Course placement interview only: write the course's syllabus once the placement questions are answered (or the learner asked to skip them). This ends the interview; the syllabus is used straight away, without asking the learner to approve it. Order topics from first to last, give each a reason tied to this learner, and keep it finite: roughly 3-12 topics. Also give the course a short title and pick its subject icon.",
           inputSchema: SyllabusInput,
           execute: async (input) => {
             const course = store.findCourseBySession(sessionId);
