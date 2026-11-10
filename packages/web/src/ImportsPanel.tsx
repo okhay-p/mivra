@@ -1,5 +1,5 @@
-import type { VaultImportResult, VaultImportView } from "@mivra/protocol";
-import { FileArchive, FolderOpen, Library } from "lucide-react";
+import type { DistillationView, VaultImportResult, VaultImportView } from "@mivra/protocol";
+import { FileArchive, FolderOpen, Library, Waypoints } from "lucide-react";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -7,14 +7,22 @@ import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTi
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-import { deleteImport, importVaultFiles, importVaultZip, listImports, type ImportTarget } from "./api.js";
+import { ExportVault } from "./ExportVault.js";
+import { cancelDistillation, deleteImport, importVaultFiles, importVaultZip, listImports, startDistillation, type ImportTarget } from "./api.js";
 import { readPickedVault, type PickedVault } from "./vault-files.js";
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n.toLocaleString("en")} ${n === 1 ? one : many}`;
 
+/** How often the list is refreshed while notes are being distilled. */
+const DISTIL_POLL_MS = 1500;
+const busy = (view: DistillationView) => view.status === "queued" || view.status === "running";
+
 /** Imported Obsidian vaults (ADR-014): their notes are read-only here and change only when the vault is imported again. */
-export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+export function ImportsPanel({ open, onOpenChange, onOpenGraph }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenGraph?: (importId: string) => void }) {
+  // Closing to open a graph leaves focus to the graph, not to the button that opened the panel.
+  const openingGraph = useRef(false);
   const [imports, setImports] = useState<VaultImportView[]>();
   const [error, setError] = useState<string>();
   /**
@@ -43,6 +51,23 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
 
   const imported = ({ import: view }: VaultImportResult) =>
     setImports((all = []) => (all.some((i) => i.id === view.id) ? all.map((i) => (i.id === view.id ? view : i)) : [...all, view]));
+  const distillationChanged = (id: string, distillation: DistillationView) => setImports((all) => all?.map((i) => (i.id === id ? { ...i, distillation } : i)));
+
+  // Distilling runs in the background after an import (ADR-014); follow it while the panel is open.
+  const distilling = Boolean(imports?.some((i) => busy(i.distillation)));
+  useEffect(() => {
+    if (!open || !distilling) return;
+    let stale = false;
+    const timer = setInterval(() => {
+      void listImports().then((result) => {
+        if (!stale && result.ok) setImports(result.value);
+      });
+    }, DISTIL_POLL_MS);
+    return () => {
+      stale = true;
+      clearInterval(timer);
+    };
+  }, [open, distilling]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -51,6 +76,11 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
         // The opening button isn't the Sheet's trigger, and on mobile it unmounts with the sidebar.
         onCloseAutoFocus={(e) => {
           e.preventDefault();
+          if (openingGraph.current) {
+            openingGraph.current = false;
+            document.querySelector<HTMLElement>("[data-notes-graph-start]")?.focus();
+            return;
+          }
           const target = document.querySelector<HTMLElement>("[data-imports-trigger]") ?? document.querySelector<HTMLElement>('[data-sidebar="trigger"]');
           target?.focus();
         }}
@@ -66,6 +96,7 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
               Import a vault
             </Button>
           )}
+          {imports && imports.length > 0 && <ExportVault />}
           {error && <p className="text-destructive text-sm">{error}</p>}
           {!imports && !error && (
             <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status">
@@ -92,7 +123,21 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
           {imports && imports.length > 0 && (
             <ul className="flex flex-col gap-2" aria-label="Imported vaults">
               {imports.map((entry) => (
-                <ImportEntry key={entry.id} entry={entry} onReimport={() => openDialog(entry)} onDelete={() => setImports((all) => all?.filter((i) => i.id !== entry.id))} />
+                <ImportEntry
+                  key={entry.id}
+                  entry={entry}
+                  onReimport={() => openDialog(entry)}
+                  onGraph={
+                    onOpenGraph &&
+                    (() => {
+                      openingGraph.current = true;
+                      onOpenGraph(entry.id);
+                      onOpenChange(false);
+                    })
+                  }
+                  onDelete={() => setImports((all) => all?.filter((i) => i.id !== entry.id))}
+                  onDistillation={(view) => distillationChanged(entry.id, view)}
+                />
               ))}
             </ul>
           )}
@@ -112,7 +157,19 @@ export function ImportsPanel({ open, onOpenChange }: { open: boolean; onOpenChan
   );
 }
 
-function ImportEntry({ entry, onReimport, onDelete }: { entry: VaultImportView; onReimport: () => void; onDelete: () => void }) {
+function ImportEntry({
+  entry,
+  onReimport,
+  onGraph,
+  onDelete,
+  onDistillation,
+}: {
+  entry: VaultImportView;
+  onReimport: () => void;
+  onGraph?: () => void;
+  onDelete: () => void;
+  onDistillation: (view: DistillationView) => void;
+}) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -132,9 +189,12 @@ function ImportEntry({ entry, onReimport, onDelete }: { entry: VaultImportView; 
           {plural(entry.noteCount, "note")} · Updated {new Date(entry.updatedAt).toLocaleDateString()}
         </span>
       </div>
+      <Distillation entry={entry} onChange={onDistillation} />
       {confirming ? (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-muted-foreground">Delete this import and its {plural(entry.noteCount, "note")}? Your vault itself isn't touched.</span>
+          <span className="text-muted-foreground">
+            Delete this import and its {plural(entry.noteCount, "note")}, with the concepts and memories drawn from them? Your vault itself isn't touched.
+          </span>
           <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => void remove()}>
             {busy && <Spinner aria-hidden="true" />}
             Yes, delete
@@ -144,7 +204,13 @@ function ImportEntry({ entry, onReimport, onDelete }: { entry: VaultImportView; 
           </Button>
         </div>
       ) : (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {onGraph && entry.noteCount > 0 && (
+            <Button type="button" variant="outline" size="sm" onClick={onGraph}>
+              <Waypoints aria-hidden="true" />
+              Graph
+            </Button>
+          )}
           <Button type="button" variant="outline" size="sm" onClick={onReimport}>
             Re-import
           </Button>
@@ -159,6 +225,77 @@ function ImportEntry({ entry, onReimport, onDelete }: { entry: VaultImportView; 
         </p>
       )}
     </li>
+  );
+}
+
+/**
+ * Where reading the notes for concepts and memories stands, with Cancel while it runs and a way to resume. It costs
+ * model tokens in proportion to the vault, so the learner always sees when it runs (ADR-014).
+ */
+function Distillation({ entry, onChange }: { entry: VaultImportView; onChange: (view: DistillationView) => void }) {
+  const view = entry.distillation;
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string>();
+  const act = async (send: (id: string) => ReturnType<typeof startDistillation>) => {
+    setSending(true);
+    setError(undefined);
+    const result = await send(entry.id);
+    setSending(false);
+    if (result.ok) onChange(result.value);
+    else setError(result.error);
+  };
+  const drawn = `${plural(view.concepts, "concept")} and ${plural(view.memories, "memory", "memories")} drawn from these notes`;
+
+  let body;
+  if (busy(view)) {
+    const percent = view.groups > 0 ? Math.round((view.groupsDone / view.groups) * 100) : 0;
+    body = (
+      <>
+        <p className="text-muted-foreground flex items-center gap-2" role="status">
+          <Spinner aria-hidden="true" />
+          {view.status === "queued"
+            ? "Waiting to read these notes for concepts…"
+            : view.groups > 0
+              ? `Reading notes for concepts… group ${Math.min(view.groupsDone + 1, view.groups).toLocaleString("en")} of ${view.groups.toLocaleString("en")}`
+              : "Reading notes for concepts…"}
+        </p>
+        <Progress value={percent} aria-label="Reading notes for concepts" />
+        <Button type="button" variant="outline" size="sm" className="self-start" disabled={sending} onClick={() => void act(cancelDistillation)}>
+          Cancel
+        </Button>
+      </>
+    );
+  } else if (view.pendingNotes > 0) {
+    const reason =
+      view.status === "failed"
+        ? `Reading notes for concepts stopped: ${view.error ?? "the model request failed."}`
+        : view.status === "cancelled"
+          ? `Cancelled. ${plural(view.pendingNotes, "note")} not read for concepts yet.`
+          : `${plural(view.pendingNotes, "note")} not read for concepts yet.`;
+    body = (
+      <>
+        <p className={view.status === "failed" ? "text-destructive" : "text-muted-foreground"}>{reason}</p>
+        {(view.concepts > 0 || view.memories > 0) && <p className="text-muted-foreground">So far: {drawn}.</p>}
+        <Button type="button" variant="outline" size="sm" className="self-start" disabled={sending} onClick={() => void act(startDistillation)}>
+          {sending && <Spinner aria-hidden="true" />}
+          {view.status === "failed" ? "Try again" : view.status === "cancelled" ? "Resume" : "Read notes"}
+        </Button>
+      </>
+    );
+  } else if (view.concepts > 0 || view.memories > 0) {
+    body = <p className="text-muted-foreground">{drawn[0]!.toUpperCase() + drawn.slice(1)}.</p>;
+  } else {
+    return null;
+  }
+  return (
+    <div className="flex flex-col gap-2" role="group" aria-label="Concepts from these notes">
+      {body}
+      {error && (
+        <p className="text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -388,6 +525,7 @@ const reasonLabel: Record<VaultImportResult["skipped"][number]["reason"], string
   duplicate: "duplicate",
   too_long: "too long",
   symlink: "link to another file",
+  generated: "exported by Mivra",
 };
 
 function ResultSummary({ result, source, replaced }: { result: VaultImportResult; source: Source; replaced: boolean }) {
@@ -431,6 +569,9 @@ function ResultSummary({ result, source, replaced }: { result: VaultImportResult
         </div>
       )}
       {result.truncated && <p className="text-muted-foreground">Some links or tags were left out: a note or the vault had more than Mivra keeps.</p>}
+      {busy(result.import.distillation) && (
+        <p className="text-muted-foreground">Mivra is now reading the new and changed notes for concepts and memories, using your model. Follow or cancel it in the list.</p>
+      )}
     </div>
   );
 }

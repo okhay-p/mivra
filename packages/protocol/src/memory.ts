@@ -2,15 +2,19 @@ import { z } from "zod";
 
 /** Memory entries are the model's inferences about the learner, kept apart from graded evidence (ADR-009). */
 
-export const MemoryKind = z.enum(["goal", "preference", "misconception"]);
+/** `known` records that the learner's imported notes cover a concept (ADR-014): a claim, ranked below graded evidence. */
+export const MemoryKind = z.enum(["goal", "preference", "misconception", "known"]);
 export type MemoryKind = z.infer<typeof MemoryKind>;
 
-const MemoryText = z.string().trim().min(1).max(300);
+/** What the remember tool can write in chat. Only distilling imported notes writes `known`. */
+export const RememberKind = z.enum(["goal", "preference", "misconception"]);
+
+export const MemoryText = z.string().trim().min(1).max(300);
 
 /** The input of the remember tool. Source, timestamps and basis are set by the server, not the model. */
 export const RememberInput = z
   .object({
-    kind: MemoryKind.describe("goal = what they want to learn or do; preference = how they like to learn; misconception = something they believe that is wrong."),
+    kind: RememberKind.describe("goal = what they want to learn or do; preference = how they like to learn; misconception = something they believe that is wrong."),
     text: MemoryText.describe("One short sentence about the learner. Never include the answer to a check they haven't answered."),
     concept: z.string().trim().min(1).max(80).optional().describe("Required for a misconception: the concept it is about. Use the exact name from the check or from their record, so it can be linked to their answers."),
     replaces: z.string().min(1).optional().describe("The id of a known memory this one corrects or updates."),
@@ -24,8 +28,8 @@ export const RememberInput = z
   });
 export type RememberInput = z.infer<typeof RememberInput>;
 
-/** How a memory is supported: a graded wrong answer, or only something said in chat. */
-export const MemoryBasis = z.enum(["wrong_answer", "chat"]);
+/** How a memory is supported: a graded wrong answer, only something said in chat, or the learner's imported notes. */
+export const MemoryBasis = z.enum(["wrong_answer", "chat", "import"]);
 export type MemoryBasis = z.infer<typeof MemoryBasis>;
 
 /**
@@ -40,6 +44,8 @@ export const MemoryView = z
     text: z.string().nullable(),
     concept: z.string().nullable(),
     basis: MemoryBasis.nullable(),
+    /** For basis `import`, the note it was drawn from. Null otherwise, and while held. */
+    source: z.object({ noteId: z.string(), importId: z.string(), importName: z.string(), path: z.string(), title: z.string() }).strict().nullable(),
     createdAt: z.string().datetime(),
     editedAt: z.string().datetime().nullable(),
   })
@@ -47,3 +53,6 @@ export const MemoryView = z
 export type MemoryView = z.infer<typeof MemoryView>;
 
 export const MemoryEdit = z.object({ text: MemoryText }).strict();
+
+/** Which memories a bulk delete removes: for now, everything drawn from imported notes. */
+export const MemoryBulkDelete = z.object({ basis: z.literal("import") }).strict();

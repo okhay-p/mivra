@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, VaultImportResult, VaultImportView, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -98,6 +98,13 @@ export const deleteMemory = (id: string) =>
     () => undefined,
   );
 
+/** Deletes every memory drawn from imported notes. */
+export const deleteImportedMemories = () =>
+  request(
+    () => api.memories.$delete({ query: { basis: "import" } }),
+    async (res) => ((await res.json()) as { deleted: number }).deleted,
+  );
+
 export const listDocuments = (sessionId: string) =>
   request(
     () => api.sessions[":id"].documents.$get({ param: { id: sessionId } }),
@@ -130,6 +137,49 @@ export const deleteImport = (id: string) =>
   request(
     () => api.imports[":id"].$delete({ param: { id } }),
     () => undefined,
+  );
+
+export const startDistillation = (id: string) =>
+  request(
+    () => api.imports[":id"].distillation.$post({ param: { id } }),
+    async (res) => DistillationView.parse(await res.json()),
+  );
+
+export const cancelDistillation = (id: string) =>
+  request(
+    () => api.imports[":id"].distillation.$delete({ param: { id } }),
+    async (res) => DistillationView.parse(await res.json()),
+  );
+
+/** What the graph of an import draws for these filters (ADR-014). Empty filters are left out. */
+export interface GraphViewFilters {
+  mode: "auto" | "local";
+  focus?: string;
+  depth: number;
+  tag?: string;
+  folder?: string;
+}
+
+export const getGraphView = (id: string, { mode, focus, depth, tag, folder }: GraphViewFilters) =>
+  request(
+    () =>
+      api.imports[":id"].graph.view.$get({
+        param: { id },
+        query: { mode, depth: String(depth), ...(focus ? { focus } : {}), ...(tag ? { tag } : {}), ...(folder ? { folder } : {}) },
+      }),
+    async (res) => NoteGraphView.parse(await res.json()),
+  );
+
+export const findNotes = (id: string, q: string) =>
+  request(
+    () => api.imports[":id"].notes.$get({ param: { id }, query: { q } }),
+    async (res) => NoteSummary.array().parse(await res.json()),
+  );
+
+export const getNote = (id: string) =>
+  request(
+    () => api.notes[":id"].$get({ param: { id } }),
+    async (res) => NoteView.parse(await res.json()),
   );
 
 /** A new import with this name, or a re-import of an existing one. */
@@ -343,3 +393,34 @@ export const testCustomModel = (id: string, model: string, signal?: AbortSignal)
       return (await res.json()) as { result: { ok: boolean; reason?: string; message: string }; providers: ProviderKeysView };
     },
   );
+
+/**
+ * Downloads what Mivra knows as a zip for an Obsidian vault (ADR-014): concepts and memories, never the learner's notes.
+ * Fetched with the API token, then saved through a temporary link, since a plain link can't send the token.
+ */
+export async function downloadVaultExport(): Promise<{ ok: true; filename: string } | { ok: false; error: string }> {
+  let res: Response;
+  try {
+    res = await fetch(`${window.location.origin}/api/export/obsidian`, { headers: authHeaders });
+  } catch {
+    return { ok: false, error: "Can't reach the Mivra server." };
+  }
+  if (!res.ok) return { ok: false, error: await errorMessage(res) };
+  const filename = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? "Mivra.zip";
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch {
+    return { ok: false, error: "The download didn't finish. Try again." };
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  // Revoked later: some browsers start reading the blob only after click() returns.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return { ok: true, filename };
+}

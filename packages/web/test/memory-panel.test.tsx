@@ -10,6 +10,7 @@ const memory = (over: Partial<MemoryView> = {}): MemoryView => ({
   text: "Wants to pass interviews",
   concept: null,
   basis: "chat",
+  source: null,
   createdAt: "2026-10-30T00:00:00.000Z",
   editedAt: null,
   ...over,
@@ -96,5 +97,55 @@ describe("MemoryPanel", () => {
 
     await waitFor(() => expect(screen.queryByText("Wants to pass interviews")).toBeNull());
     expect(fetch.mock.calls[1]![1]?.method).toBe("DELETE");
+  });
+
+  it("shows memories drawn from notes with their note, filters them, and deletes them all at once", async () => {
+    const source = { noteId: "n1", importId: "i1", importName: "Vault", path: "CS/Recursion.md", title: "Recursion" };
+    const fetch = openPanel(
+      json([memory(), memory({ id: "k1", kind: "known", text: "Has notes on recursion.", concept: "Recursion", basis: "import", source })]),
+      json({ deleted: 1 }),
+    );
+    expect(await screen.findByText("Known from your notes")).toBeTruthy();
+    expect(screen.getByText("From your note Recursion")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "From notes" }));
+    expect(screen.queryByText("Wants to pass interviews")).toBeNull();
+    expect(screen.getByText("Has notes on recursion.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "From learning" }));
+    expect(screen.queryByText("Has notes on recursion.")).toBeNull();
+    expect(screen.getByText("Wants to pass interviews")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "From notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete all from notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, delete all" }));
+    await waitFor(() => expect(screen.queryByText("Has notes on recursion.")).toBeNull());
+    expect(screen.getByText("Wants to pass interviews")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "From notes" })).toBeNull();
+    const [url, init] = fetch.mock.calls[1]!;
+    expect(String(url)).toMatch(/\/api\/memories\?basis=import$/);
+    expect(init?.method).toBe("DELETE");
+  });
+});
+
+describe("Export to Obsidian", () => {
+  it("downloads the zip with the API token and names it as the server says", async () => {
+    const createObjectURL = vi.fn(() => "blob:export");
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const zip = new Response(new Uint8Array([0x50, 0x4b]), { headers: { "content-type": "application/zip", "content-disposition": 'attachment; filename="Mivra-2026-11-10.zip"' } });
+    const fetch = openPanel(json([memory()]), zip);
+    fireEvent.click(await button("Export to Obsidian"));
+    expect(await screen.findByText(/^Downloaded Mivra-2026-11-10\.zip\./)).toBeTruthy();
+    const [url, init] = fetch.mock.calls[1]!;
+    expect(String(url)).toMatch(/\/api\/export\/obsidian$/);
+    expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer\b/);
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  it("shows the server's error", async () => {
+    openPanel(json([memory()]), json({ error: "There's too much to export as one zip." }, 413));
+    fireEvent.click(await button("Export to Obsidian"));
+    expect(await screen.findByText("There's too much to export as one zip.")).toBeTruthy();
   });
 });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import type { NoteGraph, SkipReason, VaultFile, VaultImportResult } from "@mivra/protocol";
+import type { DistillationView, NoteGraph, SkipReason, VaultFile, VaultImportResult } from "@mivra/protocol";
 import { DuplicateImportName, type NoteStore, type PreparedNote, type VaultImportRow } from "../store/note-store.js";
-import { noteKey, parseNote } from "./parse.js";
+import { isMivraGenerated, noteKey, parseNote } from "./parse.js";
 import { cleanVaultPath, type SkippedFile } from "./vault-path.js";
 
 export { cleanVaultPath, type SkippedFile };
@@ -25,13 +25,16 @@ export type ImportOutcome =
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
-export function importView(row: VaultImportRow): VaultImportResult["import"] {
-  return { id: row.id, name: row.name, source: row.source, noteCount: row.noteCount, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString() };
+export function importView(row: VaultImportRow, distillation: DistillationView): VaultImportResult["import"] {
+  return { id: row.id, name: row.name, source: row.source, noteCount: row.noteCount, createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(), distillation };
 }
+
+/** Called once a vault is stored: starts distilling its changed notes (ADR-014) and says where that stands. */
+export type AfterImport = (importId: string) => DistillationView;
 
 /** How long parsing runs before letting other requests (such as a streaming reply) through. */
 const YIELD_EVERY_MS = 20;
-const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+export const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
  * Sorts the files into notes to write, notes unchanged since the last import, and skipped paths. Parsing a large
@@ -54,6 +57,11 @@ async function prepare(files: VaultFile[], previous: Map<string, string>) {
     const cleaned = cleanVaultPath(file.path);
     if ("reason" in cleaned) {
       skipped.push({ path: file.path, reason: cleaned.reason });
+      continue;
+    }
+    // Mivra's own export dropped into the vault (vault-export.ts): its files aren't the learner's notes.
+    if (isMivraGenerated(file.text)) {
+      skipped.push({ path: file.path, reason: "generated" });
       continue;
     }
     // Two paths that differ only in case are the same file on macOS and Windows.
@@ -100,6 +108,7 @@ export async function importVault(
   store: NoteStore,
   input: { name: string; files: VaultFile[] } | { importId: string; files: VaultFile[] },
   alreadySkipped: SkippedFile[] = [],
+  after: AfterImport,
 ): Promise<ImportOutcome> {
   const previous = "importId" in input ? store.noteHashes(input.importId) : new Map<string, string>();
   const { snapshot, skipped, truncated } = await prepare(input.files, previous);
@@ -118,14 +127,19 @@ export async function importVault(
   return {
     ok: true,
     result: {
-      import: importView(stored.row),
+      import: importView(stored.row, after(stored.row.id)),
       added: stored.added,
       updated: stored.updated,
       removed: stored.removed,
       unchanged: snapshot.keep.length,
       skippedCount: skipped.length + alreadySkipped.length,
-      // Attachments are the least surprising, so they're listed last.
-      skipped: [...skipped, ...alreadySkipped.filter((f) => f.reason !== "not_markdown"), ...alreadySkipped.filter((f) => f.reason === "not_markdown")].slice(0, MAX_SKIPPED_LISTED),
+      // Attachments and Mivra's own exported files are the least surprising, so they're listed last.
+      skipped: [
+        ...skipped.filter((f) => f.reason !== "generated"),
+        ...alreadySkipped.filter((f) => f.reason !== "not_markdown"),
+        ...alreadySkipped.filter((f) => f.reason === "not_markdown"),
+        ...skipped.filter((f) => f.reason === "generated"),
+      ].slice(0, MAX_SKIPPED_LISTED),
       truncated,
     },
   };

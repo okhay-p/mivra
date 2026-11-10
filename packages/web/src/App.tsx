@@ -18,6 +18,7 @@ import { MathText } from "./MathText.js";
 import { ImportsPanel } from "./ImportsPanel.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ModelPicker, modelLabel, useModelPicker, type ModelPickerState } from "./ModelPicker.js";
+import { NotesGraph } from "./NotesGraph.js";
 import { ProvidersPanel, hasAnyKey } from "./ProvidersPanel.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { UsagePanel } from "./UsagePanel.js";
@@ -108,6 +109,13 @@ export function App() {
     openStarted(session, begin);
   };
 
+  // An import's notes graph, shown in place of the pane until something else is chosen (ADR-014 step 4).
+  const [graphImportId, setGraphImportId] = useState<string>();
+  const showPane = (next: Pane) => {
+    setGraphImportId(undefined);
+    setPane(next);
+  };
+
   const active = sessions.find((s) => s.id === activeId);
   // The session whose deletion is being confirmed. Lives here so the dialog outlasts the mobile sidebar.
   const [deleting, setDeleting] = useState<Session>();
@@ -158,11 +166,14 @@ export function App() {
         theme={theme}
         onThemeChange={setTheme}
         drafting={pane.kind === "draft"}
-        onSelect={(id) => setPane({ kind: "session", id })}
+        onSelect={(id) => showPane({ kind: "session", id })}
         onDelete={setDeleting}
         onRenamed={(renamed) => setSessions((prev) => prev.map((s) => (s.id === renamed.id ? { ...s, title: renamed.title } : s)))}
-        onNew={openDraft}
-        onNewCourse={() => setPane({ kind: "start" })}
+        onNew={() => {
+          setGraphImportId(undefined);
+          openDraft();
+        }}
+        onNewCourse={() => showPane({ kind: "start" })}
         onOpenMemory={() => setMemoryOpen(true)}
         onOpenImports={() => setImportsOpen(true)}
         onOpenProviders={() => setProvidersOpen(true)}
@@ -170,7 +181,7 @@ export function App() {
         onOpenUsage={() => setUsageOpen(true)}
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
-      <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} />
+      <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} onOpenGraph={setGraphImportId} />
       <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
       <SettingsPanel open={settingsOpen} onOpenChange={setSettingsOpen} />
       <UsagePanel open={usageOpen} onOpenChange={setUsageOpen} />
@@ -180,10 +191,14 @@ export function App() {
         <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
           <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-          <h1 className="truncate text-base font-medium">{active?.title ?? (pane.kind === "draft" ? "New session" : "Mivra")}</h1>
+          <h1 className="truncate text-base font-medium outline-none" tabIndex={graphImportId ? -1 : undefined} data-notes-graph-start={graphImportId ? "" : undefined}>
+            {graphImportId ? "Notes graph" : (active?.title ?? (pane.kind === "draft" ? "New session" : "Mivra"))}
+          </h1>
         </header>
         {!token ? (
           <Notice error>No API token found. Start the server, then reload this page.</Notice>
+        ) : graphImportId ? (
+          <NotesGraph importId={graphImportId} />
         ) : error ? (
           <Notice error>{error}</Notice>
         ) : activeId ? (

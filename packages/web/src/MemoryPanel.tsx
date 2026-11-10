@@ -8,23 +8,40 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
-import { deleteMemory, editMemory, listMemories } from "./api.js";
+import { deleteImportedMemories, deleteMemory, editMemory, listMemories } from "./api.js";
+import { ExportVault } from "./ExportVault.js";
 
 const SECTIONS: { kind: MemoryKind; title: string }[] = [
   { kind: "goal", title: "Goals" },
   { kind: "preference", title: "Preferences" },
   { kind: "misconception", title: "Misconceptions" },
+  { kind: "known", title: "Known from your notes" },
 ];
+
+type Filter = "all" | "import" | "other";
+const FILTERS: { value: Filter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "import", label: "From notes" },
+  { value: "other", label: "From learning" },
+];
+const matches = (filter: Filter, memory: MemoryView) => filter === "all" || (filter === "import") === (memory.basis === "import");
+
+const basisLabel = (memory: MemoryView) =>
+  memory.basis === "import" ? (memory.source ? `From your note ${memory.source.title}` : "From your notes") : memory.basis === "wrong_answer" ? "From a wrong answer" : "From chat";
 
 /** Everything Mivra has inferred about the learner, for them to check, correct or delete (ADR-009). */
 export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [memories, setMemories] = useState<MemoryView[]>();
   const [error, setError] = useState<string>();
+  const [filter, setFilter] = useState<Filter>("all");
+  const fromNotes = memories?.filter((m) => m.basis === "import").length ?? 0;
+  const shown = memories?.filter((m) => matches(filter, m));
 
   useEffect(() => {
     if (!open) return;
     let stale = false;
     setMemories(undefined);
+    setFilter("all");
     const load = () => {
       setError(undefined);
       void listMemories().then((result) => {
@@ -70,9 +87,20 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
               <EmptyContent><Button variant="outline" onClick={() => onOpenChange(false)}>Back to learning</Button></EmptyContent>
             </Empty>
           )}
-          {memories &&
+          {fromNotes > 0 && (
+            <ImportedFilter
+              filter={filter}
+              onFilter={setFilter}
+              count={fromNotes}
+              onDeleted={() => {
+                setMemories((all) => all?.filter((m) => m.basis !== "import"));
+                setFilter("all");
+              }}
+            />
+          )}
+          {shown &&
             SECTIONS.map(({ kind, title }) => {
-              const entries = memories.filter((m) => m.kind === kind);
+              const entries = shown.filter((m) => m.kind === kind);
               return entries.length > 0 ? (
                 <section key={kind} className="flex flex-col gap-2">
                   <h2 className="text-sm font-semibold">{title}</h2>
@@ -89,9 +117,59 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
                 </section>
               ) : null;
             })}
+          {memories && memories.length > 0 && <ExportVault />}
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+/** Shows only the memories drawn from imported notes (ADR-014), or the others, and deletes all of the first at once. */
+function ImportedFilter({ filter, onFilter, count, onDeleted }: { filter: Filter; onFilter: (filter: Filter) => void; count: number; onDeleted: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const remove = async () => {
+    setBusy(true);
+    setError(undefined);
+    const result = await deleteImportedMemories();
+    setBusy(false);
+    if (!result.ok) return setError(result.error);
+    setConfirming(false);
+    onDeleted();
+  };
+  return (
+    <div className="flex flex-col gap-2 text-sm">
+      <div className="flex flex-wrap gap-1" role="group" aria-label="Show memories">
+        {FILTERS.map(({ value, label }) => (
+          <Button key={value} type="button" size="sm" variant={filter === value ? "secondary" : "ghost"} aria-pressed={filter === value} onClick={() => onFilter(value)}>
+            {label}
+          </Button>
+        ))}
+      </div>
+      {filter === "import" &&
+        (confirming ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-muted-foreground">Delete all {count.toLocaleString("en")} memories drawn from your notes? Your notes stay imported.</span>
+            <Button type="button" variant="destructive" size="sm" disabled={busy} onClick={() => void remove()}>
+              {busy && <Spinner aria-hidden="true" />}
+              Yes, delete all
+            </Button>
+            <Button type="button" variant="outline" size="sm" disabled={busy} onClick={() => setConfirming(false)}>
+              Keep
+            </Button>
+          </div>
+        ) : (
+          <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setConfirming(true)}>
+            Delete all from notes
+          </Button>
+        ))}
+      {error && (
+        <p className="text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -162,7 +240,11 @@ function MemoryEntry({
         <>
           {memory.held ? <p className="text-muted-foreground italic">Hidden until you answer the check in that session.</p> : <p>{memory.text}</p>}
           <div className="flex flex-wrap items-center gap-2">
-            {!memory.held && <Badge variant="outline">{memory.basis === "wrong_answer" ? "From a wrong answer" : "From chat"}</Badge>}
+            {!memory.held && (
+              <Badge variant="outline" className="max-w-full truncate" title={memory.source ? `${memory.source.importName}: ${memory.source.path}` : undefined}>
+                {basisLabel(memory)}
+              </Badge>
+            )}
             {memory.editedAt && <Badge variant="outline">Edited by you</Badge>}
             <span className="text-muted-foreground text-xs">{new Date(memory.createdAt).toLocaleDateString()}</span>
           </div>

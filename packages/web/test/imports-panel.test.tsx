@@ -73,6 +73,7 @@ const view = (over: Partial<VaultImportView> = {}): VaultImportView => ({
   noteCount: 2,
   createdAt: "2026-11-01T00:00:00.000Z",
   updatedAt: "2026-11-02T00:00:00.000Z",
+  distillation: { status: "idle", pendingNotes: 0, groups: 0, groupsDone: 0, error: null, concepts: 0, memories: 0 },
   ...over,
 });
 const importResult = (over: Partial<VaultImportResult> = {}): VaultImportResult => ({
@@ -96,6 +97,47 @@ function openPanel(...responses: Response[]) {
 }
 const chooseFolder = (files: PickedFile[]) => fireEvent.change(screen.getByTestId("vault-folder-input"), { target: { files } });
 const dialog = () => screen.getByRole("dialog", { name: /Import an Obsidian vault|Re-import/ });
+
+const distillation = (over: Partial<VaultImportView["distillation"]> = {}): VaultImportView["distillation"] => ({
+  status: "idle",
+  pendingNotes: 0,
+  groups: 0,
+  groupsDone: 0,
+  error: null,
+  concepts: 0,
+  memories: 0,
+  ...over,
+});
+
+describe("ImportsPanel distillation", () => {
+  it("shows progress while notes are read, follows it, and cancels it", async () => {
+    const running = view({ distillation: distillation({ status: "running", pendingNotes: 3, groups: 4, groupsDone: 1, concepts: 2 }) });
+    const fetch = openPanel(json([running]), json(distillation({ status: "running", pendingNotes: 3, groups: 4, groupsDone: 1 })), json([view({ distillation: distillation({ status: "cancelled", pendingNotes: 2, concepts: 2, memories: 1 }) })]));
+    const entry = await screen.findByRole("listitem", { name: "Vault" });
+    expect(within(entry).getByText("Reading notes for concepts… group 2 of 4")).toBeTruthy();
+    expect(within(entry).getByRole("progressbar")).toBeTruthy();
+    fireEvent.click(within(entry).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(String(fetch.mock.calls[1]![0])).toMatch(/\/api\/imports\/i1\/distillation$/));
+    expect(fetch.mock.calls[1]![1]?.method).toBe("DELETE");
+    // The list is polled while it runs, so the cancelled state arrives.
+    expect(await within(entry).findByText("Cancelled. 2 notes not read for concepts yet.", undefined, { timeout: 5_000 })).toBeTruthy();
+    expect(within(entry).getByText("So far: 2 concepts and 1 memory drawn from these notes.")).toBeTruthy();
+    expect(within(entry).getByRole("button", { name: "Resume" })).toBeTruthy();
+  });
+
+  it("shows a failure, offers to try again, and summarises what was drawn", async () => {
+    const fetch = openPanel(
+      json([view({ distillation: distillation({ status: "failed", pendingNotes: 2, error: "The model request failed." }) }), view({ id: "i2", name: "Done", distillation: distillation({ concepts: 5, memories: 4 }) })]),
+      json(distillation({ status: "queued", pendingNotes: 2 })),
+    );
+    const failed = await screen.findByRole("listitem", { name: "Vault" });
+    expect(within(failed).getByText("Reading notes for concepts stopped: The model request failed.")).toBeTruthy();
+    expect(within(screen.getByRole("listitem", { name: "Done" })).getByText("5 concepts and 4 memories drawn from these notes.")).toBeTruthy();
+    fireEvent.click(within(failed).getByRole("button", { name: "Try again" }));
+    expect(await within(failed).findByText("Waiting to read these notes for concepts…")).toBeTruthy();
+    expect(fetch.mock.calls[1]![1]?.method).toBe("POST");
+  });
+});
 
 describe("ImportsPanel", () => {
   it("lists imports with their note count and last update", async () => {
@@ -204,7 +246,7 @@ describe("ImportsPanel", () => {
     const fetch = openPanel(json([view()]), new Response(null, { status: 204 }));
     fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(screen.getByText(/Delete this import and its 2 notes\?/)).toBeTruthy();
+    expect(screen.getByText(/Delete this import and its 2 notes, with the concepts and memories drawn from them\?/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Keep" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     fireEvent.click(screen.getByRole("button", { name: "Yes, delete" }));
@@ -212,5 +254,19 @@ describe("ImportsPanel", () => {
     const [url, init] = fetch.mock.calls[1]!;
     expect(String(url)).toMatch(/\/api\/imports\/i1$/);
     expect(init?.method).toBe("DELETE");
+  });
+});
+
+describe("ImportsPanel graph", () => {
+  it("opens an import's graph and closes the panel, offering none for an empty import", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(json([view(), view({ id: "i2", name: "Empty", noteCount: 0 })]));
+    const onOpenGraph = vi.fn();
+    const onOpenChange = vi.fn();
+    render(<ImportsPanel open onOpenChange={onOpenChange} onOpenGraph={onOpenGraph} />);
+    const entry = await screen.findByRole("listitem", { name: "Vault" });
+    expect(within(screen.getByRole("listitem", { name: "Empty" })).queryByRole("button", { name: "Graph" })).toBeNull();
+    fireEvent.click(within(entry).getByRole("button", { name: "Graph" }));
+    expect(onOpenGraph).toHaveBeenCalledWith("i1");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });
