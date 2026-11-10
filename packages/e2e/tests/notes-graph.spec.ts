@@ -99,7 +99,9 @@ test.describe("notes graph", () => {
     await expect(page.getByRole("dialog", { name: "Stack" }).getByTestId("note-body")).toContainText("Last in, first out.");
   });
 
-  test("stays responsive on a 2,000-note vault, opening on the local graph", async ({ page }) => {
+  test("stays responsive on a 2,000-note vault, opening on the local graph", async ({ page, browserName }) => {
+    // Deterministic layout and scale coverage only needs Chromium.
+    test.skip(browserName !== "chromium", "Covered in Chromium");
     const files = Array.from({ length: 2_000 }, (_, i) => ({
       path: `Folder ${i % 20}/Note ${i}.md`,
       text: `#topic${i % 40} About note ${i}. See [[Note ${(i + 1) % 2_000}]] and [[Note ${(i * 7) % 2_000}]].`,

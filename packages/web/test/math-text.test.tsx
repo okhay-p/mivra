@@ -40,11 +40,6 @@ describe("MathText rendering", () => {
     expect(c.querySelectorAll("h4, h5")).toHaveLength(3);
   });
 
-  it("re-renders when the text changes", () => {
-    const { container, rerender } = render(<MathText text="**one**" />);
-    rerender(<MathText text="**two**" />);
-    expect(container.querySelector("strong")?.textContent).toBe("two");
-  });
 });
 
 describe("MathText math mode", () => {

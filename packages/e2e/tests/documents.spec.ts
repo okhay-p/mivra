@@ -49,6 +49,11 @@ test.describe("uploaded documents", () => {
     await expect(composer.getByText("Sent notes.pdf")).toHaveCount(0);
     const message = page.getByTestId("transcript").locator("[data-message-id]").filter({ has: page.getByText(title, { exact: true }) });
     await expect(message.getByText("Sent notes.pdf")).toBeVisible();
+    await page.getByRole("button", { name: "New session" }).first().click();
+    await expect(chips(page)).toHaveCount(0);
+    await page.getByRole("button", { name: title, exact: true }).click();
+    await expect(chips(page).getByText("Sent notes.pdf")).toBeVisible();
+
     await page.reload();
     await page.getByRole("button", { name: title, exact: true }).click();
     await expect(message.getByText("Sent notes.pdf")).toBeVisible();
@@ -57,21 +62,6 @@ test.describe("uploaded documents", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
     await message.getByRole("button", { name: "Remove Sent notes.pdf" }).click();
     await expect(chips(page)).toHaveCount(0);
-  });
-
-  test("keeps documents with their session", async ({ page }) => {
-    const title = `one ${Date.now()}`;
-    await startSession(page);
-    await attach(page, "Only here.pdf", makePdf([["Words that only this session's document has in it."]]));
-    await expect(chips(page).getByText("Only here.pdf")).toBeVisible(READ);
-    await send(page, title);
-    await expect(page.getByText(/The server says/)).toBeVisible();
-
-    await page.getByRole("button", { name: "New session" }).first().click();
-    await expect(chips(page)).toHaveCount(0);
-
-    await page.getByRole("button", { name: title }).click();
-    await expect(chips(page).getByText("Only here.pdf")).toBeVisible();
   });
 
   test("a long filename stays inside the error at 320px", async ({ page }) => {
