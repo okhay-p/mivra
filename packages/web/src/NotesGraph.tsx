@@ -42,6 +42,59 @@ function nodeName(node: GraphNode, connections: number) {
   }
 }
 
+/** The worker that lays graphs out, started when the first graph is drawn. */
+let layoutWorker: Worker | undefined;
+let layoutRequests = 0;
+
+/**
+ * Lays a view out in a worker, so the page stays responsive however long that takes, and returns the latest view
+ * with its layout. Until a new view's layout is ready the previous one stays drawn, with `pending` set. A view
+ * superseded before its layout is ready stops the worker, so the next doesn't wait behind it. Without workers, or
+ * if the worker fails, the layout runs in place.
+ */
+export function useNotesGraphLayout(view: NoteGraphView | undefined) {
+  const [drawn, setDrawn] = useState<{ view: NoteGraphView; layout: NotesGraphLayout }>();
+  useEffect(() => {
+    if (!view) return;
+    const inPlace = () => setDrawn({ view, layout: layoutNotesGraph(view) });
+    if (typeof Worker === "undefined") return inPlace();
+    let worker: Worker;
+    try {
+      worker = layoutWorker ??= new Worker(new URL("./notes-graph.worker.ts", import.meta.url), { type: "module", name: "mivra-graph-layout" });
+    } catch {
+      return inPlace();
+    }
+    const id = ++layoutRequests;
+    let done = false;
+    const finish = () => {
+      done = true;
+      worker.removeEventListener("message", onMessage);
+      worker.removeEventListener("error", onError);
+    };
+    const onMessage = (event: MessageEvent<{ id: number; layout: NotesGraphLayout }>) => {
+      if (event.data.id !== id) return;
+      finish();
+      setDrawn({ view, layout: event.data.layout });
+    };
+    const onError = () => {
+      finish();
+      worker.terminate();
+      if (layoutWorker === worker) layoutWorker = undefined;
+      inPlace();
+    };
+    worker.addEventListener("message", onMessage);
+    worker.addEventListener("error", onError);
+    worker.postMessage({ id, view: { nodes: view.nodes, edges: view.edges } });
+    return () => {
+      if (done) return;
+      finish();
+      worker.terminate();
+      if (layoutWorker === worker) layoutWorker = undefined;
+    };
+  }, [view]);
+  return { drawn, pending: Boolean(view && drawn?.view !== view) };
+}
+
 /** The graph of an imported vault's notes, tags and concepts (ADR-014 step 4). Read-only: a note opens to be read. */
 export function NotesGraph({ importId: initialImport }: { importId: string }) {
   const [importId, setImportId] = useState(initialImport);
@@ -65,6 +118,7 @@ export function NotesGraph({ importId: initialImport }: { importId: string }) {
     };
   }, [importId, filters]);
   const view = state.view;
+  const laidOut = useNotesGraphLayout(view);
 
   const [selected, setSelected] = useState<string>();
   const [reading, setReading] = useState<string>();
@@ -131,8 +185,10 @@ export function NotesGraph({ importId: initialImport }: { importId: string }) {
         )}
         <NoteFinder importId={importId} onPick={(note) => centreOn(note.id)} />
       </div>
-      <GraphStatus view={view} loading={state.loading} error={state.error} importName={importName} />
-      {view && <NotesGraphDrawing view={view} selected={selected} onSelect={setSelected} onActivate={onActivate} />}
+      <GraphStatus view={view} loading={state.loading || laidOut.pending} error={state.error} importName={importName} />
+      {laidOut.drawn && (
+        <NotesGraphDrawing view={laidOut.drawn.view} layout={laidOut.drawn.layout} selected={selected} onSelect={setSelected} onActivate={onActivate} />
+      )}
       <NoteReader
         noteId={reading}
         onOpenChange={(open) => !open && setReading(undefined)}
@@ -325,16 +381,17 @@ export function nodeInDirection(layout: NotesGraphLayout, from: number, key: str
 
 function NotesGraphDrawing({
   view,
+  layout,
   selected,
   onSelect,
   onActivate,
 }: {
   view: NoteGraphView;
+  layout: NotesGraphLayout;
   selected: string | undefined;
   onSelect: (id: string | undefined) => void;
   onActivate: (node: GraphNode) => void;
 }) {
-  const layout = useMemo(() => layoutNotesGraph(view), [view]);
   const indexOf = useMemo(() => new Map(view.nodes.map((n, i) => [n.id, i])), [view]);
   const neighbours = useMemo(() => {
     const all = view.nodes.map(() => new Set<number>());
@@ -516,7 +573,8 @@ function NotesGraphDrawing({
                   tabIndex={i === current ? 0 : -1}
                   aria-label={nodeName(data, neighbours[i]!.size)}
                   aria-pressed={i === selectedIndex}
-                  className="focus-visible:ring-ring/60 absolute -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full outline-none focus-visible:ring-[3px]"
+                  // The selected node stays on top of neighbours whose hit areas overlap it when zoomed out.
+                  className={cn("focus-visible:ring-ring/60 absolute -translate-x-1/2 -translate-y-1/2 cursor-pointer rounded-full outline-none focus-visible:ring-[3px]", i === selectedIndex && "z-10")}
                   style={{ left: node.x * zoom, top: node.y * zoom, width: size, height: size }}
                   onClick={() => {
                     setActive(i);
@@ -579,7 +637,17 @@ function NoteReader({ noteId, onOpenChange, onCentre }: { noteId?: string; onOpe
   const shown = note?.view;
   return (
     <Sheet open={Boolean(noteId)} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full overflow-y-auto sm:max-w-xl" data-testid="note-reader">
+      <SheetContent
+        className="w-full overflow-y-auto sm:max-w-xl"
+        data-testid="note-reader"
+        // Back to the note's node, which a click doesn't focus in every browser.
+        onCloseAutoFocus={(e) => {
+          const node = note && document.querySelector<HTMLElement>(`[data-testid="notes-graph-node"][data-node="${CSS.escape(note.id)}"]`);
+          if (!node) return;
+          e.preventDefault();
+          node.focus();
+        }}
+      >
         <SheetHeader>
           <SheetTitle className="font-heading wrap-anywhere">{shown?.title ?? "Note"}</SheetTitle>
           <SheetDescription className="wrap-anywhere">{shown ? `${shown.path} · read-only` : note?.error ? "Couldn't open this note." : "Loading…"}</SheetDescription>
