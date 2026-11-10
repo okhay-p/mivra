@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
 import { lessons as lessonsTable, runs } from "../src/db/schema.js";
+import { NOTE_EXCERPTS_LABEL } from "../src/runtime/note-context.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
 // Whole lessons generate through the app here, which is slow when the machine is busy.
@@ -238,6 +239,66 @@ describe("lessons", () => {
     const next = await waiting;
     expect(next.revision).not.toBe(ready.revision);
     expect(next.lesson.checks.answered).toBe(1);
+  });
+
+  describe("with imported notes", () => {
+    const importVault = async (app: App, files: { path: string; text: string }[]) =>
+      expect((await app.request("/api/imports", { method: "POST", headers: json, body: JSON.stringify({ name: "My vault", files }) })).status).toBe(201);
+    const textOf = (content: unknown) => (typeof content === "string" ? content : (content as { text?: string }[]).map((p) => p.text ?? "").join(""));
+    /** The instructions and user messages of the lesson's first model call. */
+    const firstCall = (prompts: string[]) => {
+      const prompt = JSON.parse(prompts[0]!) as { role: string; content: unknown }[];
+      const users = prompt.filter((m) => m.role === "user").map((m) => textOf(m.content));
+      return { instructions: textOf(prompt[0]!.content), users, notes: users.find((u) => u.startsWith(NOTE_EXCERPTS_LABEL)) };
+    };
+    const rows = (text: string | undefined, name: string) =>
+      (new RegExp(`<${name}>\\n([\\s\\S]*?)\\n</${name}>`).exec(text ?? "")?.[1] ?? "")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const limitsNote = { path: "Maths/Limits.md", text: "# Limits\n## One-sided\nA limit from the left can differ from the limit from the right.\n" };
+    const breadNote = { path: "Cooking/Bread.md", text: "Knead the dough for ten minutes.\n" };
+
+    it("gives the model the import list and the notes matching the lesson's topic, cited by title", async () => {
+      const { app, course, topics, prompts } = await setup(basic);
+      await importVault(app, [limitsNote, breadNote]);
+      const { lesson } = (await (await start(app, course.id, topics[0]!.id)).json()) as LessonJson;
+      await until(app, lesson.id, "ready");
+      const { instructions, users, notes } = firstCall(prompts);
+      expect(rows(instructions, "learner_imports")).toEqual([{ import: "My vault", notes: 2 }]);
+      expect(instructions).toContain("Excerpts come only for a lesson whose topic matches a note.");
+      expect(instructions).toContain('cite it as their note by its title and heading, for example "your note *Recursion › Base case*"');
+      expect(instructions).not.toContain("Knead");
+      // Data, in a message of its own just before the lesson request; never in the trusted instructions.
+      expect(users.at(-1)).toContain("Mivra lesson request");
+      expect(users.at(-2)).toBe(notes);
+      expect(notes).toContain("match this lesson's topic");
+      expect(rows(notes, "note_excerpts")).toEqual([expect.objectContaining({ note: "Limits", path: "Maths/Limits.md", text: expect.stringContaining("A limit from the left") })]);
+      expect(notes).not.toContain("Knead");
+    });
+
+    it("sends no excerpts when no note matches the topic, not even the start of a note", async () => {
+      const { app, course, topics, prompts } = await setup(basic);
+      await importVault(app, [breadNote, { path: "Maths/Integrals.md", text: "An integral adds up area under a curve.\n" }]);
+      const { lesson } = (await (await start(app, course.id, topics[0]!.id)).json()) as LessonJson;
+      await until(app, lesson.id, "ready");
+      const { instructions, users, notes } = firstCall(prompts);
+      expect(rows(instructions, "learner_imports")).toEqual([{ import: "My vault", notes: 2 }]);
+      expect(notes).toBeUndefined();
+      expect(users).toHaveLength(1);
+      expect(JSON.stringify(prompts)).not.toContain("Knead");
+      expect(JSON.stringify(prompts)).not.toContain("area under a curve");
+    });
+
+    it("says nothing about notes to a learner who has none", async () => {
+      const { app, course, topics, prompts } = await setup(basic);
+      const { lesson } = (await (await start(app, course.id, topics[0]!.id)).json()) as LessonJson;
+      await until(app, lesson.id, "ready");
+      const { instructions, notes } = firstCall(prompts);
+      expect(instructions).not.toContain("learner_imports");
+      expect(instructions).not.toContain("imported notes");
+      expect(notes).toBeUndefined();
+    });
   });
 
   it("returns 404s for unknown courses, topics and lessons", async () => {

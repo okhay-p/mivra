@@ -785,7 +785,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   const registry = createCapabilityRegistry(plugins);
   const noteStore = createNoteStore(db);
   const turns = createTurnRunner({ store, registry, model, models, lessons, notes: noteStore });
-  const generator = createLessonGenerator({ store, lessons, registry, model, models });
+  const generator = createLessonGenerator({ store, lessons, registry, model, models, notes: noteStore });
   lessons.onChange(generator.changed);
   const lessonJson = (id: string) => {
     const row = lessons.findLesson(id);
