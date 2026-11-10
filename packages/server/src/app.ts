@@ -1184,6 +1184,8 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     return session ? { label: session.title, deleted: false } : { label: "Deleted chat", deleted: true };
   };
   const usageView = async (from: Date | undefined, offsetMinutes: number) => {
+    // A call that has just ended is still being written; wait for it, so a page opened right after a reply shows it.
+    await usage.settled();
     const rows = usageStore.list(from);
     const summary = summarise(rows, { offsetMinutes, providerLabel });
     const listed = (await catalog.list()).models;
