@@ -116,22 +116,32 @@ function capName(name: string, reserve = ""): string {
 
 /**
  * Makes names unique within a folder, ignoring case as macOS and Windows do: `Name`, `Name 2`, `Name 3`, each within
- * the length caps. The next number to try is kept per name, so many names that collide cost linear time, not
- * quadratic (names come from the model and the learner, so a hostile vault could hold thousands of them).
+ * the length caps. Names come from the model and the learner, so a hostile vault could hold thousands that collide,
+ * and numbering must cost linear time, not quadratic. A suffix can shorten a long name, so names that differ only past
+ * that point number the same stem: the next number to try is kept per stem actually used (and suffix length, which
+ * decides the stem), not per name. Every number below it, from the first with that many digits, is taken.
  */
 function uniqueNames() {
   const taken = new Set<string>();
   const nextSuffix = new Map<string, number>();
   return (name: string) => {
-    const key = name.toLowerCase();
     let candidate = name;
-    if (taken.has(key)) {
-      let n = nextSuffix.get(key) ?? 2;
-      do {
-        const suffix = ` ${n++}`;
-        candidate = `${capName(name, suffix) || "_"}${suffix}`;
-      } while (taken.has(candidate.toLowerCase()));
-      nextSuffix.set(key, n);
+    if (taken.has(name.toLowerCase())) {
+      let n = 2;
+      for (;;) {
+        const suffix = ` ${n}`;
+        const stem = capName(name, suffix) || "_";
+        const key = `${stem.toLowerCase()}\u0000${suffix.length}`;
+        const next = nextSuffix.get(key);
+        // Each jump moves n forward, to a number with this many digits or to the first with one more.
+        if (next !== undefined && next > n) {
+          n = next;
+          continue;
+        }
+        candidate = `${stem}${suffix}`;
+        nextSuffix.set(key, ++n);
+        if (!taken.has(candidate.toLowerCase())) break;
+      }
     }
     taken.add(candidate.toLowerCase());
     return candidate;

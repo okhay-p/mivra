@@ -295,6 +295,35 @@ describe("buildVault", () => {
     expect(elapsed).toBeLessThan(2_000);
   });
 
+  it("numbers names that only collide once a suffix shortens them in linear time too", () => {
+    // 2,000 names, each twice, that differ only in their last character: a suffix cuts it off, so every one of them
+    // numbers the same shortened stem. Counting per full name restarted each at 2 (about 34 s for these).
+    const memories: ExportInput["memories"] = Array.from({ length: 4_000 }, (_, i) => ({
+      id: `m${i}`,
+      kind: "goal",
+      text: `${"y".repeat(72)}${String.fromCodePoint(0x4e00 + Math.floor(i / 2))} ${i % 2}`,
+      concept: null,
+      basis: "chat",
+      noteId: null,
+      createdAt: new Date(0),
+      editedAt: null,
+    }));
+    const started = performance.now();
+    const files = buildVault({ ...base, memories });
+    const elapsed = performance.now() - started;
+    expect(new Set(files.map((f) => f.path.toLowerCase())).size).toBe(files.length);
+    expect(files).toHaveLength(1 + 4_000);
+    for (const f of files) {
+      const name = f.path.split("/").pop()!.replace(/\.md$/, "");
+      expect([...name].length).toBeLessThanOrEqual(80);
+      expect(Buffer.byteLength(name)).toBeLessThanOrEqual(180);
+    }
+    expect(files.some((f) => f.path === `Mivra/Memories/Goal - ${"y".repeat(72)}\u4e00.md`)).toBe(true);
+    expect(files.some((f) => f.path === `Mivra/Memories/Goal - ${"y".repeat(71)} 2.md`)).toBe(true);
+    expect(files.some((f) => f.path === `Mivra/Memories/Goal - ${"y".repeat(68)} 2001.md`)).toBe(true);
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
   it("links a note by its path when a file in the export shares its name", () => {
     const [, concept, memory] = buildVault({
       ...base,
