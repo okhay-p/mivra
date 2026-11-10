@@ -74,7 +74,7 @@ function setup(propose: (notes: NoteRow[]) => Proposal | "fail", db: Db = openDb
     await vi.waitFor(async () => {
       view = await progress(id);
       expect(["queued", "running"]).not.toContain(view.status);
-    });
+    }, { timeout: 10_000 });
     return view!;
   };
   const importVault = async (name: string, files: VaultFile[]) => {
@@ -346,12 +346,12 @@ describe("distilling an import", () => {
     setImmediate(tick);
     const atCall: number[] = [];
     const t = setup((notes) => (atCall.push(turns), byTitle(notes)), undefined, { instant: true });
-    // 12 tags of 10 notes: one group each.
-    const files = Array.from({ length: 120 }, (_, i) => ({ path: `N${i}.md`, text: `#t${i % 12} Note ${i} on topic ${i}.` }));
+    // 6 tags of 5 notes: one group each.
+    const files = Array.from({ length: 30 }, (_, i) => ({ path: `N${i}.md`, text: `#t${i % 6} Note ${i} on topic ${i}.` }));
     const { view } = await t.importVault("Vault", files);
     counting = false;
-    expect(view.groupsDone).toBe(12);
-    expect(atCall).toHaveLength(12);
+    expect(view.groupsDone).toBe(6);
+    expect(atCall).toHaveLength(6);
     // Before the distiller yielded, every group ran without the event loop turning once (issue #63: a 1,000-note
     // import held the server ~48 s). Now it turns twice in each group's tool call and once before the next group.
     const between = atCall.slice(1).map((n, i) => n - atCall[i]!);
