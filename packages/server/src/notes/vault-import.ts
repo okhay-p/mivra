@@ -23,8 +23,6 @@ export type ImportOutcome =
   | { ok: true; result: VaultImportResult }
   | { ok: false; kind: "duplicate_name" | "not_found"; message: string };
 
-const unsurprising = new Set<SkipReason>(["not_markdown", "generated"]);
-
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 export function importView(row: VaultImportRow, distillation: DistillationView): VaultImportResult["import"] {
@@ -136,7 +134,12 @@ export async function importVault(
       unchanged: snapshot.keep.length,
       skippedCount: skipped.length + alreadySkipped.length,
       // Attachments and Mivra's own exported files are the least surprising, so they're listed last.
-      skipped: [...skipped, ...alreadySkipped].sort((a, b) => Number(unsurprising.has(a.reason)) - Number(unsurprising.has(b.reason))).slice(0, MAX_SKIPPED_LISTED),
+      skipped: [
+        ...skipped.filter((f) => f.reason !== "generated"),
+        ...alreadySkipped.filter((f) => f.reason !== "not_markdown"),
+        ...alreadySkipped.filter((f) => f.reason === "not_markdown"),
+        ...skipped.filter((f) => f.reason === "generated"),
+      ].slice(0, MAX_SKIPPED_LISTED),
       truncated,
     },
   };
