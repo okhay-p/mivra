@@ -1,6 +1,7 @@
 import { APICallError, LoadAPIKeyError, NoSuchModelError, RetryError, StreamProviderError } from "ai";
 import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
 import { ChatGptError, errorCode } from "../chatgpt/oauth.js";
+import { CustomProviderError } from "../models/custom-providers.js";
 
 /** Full error detail. Server-side only: stored in runs.error, never sent to a client. */
 export function errorText(error: unknown): string {
@@ -63,6 +64,8 @@ export function publicErrorText(error: unknown): string {
   if (RetryError.isInstance(error)) return publicErrorText(error.lastError);
   // ChatGPT sign-in errors carry messages Mivra wrote (ADR-015).
   if (error instanceof ChatGptError) return error.message;
+  // So do custom providers' configuration errors, such as a removed provider (issue #69).
+  if (error instanceof CustomProviderError) return error.message;
   const code = openAiErrorCode(error);
   if (code && code in CHATGPT_ERRORS) return CHATGPT_ERRORS[code]!;
   // Configuration problems the learner can fix.

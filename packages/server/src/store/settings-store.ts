@@ -12,6 +12,9 @@ export function createSettingsStore(db: Db, clock: () => Date = () => new Date()
       const updatedAt = clock();
       db.insert(settings).values({ key, value, updatedAt }).onConflictDoUpdate({ target: settings.key, set: { value, updatedAt } }).run();
     },
+    delete(key: string) {
+      db.delete(settings).where(eq(settings.key, key)).run();
+    },
   };
 }
 

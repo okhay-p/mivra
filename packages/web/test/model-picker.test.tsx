@@ -22,6 +22,8 @@ const picker = (over: Partial<ModelPickerView> = {}): ModelPickerView => ({
   suggested: [flash.id],
   models: [sonnet, flash, plain, ...others],
   catalog: "fresh",
+  providers: [],
+  unavailable: null,
   ...over,
 });
 
@@ -61,6 +63,32 @@ describe("ModelPicker", () => {
     expect(modelLabel("mivra:scripted")).toBe("scripted");
     expect(searchModels([sonnet, flash, plain], "claude 5.5").map((m) => m.id)).toEqual([sonnet.id]);
     expect(searchModels([sonnet, flash, plain], "GOOGLE flash").map((m) => m.id)).toEqual([flash.id]);
+  });
+
+  it("names a custom provider's models by the provider's current name, and a removed one's too", () => {
+    const names = [{ id: "custom:deepseek", name: "DeepSeek", removed: false }, { id: "custom:old", name: "Old Box", removed: true }];
+    expect(modelLabel("custom:deepseek/org/model-x", [], names)).toBe("org/model-x (DeepSeek)");
+    expect(modelLabel("custom:old/m", [], names)).toBe("m (Old Box)");
+    expect(modelLabel("custom:gone/m")).toBe("m (Removed provider)");
+  });
+
+  it("lists custom providers' models under their names, with their test status, and asks to choose when the selection can't run", async () => {
+    const custom = (id: string, verification: CatalogModel["verification"]): CatalogModel =>
+      ({ id: `custom:local/${id}`, name: id, contextLength: null, price: null, reasoning: null, verification });
+    serve(picker({
+      current: { model: "custom:gone/m", effort: null },
+      models: [custom("fast", "verified"), custom("slow", "unverified"), sonnet],
+      providers: [{ id: "custom:local", name: "Local Box", removed: false }, { id: "custom:gone", name: "Gone", removed: true }],
+      unavailable: "The provider Gone was removed. Choose another model in the picker under the message box.",
+    }));
+    render(<Harness />);
+    expect((await screen.findByRole("alert")).textContent).toMatch(/Gone was removed/);
+    fireEvent.click(screen.getByRole("button", { name: "Model: m (Gone). Change model" }));
+    const group = await screen.findByRole("group", { name: "Local Box" });
+    expect(within(group).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      expect.stringContaining("Local Box · fast · tested"),
+      expect.stringContaining("Local Box · slow · not tested"),
+    ]);
   });
 
   it("opens on the learner's own models, and searches the whole list when they type", async () => {

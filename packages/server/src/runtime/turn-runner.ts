@@ -60,14 +60,16 @@ function withoutProviderDetails(part: UIMessage["parts"][number]): UIMessage["pa
  * (reasoning signatures, encrypted reasoning) go back only to the model that wrote the reply (ADR-012):
  * another model can't read them and some providers reject them. Such a reply replays as text and tool calls.
  */
-export async function replayMessages(conversation: UIMessage[], model?: string): Promise<ModelMessage[]> {
+export async function replayMessages(conversation: UIMessage[], model?: string, endpoint?: string): Promise<ModelMessage[]> {
   const result: ModelMessage[] = [];
   for (const message of conversation) {
     if (message.role !== "assistant") {
       result.push(...await convertToModelMessages([message]));
       continue;
     }
-    if (model !== undefined && (message.metadata as ReplyMetadata | undefined)?.model !== model) {
+    const metadata = message.metadata as ReplyMetadata | undefined;
+    // A custom provider's model id stays the same when its endpoint changes, so the endpoint must match too.
+    if (model !== undefined && (metadata?.model !== model || metadata?.endpoint !== endpoint)) {
       const parts = message.parts.filter((part) => part.type !== "reasoning").map(withoutProviderDetails);
       result.push(...await convertToModelMessages([{ ...message, parts }]));
       continue;
@@ -116,7 +118,7 @@ const defaultAssembleContext =
     // Each goes just before the learner's latest message, so notes come first, then the session's documents.
     return {
       messages: withDocumentExcerpts(
-        withDocumentExcerpts(await replayMessages(conversation, selection.model), imported?.excerpts),
+        withDocumentExcerpts(await replayMessages(conversation, selection.model, selection.endpoint), imported?.excerpts),
         documents?.excerpts,
       ),
       instructions: [

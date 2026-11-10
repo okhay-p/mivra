@@ -116,6 +116,8 @@ export async function startServer({ config, webDist, migrationsFolder, portFallb
       credentials,
       chatgpt,
       check: (provider, key) => checkProviderKey(provider, key, { baseUrl: provider === "openrouter" ? undefined : baseUrls[provider] }),
+      // Custom providers may take their URL and key from MIVRA_PROVIDER_<ID>_BASE_URL and _API_KEY (issue #69).
+      custom: { env: (name) => env[name]?.trim() || undefined },
     },
     security: { token, allowedHosts: config.allowedHosts },
   });

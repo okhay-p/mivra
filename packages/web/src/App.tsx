@@ -934,7 +934,7 @@ function Chat({
               })}
               {m.role === "assistant" && typeof (m.metadata as { model?: unknown } | undefined)?.model === "string" && (
                 <p className="text-muted-foreground text-xs" data-reply-model>
-                  {modelLabel((m.metadata as { model: string }).model, modelPicker.view?.models)}
+                  {modelLabel((m.metadata as { model: string }).model, modelPicker.view?.models, modelPicker.view?.providers)}
                 </p>
               )}
               {onAddToLesson && m.role === "assistant" && mi > interviewEnd && !isReplyInProgress(status, mi, messages.length) && m.parts.some((p) => p.type === "text" && p.text.trim()) && (

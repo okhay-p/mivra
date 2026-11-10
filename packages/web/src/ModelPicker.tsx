@@ -38,8 +38,20 @@ const EFFORT_LABELS: Record<ReasoningEffort, string> = {
   max: "Max",
 };
 
+/** Custom providers' names by their model ids' prefix, `custom:<id>` (issue #69). */
+export type ProviderNames = ModelPickerView["providers"];
+
+const CUSTOM = "custom:";
+
+/** "custom:deepseek/deepseek-flash" → "custom:deepseek"; undefined for a built-in provider's model. */
+const customProviderKey = (id: string) => (id.startsWith(CUSTOM) && id.indexOf("/") > CUSTOM.length ? id.slice(0, id.indexOf("/")) : undefined);
+
+/** A model's id as its provider names it: without the provider prefix (and a custom provider's id). */
+export const providerModelId = (id: string) => (customProviderKey(id) ? id.slice(id.indexOf("/") + 1) : id.slice(id.indexOf(":") + 1));
+
 /** "Anthropic: Claude Sonnet 5.5" → "Claude Sonnet 5.5"; an unknown id shows without its provider prefix. */
 export function shortModelName(id: string, models: CatalogModel[] = []): string {
+  if (customProviderKey(id)) return providerModelId(id);
   const name = models.find((m) => m.id === id)?.name;
   if (name && name !== id) return name.replace(/^[^:]{1,40}:\s+/, "");
   return id.replace(/^[a-z][a-z0-9-]*:/, "");
@@ -47,17 +59,22 @@ export function shortModelName(id: string, models: CatalogModel[] = []): string 
 
 const PROVIDERS: Record<string, string> = { openrouter: "OpenRouter", anthropic: "Anthropic", openai: "OpenAI", chatgpt: "ChatGPT" };
 
-/** "anthropic:claude-sonnet-5-5" → "Anthropic". */
-export function providerLabel(id: string): string {
+/** "anthropic:claude-sonnet-5-5" → "Anthropic"; a custom provider's model → the name the learner gave it. */
+export function providerLabel(id: string, names: ProviderNames = []): string {
+  const custom = customProviderKey(id);
+  if (custom) return names.find((p) => p.id === custom)?.name ?? "Removed provider";
   const prefix = id.slice(0, Math.max(0, id.indexOf(":")));
   return PROVIDERS[prefix] ?? prefix;
 }
 
 /** The short name, plus the provider when it isn't OpenRouter, since a model can be reached both ways. */
-export function modelLabel(id: string, models: CatalogModel[] = []): string {
+export function modelLabel(id: string, models: CatalogModel[] = [], names: ProviderNames = []): string {
   const name = shortModelName(id, models);
+  if (customProviderKey(id)) return `${name} (${providerLabel(id, names)})`;
   return id.startsWith("openrouter:") || !(id.split(":")[0]! in PROVIDERS) ? name : `${name} (${providerLabel(id)})`;
 }
+
+const VERIFICATION: Record<NonNullable<CatalogModel["verification"]>, string> = { unverified: "not tested", verified: "tested", failed: "test failed" };
 
 function priceText(price: CatalogModel["price"]) {
   if (!price) return undefined;
@@ -98,7 +115,8 @@ export function useModelPicker() {
       setError(undefined);
       const result = await selectModel(selection);
       if (!result.ok) return setError(result.error);
-      setView((prev) => (prev ? { ...prev, current: result.value } : prev));
+      // The server accepted it, so it's one that can run.
+      setView((prev) => (prev ? { ...prev, current: result.value, unavailable: null } : prev));
     },
     [],
   );
@@ -117,16 +135,16 @@ export function useModelPicker() {
 
 export type ModelPickerState = ReturnType<typeof useModelPicker>;
 
-function ModelRow({ model, selected }: { model: CatalogModel; selected: boolean }) {
-  // ChatGPT models are paid for by the learner's plan, not per token (ADR-015).
-  const price = model.id.startsWith("chatgpt:") ? "your ChatGPT plan" : priceText(model.price);
+function ModelRow({ model, selected, names }: { model: CatalogModel; selected: boolean; names: ProviderNames }) {
+  // ChatGPT models are paid for by the learner's plan, not per token (ADR-015). A custom provider's price is unknown.
+  const price = model.id.startsWith("chatgpt:") ? "your ChatGPT plan" : model.verification ? VERIFICATION[model.verification] : priceText(model.price);
   return (
     <>
       <Check className={cn("mt-0.5 self-start", selected ? "opacity-100" : "opacity-0")} aria-hidden />
       <span className="flex min-w-0 flex-col">
         <span className="truncate">{model.name}</span>
         <span className="text-muted-foreground truncate text-xs">
-          {providerLabel(model.id)} · {model.id.slice(model.id.indexOf(":") + 1)}
+          {providerLabel(model.id, names)} · {providerModelId(model.id)}
           {price && ` · ${price}`}
         </span>
       </span>
@@ -149,21 +167,26 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
       const shown = matches.slice(0, MAX_MATCHES);
       const note = matches.length > MAX_MATCHES ? `First ${MAX_MATCHES} of ${matches.length} matches` : undefined;
       // Grouped by provider once there's more than one; the catalog lists each provider's models together.
-      const providers = [...new Set(shown.map((m) => providerLabel(m.id)))];
+      const providers = [...new Set(shown.map((m) => providerLabel(m.id, view.providers)))];
       if (providers.length < 2) return [{ heading: note, models: shown }];
       return providers.map((provider, i) => ({
         heading: i === 0 && note ? `${note} · ${provider}` : provider,
-        models: shown.filter((m) => providerLabel(m.id) === provider),
+        models: shown.filter((m) => providerLabel(m.id, view.providers) === provider),
       }));
     }
     const pinned = new Set(view.pinned);
     const used = new Set([...view.pinned, ...view.recent]);
     // The learner's ChatGPT plan offers a short list, so all of it shows without searching (ADR-015).
     const plan = view.models.filter((m) => m.id.startsWith("chatgpt:"));
+    // So do the models the learner configured on their own providers (issue #69), under each provider's name.
+    const custom = view.providers
+      .filter((p) => !p.removed)
+      .map((p) => ({ heading: p.name, models: view.models.filter((m) => m.id.startsWith(`${p.id}/`) && !used.has(m.id)) }));
     const own = [
       { heading: "Pinned", models: lookup(view.pinned) },
       { heading: "Recent", models: lookup(view.recent.filter((id) => !pinned.has(id))) },
       { heading: "ChatGPT plan", models: plan.filter((m) => !used.has(m.id)) },
+      ...custom,
       { heading: "Suggested", models: lookup(view.suggested.filter((id) => !id.startsWith("chatgpt:"))) },
     ];
     // The current model is always one keystroke away, even before it's been used.
@@ -176,7 +199,7 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
     return error ? <span className="text-destructive text-xs">{error}</span> : null;
   }
   const current = byId.get(view.current.model);
-  const currentName = modelLabel(view.current.model, view.models);
+  const currentName = modelLabel(view.current.model, view.models, view.providers);
   const efforts = current?.reasoning?.efforts ?? [];
   const defaultEffort = current?.reasoning?.defaultEffort;
   const pinned = view.pinned.includes(view.current.model);
@@ -221,7 +244,7 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
                 <CommandGroup key={section.heading ?? i} heading={section.heading}>
                   {section.models.map((model) => (
                     <CommandItem key={model.id} value={model.id} onSelect={() => pick(model)} className="items-start">
-                      <ModelRow model={model} selected={model.id === view.current.model} />
+                      <ModelRow model={model} selected={model.id === view.current.model} names={view.providers} />
                     </CommandItem>
                   ))}
                 </CommandGroup>
@@ -278,6 +301,8 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
       )}
       {/* OpenAI's guidelines: say when replies use the learner's plan, with a way to manage it (ADR-015). */}
       {view.current.model.startsWith("chatgpt:") && <UsingChatGptPlan />}
+      {/* A removed custom provider isn't silently replaced: the learner chooses the next model. */}
+      {view.unavailable && !error && <span role="alert" className="text-destructive text-xs">{view.unavailable}</span>}
       {error && <span role="alert" className="text-destructive text-xs">{error}</span>}
     </div>
   );

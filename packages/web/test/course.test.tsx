@@ -62,6 +62,8 @@ describe("StartCourseForm", () => {
     suggested: [],
     models: [{ id: "chatgpt:gpt-6.1-sol", name: "GPT-6.1-Sol", contextLength: null, price: null, reasoning: null }],
     catalog: "fresh",
+    providers: [],
+    unavailable: null,
   };
   /** Answers the model picker's request, and `course` for everything else. */
   const serve = (course: Response) =>

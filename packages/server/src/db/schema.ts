@@ -54,6 +54,11 @@ export const runs = sqliteTable(
     model: text("model"),
     /** The reasoning effort it ran with; null leaves it to the model's default. */
     effort: text("effort"),
+    /**
+     * For a custom provider's model (issue #69), a fingerprint of the endpoint it ran against, so private
+     * reasoning metadata never replays to a different destination under the same model id. Null otherwise.
+     */
+    endpoint: text("endpoint"),
     error: text("error"),
     startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
     endedAt: integer("ended_at", { mode: "timestamp_ms" }),
