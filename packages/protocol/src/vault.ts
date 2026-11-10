@@ -96,3 +96,71 @@ export const NoteGraph = z
   })
   .strict();
 export type NoteGraph = z.infer<typeof NoteGraph>;
+
+/** Most notes a graph view draws whole; an import (or filter) with more opens on the local graph instead. */
+export const WHOLE_GRAPH_NOTES = 500;
+/** Most notes, nodes and edges one graph view sends, whatever its mode, so a 10,000-note vault stays drawable. */
+export const MAX_GRAPH_VIEW_NOTES = 500;
+export const MAX_GRAPH_VIEW_NODES = 1_000;
+export const MAX_GRAPH_VIEW_EDGES = 5_000;
+/** Most tags and folders a graph view lists for its filters. */
+export const MAX_GRAPH_FACETS = 200;
+
+export const NoteGraphViewQuery = z
+  .object({
+    /** `auto` draws the whole graph when at most WHOLE_GRAPH_NOTES notes match, and the local graph otherwise. */
+    mode: z.enum(["auto", "local"]).default("auto"),
+    /** The note the local graph is drawn around. Defaults to the matching note with the most connections. */
+    focus: z.string().max(64).optional(),
+    /** How many hops from the focus the local graph reaches. Sharing a tag or concept is one hop, as a link is. */
+    depth: z.coerce.number().int().min(1).max(3).default(2),
+    /** Only notes carrying this tag, or one nested under it (`maths` matches `maths/algebra`). */
+    tag: z.string().max(200).optional(),
+    /** Only notes in this folder or below it, without a trailing `/`. */
+    folder: z.string().max(512).optional(),
+  })
+  .strict();
+export type NoteGraphViewQuery = z.infer<typeof NoteGraphViewQuery>;
+
+export const NoteGraphNodeKind = z.enum(["note", "ghost", "tag", "concept"]);
+export type NoteGraphNodeKind = z.infer<typeof NoteGraphNodeKind>;
+export const NoteGraphEdgeKind = z.enum(["link", "tag", "concept", "prerequisite", "related"]);
+export type NoteGraphEdgeKind = z.infer<typeof NoteGraphEdgeKind>;
+
+/**
+ * What a graph view of an import draws (ADR-014): notes, unresolved links as ghosts, and the tags and concepts that
+ * connect notes. A note's `id` is the note's id; the other kinds' ids are prefixed (`tag:`, `concept:`, `ghost:`).
+ * `notes` counts the matching notes a tag or concept connects, drawn or not,, and `hops` how far a node is from the focus.
+ */
+export const NoteGraphView = z
+  .object({
+    mode: z.enum(["whole", "local"]),
+    focus: z.string().nullable(),
+    depth: z.number().int(),
+    totalNotes: z.number().int(),
+    /** Notes matching the filters, drawn or not. */
+    matchingNotes: z.number().int(),
+    /** Whether the limits left matching nodes or edges out of the drawing. */
+    truncated: z.boolean(),
+    nodes: z.array(
+      z
+        .object({
+          id: z.string(),
+          kind: NoteGraphNodeKind,
+          label: z.string(),
+          path: z.string().optional(),
+          notes: z.number().int().optional(),
+          hops: z.number().int().optional(),
+        })
+        .strict(),
+    ),
+    edges: z.array(z.object({ from: z.string(), to: z.string(), kind: NoteGraphEdgeKind }).strict()),
+    tags: z.array(z.object({ name: z.string(), notes: z.number().int() }).strict()),
+    folders: z.array(z.object({ path: z.string(), notes: z.number().int() }).strict()),
+  })
+  .strict();
+export type NoteGraphView = z.infer<typeof NoteGraphView>;
+
+/** A note found by title or path, for picking one to centre the graph on. */
+export const NoteSummary = z.object({ id: z.string(), title: z.string(), path: z.string() }).strict();
+export type NoteSummary = z.infer<typeof NoteSummary>;
