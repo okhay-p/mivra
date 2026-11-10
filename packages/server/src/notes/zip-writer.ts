@@ -58,7 +58,8 @@ export function zipStream(entries: ZipEntry[], modified: Date = new Date()): Rea
         local.writeUInt16LE(0, 28);
         const header = Buffer.alloc(46);
         header.writeUInt32LE(0x02014b50, 0);
-        header.writeUInt16LE(VERSION, 4);
+        // Made by Unix (3), so readers take the file mode from the external attributes.
+        header.writeUInt16LE((3 << 8) | VERSION, 4);
         header.writeUInt16LE(VERSION, 6);
         header.writeUInt16LE(UTF8_NAMES, 8);
         header.writeUInt16LE(DEFLATE, 10);
@@ -69,7 +70,7 @@ export function zipStream(entries: ZipEntry[], modified: Date = new Date()): Rea
         header.writeUInt32LE(entry.data.byteLength, 24);
         header.writeUInt16LE(name.byteLength, 28);
         // Extra field, comment, disk number and internal attributes stay 0.
-        header.writeUInt32LE(0o100644 << 16, 38);
+        header.writeUInt32LE((0o100644 << 16) >>> 0, 38);
         header.writeUInt32LE(offset, 42);
         central.push(header, name);
         offset += local.byteLength + name.byteLength + data.byteLength;

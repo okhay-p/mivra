@@ -120,7 +120,7 @@ export function escapeInline(text: string): string {
 
 /** A YAML double-quoted string (JSON is valid YAML), without characters some YAML readers treat as line breaks. */
 function yamlString(text: string): string {
-  return JSON.stringify(text.replace(/[\p{Cc}\u0085  ]/gu, " "));
+  return JSON.stringify(text.replace(/[\p{Cc}\u0085\u2028\u2029]/gu, " "));
 }
 
 /** Text for a link's display part, after `|`: nothing that could end the link early. */
