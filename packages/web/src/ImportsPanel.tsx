@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
+import { ExportVault } from "./ExportVault.js";
 import { cancelDistillation, deleteImport, importVaultFiles, importVaultZip, listImports, startDistillation, type ImportTarget } from "./api.js";
 import { readPickedVault, type PickedVault } from "./vault-files.js";
 
@@ -95,6 +96,7 @@ export function ImportsPanel({ open, onOpenChange, onOpenGraph }: { open: boolea
               Import a vault
             </Button>
           )}
+          {imports && imports.length > 0 && <ExportVault />}
           {error && <p className="text-destructive text-sm">{error}</p>}
           {!imports && !error && (
             <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status">
@@ -523,6 +525,7 @@ const reasonLabel: Record<VaultImportResult["skipped"][number]["reason"], string
   duplicate: "duplicate",
   too_long: "too long",
   symlink: "link to another file",
+  generated: "exported by Mivra",
 };
 
 function ResultSummary({ result, source, replaced }: { result: VaultImportResult; source: Source; replaced: boolean }) {

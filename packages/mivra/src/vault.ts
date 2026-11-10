@@ -121,7 +121,7 @@ export async function importObsidian(
   io.out(
     `${existing ? "Re-imported" : "Imported"} "${result.import.name}": ${result.added} added, ${result.updated} updated, ${result.removed} removed, ${result.unchanged} unchanged. ${plural(result.import.noteCount, "note")} in all.`,
   );
-  const skipped = [...vault.tooLong.map((path) => `${path} (over ${MAX_NOTE_CHARS.toLocaleString("en")} characters)`), ...result.skipped.map((s) => `${s.path} (${s.reason.replace("_", " ")})`)];
+  const skipped = [...vault.tooLong.map((path) => `${path} (over ${MAX_NOTE_CHARS.toLocaleString("en")} characters)`), ...result.skipped.map((s) => `${s.path} (${s.reason === "generated" ? "exported by Mivra" : s.reason.replace("_", " ")})`)];
   const skippedCount = vault.tooLong.length + result.skippedCount;
   if (skippedCount > 0) io.out(`Skipped ${plural(skippedCount, "file")}: ${skipped.slice(0, 5).join(", ")}${skippedCount > 5 ? ", …" : ""}.`);
   if (result.truncated) io.out("Some links or tags were left out: a note or the vault had more than Mivra keeps.");

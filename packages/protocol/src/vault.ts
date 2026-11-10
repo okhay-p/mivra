@@ -50,9 +50,10 @@ export type VaultImportView = z.infer<typeof VaultImportView>;
 
 /**
  * Why a file wasn't imported. `too_long` is a note over MAX_NOTE_CHARS and `symlink` a link inside a zipped
- * vault; both are reported by the zip upload and by clients that check sizes before sending.
+ * vault; both are reported by the zip upload and by clients that check sizes before sending. `generated` is a file Mivra
+ * exported itself (frontmatter `mivra: generated`), so re-importing a vault with the export in it adds no duplicates.
  */
-export const SkipReason = z.enum(["not_markdown", "hidden", "bad_path", "duplicate", "too_long", "symlink"]);
+export const SkipReason = z.enum(["not_markdown", "hidden", "bad_path", "duplicate", "too_long", "symlink", "generated"]);
 export type SkipReason = z.infer<typeof SkipReason>;
 
 /** What one import or re-import changed. `skipped` lists at most a few paths; `skippedCount` counts them all. */

@@ -126,3 +126,26 @@ describe("MemoryPanel", () => {
     expect(init?.method).toBe("DELETE");
   });
 });
+
+describe("Export to Obsidian", () => {
+  it("downloads the zip with the API token and names it as the server says", async () => {
+    const createObjectURL = vi.fn(() => "blob:export");
+    Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const zip = new Response(new Uint8Array([0x50, 0x4b]), { headers: { "content-type": "application/zip", "content-disposition": 'attachment; filename="Mivra-2026-11-10.zip"' } });
+    const fetch = openPanel(json([memory()]), zip);
+    fireEvent.click(await button("Export to Obsidian"));
+    expect(await screen.findByText(/^Downloaded Mivra-2026-11-10\.zip\./)).toBeTruthy();
+    const [url, init] = fetch.mock.calls[1]!;
+    expect(String(url)).toMatch(/\/api\/export\/obsidian$/);
+    expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer\b/);
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    expect(click).toHaveBeenCalledOnce();
+  });
+
+  it("shows the server's error", async () => {
+    openPanel(json([memory()]), json({ error: "There's too much to export as one zip." }, 413));
+    fireEvent.click(await button("Export to Obsidian"));
+    expect(await screen.findByText("There's too much to export as one zip.")).toBeTruthy();
+  });
+});

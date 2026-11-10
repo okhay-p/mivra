@@ -49,7 +49,9 @@ import { courseLessons, createLessonGenerator, lessonRevision, lessonView, recon
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
 import { noteGraphView } from "./notes/graph-view.js";
+import { exportVault } from "./notes/vault-export.js";
 import { importVault, importView, resolveGraph } from "./notes/vault-import.js";
+import { zipStream } from "./notes/zip-writer.js";
 import { createZipImporter, type UnzipVault, type ZipImportError } from "./notes/vault-zip-import.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
 import { createKnowledgeStore } from "./store/knowledge-store.js";
@@ -1054,6 +1056,18 @@ const getConceptGraph = createRoute({
   },
 });
 
+/** Documented only: the handler streams the zip. */
+const exportObsidian = createRoute({
+  method: "get",
+  path: "/export/obsidian",
+  description:
+    "What Mivra knows, as a .zip holding a `Mivra/` folder (`Concepts/`, `Memories/`) to drop into an Obsidian vault (ADR-014). The learner's own notes aren't in it; concept notes link to them by title. Every file has `mivra: generated` in its frontmatter, so importing the vault again skips them. Memories held until a check is answered are left out.",
+  responses: {
+    200: { description: "The zip", content: { "application/zip": { schema: z.string().openapi({ format: "binary" }) } } },
+    413: errorResponse("Too much to export"),
+  },
+});
+
 const getNote = createRoute({
   method: "get",
   path: "/notes/{id}",
@@ -1331,6 +1345,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   base.openAPIRegistry.registerPath(uploadDocument);
   base.openAPIRegistry.registerPath(createImportFromZip);
   base.openAPIRegistry.registerPath(replaceImportFromZip);
+  base.openAPIRegistry.registerPath(exportObsidian);
   // A vault arrives as one JSON body; refuse anything larger before it's read, let alone parsed.
   const vaultBodyLimit = bodyLimit({
     maxSize: MAX_VAULT_BYTES,
@@ -1745,6 +1760,22 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       const outcome = await importZip({ new: true }, uploadOf(c), c.req.raw.signal);
       if (!outcome.ok) return c.json({ error: outcome.error.message }, zipImportErrorStatus[outcome.error.kind]);
       return c.json(outcome.result, 201);
+    })
+    .get("/export/obsidian", async (c) => {
+      const exportedAt = new Date();
+      const files = await exportVault({ store, knowledge, notes: noteStore, checkKinds: registry.checkKinds(), exportedAt });
+      let body: ReadableStream<Uint8Array>;
+      try {
+        body = zipStream(files.map((f) => ({ name: f.path, data: Buffer.from(f.text, "utf8") })), exportedAt);
+      } catch (error) {
+        if (error instanceof RangeError) return c.json({ error: "There's too much to export as one zip." }, 413);
+        throw error;
+      }
+      return c.body(body, 200, {
+        "content-type": "application/zip",
+        "content-disposition": `attachment; filename="Mivra-${exportedAt.toISOString().slice(0, 10)}.zip"`,
+        "cache-control": "no-store",
+      });
     })
     .put("/imports/:id/zip", async (c) => {
       const outcome = await importZip({ importId: c.req.param("id") }, uploadOf(c), c.req.raw.signal);

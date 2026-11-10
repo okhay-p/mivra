@@ -393,3 +393,34 @@ export const testCustomModel = (id: string, model: string, signal?: AbortSignal)
       return (await res.json()) as { result: { ok: boolean; reason?: string; message: string }; providers: ProviderKeysView };
     },
   );
+
+/**
+ * Downloads what Mivra knows as a zip for an Obsidian vault (ADR-014): concepts and memories, never the learner's notes.
+ * Fetched with the API token, then saved through a temporary link, since a plain link can't send the token.
+ */
+export async function downloadVaultExport(): Promise<{ ok: true; filename: string } | { ok: false; error: string }> {
+  let res: Response;
+  try {
+    res = await fetch(`${window.location.origin}/api/export/obsidian`, { headers: authHeaders });
+  } catch {
+    return { ok: false, error: "Can't reach the Mivra server." };
+  }
+  if (!res.ok) return { ok: false, error: await errorMessage(res) };
+  const filename = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? "Mivra.zip";
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch {
+    return { ok: false, error: "The download didn't finish. Try again." };
+  }
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  // Revoked later: some browsers start reading the blob only after click() returns.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return { ok: true, filename };
+}
