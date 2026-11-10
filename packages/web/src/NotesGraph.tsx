@@ -18,6 +18,8 @@ const ALL = "__all";
 const ZOOM_STEP = 1.25;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3;
+/** Fitting enlarges a small graph, but only so far: a handful of notes needn't fill a wide screen. */
+const FIT_MAX_ZOOM = 1.6;
 /** Under this many nodes every label is drawn; above it, only those near the selection, so the drawing stays legible. */
 const ALL_LABELS_NODES = 150;
 /** The smallest a node's hit area gets however far the graph is zoomed out. */
@@ -407,7 +409,7 @@ function NotesGraphDrawing({
   const fit = () => {
     const box = scroller.current;
     if (!box || box.clientWidth === 0) return 1;
-    return clampZoom(Math.min(1, box.clientWidth / layout.width, box.clientHeight / layout.height));
+    return clampZoom(Math.min(FIT_MAX_ZOOM, box.clientWidth / layout.width, box.clientHeight / layout.height));
   };
   // A new view opens fitted to the box, and centred on its focus or selection when it's larger than that.
   const selectedIndex = selected === undefined ? undefined : indexOf.get(selected);
@@ -492,14 +494,15 @@ function NotesGraphDrawing({
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         ref={scroller}
-        className="bg-background min-h-64 flex-1 cursor-grab overflow-auto active:cursor-grabbing"
+        // Flex with auto margins centres a drawing smaller than the box, and starts a larger one at its edge.
+        className="bg-background flex min-h-64 flex-1 cursor-grab overflow-auto active:cursor-grabbing"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
         data-testid="notes-graph-scroll"
       >
-        <div className="relative" style={{ width: layout.width * zoom, height: layout.height * zoom }} data-testid="notes-graph-canvas" data-zoom={zoom.toFixed(3)}>
+        <div className="relative m-auto shrink-0" style={{ width: layout.width * zoom, height: layout.height * zoom }} data-testid="notes-graph-canvas" data-zoom={zoom.toFixed(3)}>
           <svg viewBox={`0 0 ${layout.width} ${layout.height}`} className="absolute inset-0 size-full" aria-hidden="true">
             <defs>
               <marker id={`${description}-arrow`} viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
