@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { deleteImportedMemories, deleteMemory, editMemory, listMemories } from "./api.js";
+import { ExportVault } from "./ExportVault.js";
 
 const SECTIONS: { kind: MemoryKind; title: string }[] = [
   { kind: "goal", title: "Goals" },
@@ -116,6 +117,7 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
                 </section>
               ) : null;
             })}
+          {memories && memories.length > 0 && <ExportVault />}
         </div>
       </SheetContent>
     </Sheet>
