@@ -97,6 +97,19 @@ describe("LessonPage", () => {
     render(<LessonPage lessonId="l1" nextTopic={undefined} onFinished={() => {}} onStartNext={async () => {}} />);
     expect(await screen.findByText("The lesson stopped before it was finished.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Continue writing" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Lesson model settings" })).toBeNull();
+  });
+
+  it("links to Settings when the lesson model chosen there can't be used", async () => {
+    const message = "The model chosen for lessons in Settings (openrouter:vendor/gone) can't be used: it left the list.";
+    serve([{ ...base, status: "failed", error: message, errorAction: "lesson-model" }]);
+    const opened = vi.fn();
+    window.addEventListener("mivra:open-settings", opened);
+    render(<LessonPage lessonId="l1" nextTopic={undefined} onFinished={() => {}} onStartNext={async () => {}} />);
+    expect(await screen.findByText(message)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Lesson model settings" }));
+    expect(opened).toHaveBeenCalledOnce();
+    window.removeEventListener("mivra:open-settings", opened);
   });
 });
 

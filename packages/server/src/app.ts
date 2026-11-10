@@ -311,7 +311,7 @@ const listModels = createRoute({
 const selectModel = createRoute({
   method: "put",
   path: "/settings/model",
-  description: "Choose the model and reasoning effort for every later run: chat, syllabus and lessons. A null effort uses the model's default. A run already streaming keeps its model.",
+  description: "Choose the main model and reasoning effort for every later run: chat, syllabus, and lessons unless their task is overridden (`/settings/tasks`). A null effort uses the model's default. A run already streaming keeps its model.",
   request: { body: { content: { "application/json": { schema: SelectionInput } } } },
   responses: {
     200: { description: "The saved selection", content: { "application/json": { schema: Selection } } },
