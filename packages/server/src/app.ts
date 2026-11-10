@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import type { LanguageModel } from "ai";
@@ -47,6 +48,9 @@ import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
 import { createNoteStore, type NoteRow } from "./store/note-store.js";
 import { createSettingsStore } from "./store/settings-store.js";
 import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
+import { createUsageStore } from "./store/usage-store.js";
+import { BUILT_IN_PROVIDERS, billingOf, providerOf, summarise, usageKindList } from "./usage/accounting.js";
+import { CustomPrice, createCustomPrices, createUsageTracker, type ModelFacts } from "./usage/tracker.js";
 
 export interface AppDeps {
   db: Db;
@@ -578,6 +582,93 @@ const testCustomModel = createRoute({
     404: errorResponse("No such provider"),
   },
 });
+const Price = z
+  .object({ input: z.number(), output: z.number(), cacheRead: z.number().optional(), cacheWrite: z.number().optional() })
+  .openapi("ModelPrice", { description: "US dollars per million tokens; cached input rates only when listed" });
+const Totals = {
+  calls: z.number(),
+  incomplete: z.number().openapi({ description: "Calls that failed or were cancelled; what they reported still counts" }),
+  unreported: z.number().openapi({ description: "Calls that didn't report their input or output tokens: unknown, not zero" }),
+  input: z.number().nullable().openapi({ description: "Input tokens, cached ones included; null when no call reported them" }),
+  cacheRead: z.number().nullable().openapi({ description: "Of the input, read from the provider's cache" }),
+  cacheWrite: z.number().nullable().openapi({ description: "Of the input, written to the provider's cache" }),
+  output: z.number().nullable().openapi({ description: "Output tokens, reasoning included" }),
+  reasoning: z.number().nullable().openapi({ description: "Of the output, reasoning" }),
+  total: z.number().nullable().openapi({ description: "Input plus output, over calls that reported both" }),
+  reportedCost: z.number().nullable().openapi({ description: "API spending the provider reported, in US dollars" }),
+  estimatedCost: z.number().nullable().openapi({ description: "API spending estimated from the price known when each call ended, for calls with no reported cost" }),
+  unknownCost: z.number().openapi({ description: "API calls whose cost is neither reported nor estimable" }),
+  apiEquivalent: z.number().nullable().openapi({ description: "Subscription calls only: what they'd cost at published API rates. Not a charge" }),
+  uncompared: z.number().openapi({ description: "Subscription calls with no published API price to compare with" }),
+};
+const Billing = z.enum(["api", "subscription"]);
+const UsageTotalsView = z.object(Totals).openapi("UsageTotals");
+const UsageView = z
+  .object({
+    since: z.string().datetime().nullable().openapi({ description: "When the oldest kept record started: usage is counted from then on" }),
+    from: z.string().datetime().nullable(),
+    totals: UsageTotalsView,
+    api: UsageTotalsView,
+    subscription: UsageTotalsView,
+    byProvider: z.array(z.object({ ...Totals, key: z.string(), label: z.string(), billing: Billing })),
+    byModel: z.array(z.object({ ...Totals, key: z.string(), label: z.string(), provider: z.string(), providerLabel: z.string(), billing: Billing })),
+    byKind: z.array(z.object({ ...Totals, key: z.string(), label: z.string(), kind: z.enum(usageKindList) })),
+    sessions: z.array(z.object({ ...Totals, key: z.string(), label: z.string(), deleted: z.boolean(), lastAt: z.string().datetime() })),
+    runs: z.array(z.object({
+      ...Totals,
+      key: z.string(),
+      label: z.string(),
+      kind: z.enum(usageKindList),
+      session: z.string().nullable().openapi({ description: "The chat or lesson it belongs to, or null for a model test" }),
+      model: z.string(),
+      billing: Billing,
+      status: z.enum(["completed", "failed", "cancelled"]),
+      startedAt: z.string().datetime(),
+    })),
+    days: z.array(z.object({ day: z.string(), api: z.number(), subscription: z.number(), calls: z.number() })),
+    prices: z.array(z.object({
+      model: z.string(),
+      label: z.string(),
+      providerLabel: z.string(),
+      billing: Billing,
+      published: Price.nullable().openapi({ description: "The model list's current price (for a ChatGPT plan model, its API counterpart's)" }),
+      custom: Price.nullable().openapi({ description: "The learner's own price, which wins over the published one" }),
+    })).openapi({ description: "Models a price can be set for: those in the usage history, custom providers' models and the models in use" }),
+  })
+  .openapi("Usage");
+
+const getUsage = createRoute({
+  method: "get",
+  path: "/usage",
+  description:
+    "Token usage and costs Mivra has recorded (issue #70), added up by provider, model, kind, session, run and day. Only Mivra's own calls since recording began, never account-wide usage or remaining allowance.",
+  request: {
+    query: z.object({
+      from: z.string().datetime().optional().openapi({ description: "Only calls that started at or after this time" }),
+      tz: z.coerce.number().int().min(-1000).max(1000).optional().openapi({ description: "The browser's Date#getTimezoneOffset(), for local days" }),
+    }),
+  },
+  responses: { 200: { description: "The usage summary", content: { "application/json": { schema: UsageView } } } },
+});
+
+const clearUsage = createRoute({
+  method: "delete",
+  path: "/usage",
+  description: "Delete every usage record. Conversations and provider settings are kept, and provider billing or quotas aren't affected; usage counts again from the next call.",
+  responses: { 200: { description: "How many records were deleted", content: { "application/json": { schema: z.object({ deleted: z.number() }) } } } },
+});
+
+const setUsagePrice = createRoute({
+  method: "put",
+  path: "/usage/prices",
+  description: "Set or (with a null price) remove the learner's own price for a model. It applies to calls that end from now on; recorded costs never change.",
+  request: { body: { content: { "application/json": { schema: z.object({ model: ModelId, price: CustomPrice.nullable() }) } } } },
+  responses: {
+    200: { description: "Saved", content: { "application/json": { schema: z.object({ model: z.string(), price: Price.nullable() }) } } },
+    400: errorResponse("Too many custom prices, or a ChatGPT plan model"),
+  },
+});
+
 const notOffered = errorResponse("This server doesn't offer sign-in with ChatGPT");
 const startChatGptSignIn = createRoute({
   method: "post",
@@ -999,16 +1090,17 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   const fromEnv = "This key comes from an environment variable. Change or unset it there.";
   const notLocalProvider = "Providers can only be changed on the computer running Mivra.";
   const builtInCatalog = modelOptions.catalog ?? staticCatalog([]);
+  // Custom providers' models join the catalog, each under its own provider (issue #69).
+  const catalog: ModelCatalog = {
+    async list() {
+      const { models: listed, state } = await builtInCatalog.list();
+      const own = custom.catalog();
+      return { models: [...own, ...listed], state: state === "unavailable" && own.length > 0 ? "stale" : state };
+    },
+  };
   const models = createModelSettings({
     settings: settingsStore,
-    // Custom providers' models join the catalog, each under its own provider (issue #69).
-    catalog: {
-      async list() {
-        const { models: listed, state } = await builtInCatalog.list();
-        const own = custom.catalog();
-        return { models: [...own, ...listed], state: state === "unavailable" && own.length > 0 ? "stale" : state };
-      },
-    },
+    catalog,
     defaults: modelOptions.defaults,
     suggested: modelOptions.suggested,
   });
@@ -1065,8 +1157,72 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   lessons.recoverInterrupted();
   const registry = createCapabilityRegistry(plugins);
   const noteStore = createNoteStore(db);
-  const turns = createTurnRunner({ store, registry, model: resolveModel, models: runModels, lessons, notes: noteStore });
-  const generator = createLessonGenerator({ store, lessons, registry, model: resolveModel, models: runModels, notes: noteStore });
+  // Usage accounting (issue #70): every model call is recorded, with the price known when it ended.
+  const usageStore = createUsageStore(db);
+  const customPrices = createCustomPrices(settingsStore);
+  const providerLabel = (provider: string) =>
+    (provider.startsWith(CUSTOM_PREFIX) ? custom.names().find((p) => p.id === provider)?.name : undefined) ?? BUILT_IN_PROVIDERS[provider];
+  const describeModel = async (id: string): Promise<ModelFacts> => {
+    const own = customPrices.get(id);
+    const listed = (await catalog.list()).models.find((m) => m.id === id);
+    const facts = { modelLabel: listed?.name ?? null, providerLabel: providerLabel(providerOf(id)) ?? providerOf(id) };
+    // A ChatGPT plan model has no price of its own; its API counterpart's published price is only a comparison, so a
+    // learner's own price never stands in for it (issue #70: "at published API rates").
+    if (id.startsWith("chatgpt:")) return { ...facts, price: listed?.apiPrice ? { ...listed.apiPrice, source: "catalog" } : null };
+    return { ...facts, price: own ? { ...own, source: "custom" } : listed?.price ? { ...listed.price, source: "catalog" } : null };
+  };
+  const usage = createUsageTracker({ store: usageStore, describe: describeModel });
+  const turns = createTurnRunner({ store, registry, model: resolveModel, models: runModels, lessons, notes: noteStore, usage });
+  const generator = createLessonGenerator({ store, lessons, registry, model: resolveModel, models: runModels, notes: noteStore, usage });
+  /** A session's name on the Usage page, read now: usage records keep no titles, and a deleted chat has none. */
+  const sessionLabel = (id: string) => {
+    const lesson = lessons.findLessonBySession(id);
+    if (lesson) return { label: `Lesson: ${lesson.topicTitle}`, deleted: false };
+    const session = store.findSession(id);
+    return session ? { label: session.title, deleted: false } : { label: "Deleted chat", deleted: true };
+  };
+  const usageView = async (from: Date | undefined, offsetMinutes: number) => {
+    // A call that has just ended is still being written; wait for it, so a page opened right after a reply shows it.
+    await usage.settled();
+    const rows = usageStore.list(from);
+    const summary = summarise(rows, { offsetMinutes, providerLabel });
+    const listed = (await catalog.list()).models;
+    const own = customPrices.all();
+    // Models a price can be set for: anything recorded, every custom provider's model, and the models in use.
+    const priceable = new Set<string>([
+      ...usageStore.list().map((r) => r.model),
+      ...custom.catalog().map((m) => m.id),
+      models.current().model,
+      ...modelTasks.flatMap((task) => models.override(task)?.model ?? []),
+      ...Object.keys(own),
+    ]);
+    const recordedLabels = new Map(rows.map((r) => [r.model, r.modelLabel] as const));
+    return {
+      since: usageStore.oldest()?.toISOString() ?? null,
+      from: from?.toISOString() ?? null,
+      totals: summary.totals,
+      api: summary.api,
+      subscription: summary.subscription,
+      byProvider: summary.byProvider,
+      byModel: summary.byModel,
+      byKind: summary.byKind,
+      sessions: summary.bySession.map(({ lastAt, ...group }) => ({ ...group, ...sessionLabel(group.key), lastAt: lastAt.toISOString() })),
+      runs: summary.runs.map(({ startedAt, sessionId, ...run }) => ({ ...run, session: sessionId ? sessionLabel(sessionId).label : null, startedAt: startedAt.toISOString() })),
+      days: summary.days,
+      prices: [...priceable].map((model) => {
+        const entry = listed.find((m) => m.id === model);
+        const published = model.startsWith("chatgpt:") ? entry?.apiPrice : entry?.price;
+        return {
+          model,
+          label: entry?.name ?? recordedLabels.get(model) ?? model,
+          providerLabel: providerLabel(providerOf(model)) ?? providerOf(model),
+          billing: billingOf(model),
+          published: published ?? null,
+          custom: own[model] ?? null,
+        };
+      }),
+    };
+  };
   lessons.onChange(generator.changed);
   const lessonJson = (id: string) => {
     const row = lessons.findLesson(id);
@@ -1334,7 +1490,10 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       let result;
       try {
         // Closing the request (the learner cancelled) aborts the test.
-        result = await custom.test(c.req.valid("param").id, c.req.valid("json").model, c.req.raw.signal);
+        // A test spends tokens like any other call, so it's counted as usage (issue #70).
+        const testRun = randomUUID();
+        result = await custom.test(c.req.valid("param").id, c.req.valid("json").model, c.req.raw.signal, (model) =>
+          usage.middleware({ kind: "test", selection: { model, effort: null }, runId: testRun }));
       } catch (error) {
         if (error instanceof CustomProviderNotFound) return c.json({ error: "No such provider" }, 404);
         if (error instanceof CustomProviderError) return c.json({ error: error.message }, 400);
@@ -1390,6 +1549,18 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .openapi(checkChatGpt, async (c) => {
       if (!chatgpt) return c.json({ error: "Sign-in with ChatGPT isn't offered here" }, 404);
       return c.json(await checkChatGptSignIn(chatgpt, fetchImpl), 200);
+    })
+    .openapi(getUsage, async (c) => {
+      const { from, tz } = c.req.valid("query");
+      return c.json(await usageView(from ? new Date(from) : undefined, tz ?? 0), 200);
+    })
+    .openapi(clearUsage, (c) => c.json({ deleted: usage.clear(() => usageStore.clear()) }, 200))
+    .openapi(setUsagePrice, (c) => {
+      const { model, price } = c.req.valid("json");
+      // A plan model is compared only at published API rates (issue #70), so a price of the learner's own does nothing.
+      if (price && billingOf(model) === "subscription") return c.json({ error: "A ChatGPT plan model is compared only at published API prices." }, 400);
+      if (!customPrices.set(model, price)) return c.json({ error: "Too many custom prices. Remove one you no longer need first." }, 400);
+      return c.json({ model, price }, 200);
     })
     .openapi(setPinnedModels, (c) => c.json({ pinned: models.setPinned(c.req.valid("json").models) }, 200))
     .openapi(listMemories, (c) => c.json(store.listMemoriesForLearner(registry.checkKinds()).map(toMemoryJson), 200))

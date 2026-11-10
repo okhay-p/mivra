@@ -16,6 +16,11 @@ it("survives an OpenRouter socket failure after client disconnect and completes 
   let held: ServerResponse | undefined;
   const provider = createServer((request, response) => {
     request.resume();
+    // The model list (read for the price of a call's usage record, issue #70) isn't the call under test.
+    if (request.url?.endsWith("/models")) {
+      response.writeHead(200, { "content-type": "application/json" });
+      return response.end('{"data":[]}');
+    }
     response.writeHead(200, { "content-type": "text/event-stream" });
     const chunk = (content: string, finish: string | null = null) => `data: ${JSON.stringify({
       id: "fake", object: "chat.completion.chunk", created: 1, model: "fake",

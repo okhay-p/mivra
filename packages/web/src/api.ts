@@ -241,6 +241,27 @@ export const setModelTask = (task: ModelTaskId, selection: ModelSelection) =>
 export const resetModelTask = (task: ModelTaskId) =>
   request(() => api.settings.tasks[":task"].$delete({ param: { task } }), async (res) => (await res.json()) as ModelTaskView);
 
+/** Recorded token usage and costs (issue #70), added up for the page. Only Mivra's own calls, never account-wide usage. */
+export type UsageView = InferResponseType<typeof api.usage.$get, 200>;
+export type UsageTotals = UsageView["totals"];
+export type ModelPriceInput = { input: number; output: number; cacheRead?: number; cacheWrite?: number };
+
+export const getUsage = (from: Date | null) =>
+  request(
+    () => api.usage.$get({ query: { ...(from ? { from: from.toISOString() } : {}), tz: String(new Date().getTimezoneOffset()) } }),
+    async (res) => (await res.json()) as UsageView,
+  );
+
+/** Deletes usage records only: conversations, providers and provider billing are untouched. */
+export const clearUsage = () => request(() => api.usage.$delete(), async (res) => (await res.json()) as { deleted: number });
+
+/** Sets the learner's own price for a model, or with null removes it. Applies to calls from now on. */
+export const setUsagePrice = (model: string, price: ModelPriceInput | null) =>
+  request(() => api.usage.prices.$put({ json: { model, price } }), async (res) => (await res.json()) as { model: string });
+
+/** Asks the app to open the Usage page, from anywhere (Settings, say). */
+export const OPEN_USAGE = "mivra:open-usage";
+
 /** Asks the app to open Settings, from anywhere (a failed lesson's "Lesson model settings", say). */
 export const OPEN_SETTINGS = "mivra:open-settings";
 

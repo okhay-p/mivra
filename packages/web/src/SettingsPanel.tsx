@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
-import { getModelTasks, resetModelTask, setModelTask, type ModelSelection, type ModelTaskId, type ModelTaskView } from "./api.js";
+import { OPEN_USAGE, getModelTasks, resetModelTask, setModelTask, type ModelSelection, type ModelTaskId, type ModelTaskView } from "./api.js";
 import { ModelPicker, modelLabel, useModelPicker, type ModelPickerState } from "./ModelPicker.js";
 
 /** What each overridable task does, as Settings describes it. */
@@ -30,6 +30,19 @@ export function SettingsPanel({ open, onOpenChange }: { open: boolean; onOpenCha
           <SheetDescription>Settings apply from the next reply or lesson; anything already being written keeps its model.</SheetDescription>
         </SheetHeader>
         {open && <ModelsSection />}
+        {open && (
+          <section aria-labelledby="settings-usage" className="flex flex-col gap-2 px-4 pb-4">
+            <h3 id="settings-usage" className="font-heading text-base font-medium">Usage</h3>
+            <p className="text-muted-foreground text-sm">
+              Tokens and costs of Mivra's model calls, custom prices and clearing the history are on the Usage page.
+            </p>
+            <div>
+              <Button type="button" variant="outline" size="sm" onClick={() => window.dispatchEvent(new Event(OPEN_USAGE))}>
+                Open Usage
+              </Button>
+            </div>
+          </section>
+        )}
       </SheetContent>
     </Sheet>
   );

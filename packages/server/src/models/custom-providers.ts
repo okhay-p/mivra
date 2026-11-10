@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { APICallError, stepCountIs, streamText, tool, wrapLanguageModel, type LanguageModel } from "ai";
+import { APICallError, stepCountIs, streamText, tool, wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from "ai";
 import { z } from "zod";
 import { ApiKey, type CredentialStore } from "../credentials.js";
 import type { ModelSelection } from "../model.js";
@@ -557,8 +557,11 @@ export function createCustomProviders({ settings, credentials, env = () => undef
     return parseModelList(body);
   }
 
+  const observed = (built: LanguageModel, observe?: LanguageModelMiddleware): LanguageModel =>
+    observe && typeof built !== "string" ? wrapLanguageModel({ model: built, middleware: observe }) : built;
+
   /** A streamed call that should make one tool call and then continue after its result. */
-  async function probe(resolved: Resolved & { baseUrl: string }, model: StoredModel, signal?: AbortSignal): Promise<TestResult> {
+  async function probe(resolved: Resolved & { baseUrl: string }, model: StoredModel, signal?: AbortSignal, observe?: LanguageModelMiddleware): Promise<TestResult> {
     const number = 1000 + Math.floor(Math.random() * 9000);
     let called = false;
     let continued = false;
@@ -567,7 +570,7 @@ export function createCustomProviders({ settings, credentials, env = () => undef
     const abort = signal ? AbortSignal.any([signal, timeout]) : timeout;
     try {
       const result = streamText({
-        model: buildModel(resolved, model),
+        model: observed(buildModel(resolved, model), observe),
         system: "You are checking that tool calling works. Follow the instructions exactly.",
         prompt: `Call the record_number tool once with the number ${number}. After it returns, reply with the single word: done.`,
         tools: {
@@ -729,13 +732,14 @@ export function createCustomProviders({ settings, credentials, env = () => undef
      * Checks that a configured model does what Mivra needs: a streamed Chat Completions call that makes a tool call,
      * then continues after the tool's result. It spends a few tokens. The result is kept for this URL and key only.
      */
-    async test(id: string, modelId: string, signal?: AbortSignal): Promise<TestResult> {
+    async test(id: string, modelId: string, signal?: AbortSignal, observe?: (model: string) => LanguageModelMiddleware): Promise<TestResult> {
       const provider = find(id);
       if (!provider) throw new CustomProviderNotFound();
       if (!provider.models.some((m) => m.id === modelId)) throw new CustomProviderError(`Add ${modelId} to ${provider.name}'s models first.`);
       const { resolved, model } = runnable(customModelId(id, modelId));
       const fingerprint = credentialFingerprint(resolved.baseUrl, resolved.key);
-      const result = await probe(resolved, model, signal);
+      // `observe` records the test's calls as usage (issue #70): a test spends tokens like any other call.
+      const result = await probe(resolved, model, signal, observe?.(customModelId(id, modelId)));
       // A cancelled test says nothing about the model; the earlier result stands.
       if (!result.ok && result.reason === "cancelled") return result;
       const now = find(id);

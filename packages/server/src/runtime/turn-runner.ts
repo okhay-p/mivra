@@ -18,6 +18,7 @@ import type { LessonStore } from "../store/lesson-store.js";
 import type { NoteStore } from "../store/note-store.js";
 import { callOptionsFor, type ModelSelection } from "../model.js";
 import type { ModelSettings } from "../models/selection.js";
+import type { UsageTracker } from "../usage/tracker.js";
 import { Conflict, type ReplyMetadata, type RunStatus, type SessionStore } from "../store/session-store.js";
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
@@ -142,6 +143,8 @@ export interface TurnRunnerDeps {
   /** The learner's imported notes (ADR-014), searched each turn by the default context. */
   notes?: NoteStore;
   assembleContext?: AssembleContext;
+  /** Records each model call's token usage (issue #70). */
+  usage?: Pick<UsageTracker, "middleware">;
 }
 
 /** Why a turn couldn't start. The HTTP layer maps these to status codes. */
@@ -225,7 +228,7 @@ function continuationEvent(): UIMessage {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, models, lessons, notes, assembleContext = defaultAssembleContext(store, registry, lessons, notes) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, models, lessons, notes, usage, assembleContext = defaultAssembleContext(store, registry, lessons, notes) }: TurnRunnerDeps) {
   type ActiveTurn = {
     controller: AbortController;
     stopId: string;
@@ -384,7 +387,11 @@ export function createTurnRunner({ store, registry, model, models, lessons, note
       const hasOutput = () => hasReplyText || turnTools.viewsByToolCall.size > 0;
       // If the client disconnects or stops, abort the model call; the run is recorded as cancelled.
       const result = streamText({
-        model: typeof languageModel === "string" ? languageModel : wrapLanguageModel({ model: languageModel, middleware: containStreamErrors }),
+        model: typeof languageModel === "string" ? languageModel : wrapLanguageModel({
+          model: languageModel,
+          // Usage sits inside, next to the provider, so it sees errors before they become error parts.
+          middleware: [containStreamErrors, ...(usage ? [usage.middleware({ kind: continuation ? "continuation" : "chat", selection, sessionId, runId })] : [])],
+        }),
         instructions: assembled.instructions ? `${INSTRUCTIONS}\n\n${assembled.instructions}` : INSTRUCTIONS,
         messages: assembled.messages,
         tools: turnTools.tools,

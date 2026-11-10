@@ -15,6 +15,7 @@ import { TaskModelError, type ModelTask } from "../models/selection.js";
 import type { LessonRow, LessonStore } from "../store/lesson-store.js";
 import type { NoteStore } from "../store/note-store.js";
 import type { SessionStore } from "../store/session-store.js";
+import type { UsageTracker } from "../usage/tracker.js";
 import { artifactView } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 import { errorText } from "./errors.js";
@@ -56,6 +57,8 @@ export interface LessonDeps {
   models: { forTask(task: ModelTask): Promise<ModelSelection> };
   /** The learner's imported notes (ADR-014), searched by each lesson's topic. */
   notes?: NoteStore;
+  /** Records each model call's token usage as background generation (issue #70). */
+  usage?: Pick<UsageTracker, "middleware">;
 }
 
 /** A lesson as the client sees it; artifact sections carry their public views. */
@@ -164,7 +167,7 @@ export function reconcileCompletion(courseId: string, deps: Pick<LessonDeps, "st
 }
 
 /** Generates lessons, one at a time per lesson, and lets clients wait for the next change. */
-export function createLessonGenerator({ store, lessons, registry, model, models, notes }: LessonDeps) {
+export function createLessonGenerator({ store, lessons, registry, model, models, notes, usage }: LessonDeps) {
   /** Lessons being generated, each with the controller that stops it. */
   const active = new Map<string, AbortController>();
   const waiters = new Map<string, Set<() => void>>();
@@ -363,7 +366,10 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
       runId = store.startRun(session, message, selection);
       let streamError: unknown;
       const result = streamText({
-        model: typeof languageModel === "string" ? languageModel : wrapLanguageModel({ model: languageModel, middleware: containStreamErrors }),
+        model: typeof languageModel === "string" ? languageModel : wrapLanguageModel({
+          model: languageModel,
+          middleware: [containStreamErrors, ...(usage ? [usage.middleware({ kind: "lesson", selection, sessionId: session.id, runId })] : [])],
+        }),
         instructions: instructionsFor(lesson, imported),
         // The notes go just before the lesson request, as a turn's go just before the learner's message.
         messages: withDocumentExcerpts(await convertToModelMessages([message]), imported?.excerpts),

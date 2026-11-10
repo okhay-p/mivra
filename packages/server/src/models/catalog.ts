@@ -8,10 +8,23 @@ export interface CatalogModel {
   id: string;
   name: string;
   contextLength: number | null;
-  /** US dollars per million tokens, when the provider lists a price. */
-  price: { input: number; output: number } | null;
+  /** US dollars per million tokens, when the provider lists a price; cached input rates when it lists them too. */
+  price: ModelPrice | null;
+  /**
+   * A ChatGPT plan model only: its OpenRouter counterpart's published API price, for the Usage page's optional
+   * API-price comparison (issue #70). Never a charge: the plan pays.
+   */
+  apiPrice?: ModelPrice | null;
   /** Null when the model can't be asked to reason. `efforts` may be empty: then only its default applies. */
   reasoning: { efforts: ReasoningEffort[]; defaultEffort: ReasoningEffort | null } | null;
+}
+
+/** US dollars per million tokens. `cacheRead` and `cacheWrite` are only set when the provider lists them. */
+export interface ModelPrice {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
 
 export type CatalogState = "fresh" | "stale" | "unavailable";
@@ -38,7 +51,10 @@ const OpenRouterModel = z.object({
   id: z.string().min(1).max(200),
   name: z.string().max(200).optional(),
   context_length: z.number().int().positive().nullish(),
-  pricing: z.object({ prompt: z.string().max(40), completion: z.string().max(40) }).partial().nullish(),
+  pricing: z
+    .object({ prompt: z.string().max(40), completion: z.string().max(40), input_cache_read: z.string().max(40), input_cache_write: z.string().max(40) })
+    .partial()
+    .nullish(),
   supported_parameters: z.array(z.string()).max(100).nullish(),
   reasoning: z
     .object({ supported_efforts: z.array(z.string()).max(20).nullish(), default_effort: z.string().nullish() })
@@ -68,13 +84,17 @@ export function parseOpenRouterModels(body: unknown): CatalogModel[] {
     seen.add(m.id);
     const input = perMillion(m.pricing?.prompt);
     const output = perMillion(m.pricing?.completion);
+    const cacheRead = perMillion(m.pricing?.input_cache_read);
+    const cacheWrite = perMillion(m.pricing?.input_cache_write);
     const efforts = (m.reasoning?.supported_efforts ?? []).filter(isEffort);
     const defaultEffort = isEffort(m.reasoning?.default_effort) ? m.reasoning.default_effort : null;
     return [{
       id: `openrouter:${m.id}`,
       name: m.name?.trim() || m.id,
       contextLength: m.context_length ?? null,
-      price: input !== undefined && output !== undefined ? { input, output } : null,
+      price: input !== undefined && output !== undefined
+        ? { input, output, ...(cacheRead !== undefined ? { cacheRead } : {}), ...(cacheWrite !== undefined ? { cacheWrite } : {}) }
+        : null,
       reasoning: params.includes("reasoning") ? { efforts: reasoningEfforts.filter((e) => efforts.includes(e)), defaultEffort } : null,
     }];
   });
@@ -280,7 +300,14 @@ export function describeChatGptModels(models: ChatGptModel[], openrouter: Catalo
   }
   return models.map((m) => {
     const counterpart = counterparts.get(matchKey(m.slug));
-    return { id: `chatgpt:${m.slug}`, name: m.name, contextLength: counterpart?.contextLength ?? null, price: null, reasoning: counterpart?.reasoning ?? null };
+    return {
+      id: `chatgpt:${m.slug}`,
+      name: m.name,
+      contextLength: counterpart?.contextLength ?? null,
+      price: null,
+      apiPrice: counterpart?.price ?? null,
+      reasoning: counterpart?.reasoning ?? null,
+    };
   });
 }
 
