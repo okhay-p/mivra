@@ -14,6 +14,7 @@ import { createFakeCompatible } from "../server/test/support/fake-compatible.js"
 import { staticCatalog } from "../server/src/models/catalog.js";
 import { runs, memories } from "../server/src/db/schema.js";
 import { openDb } from "../server/src/db/client.js";
+import { createUsageStore } from "../server/src/store/usage-store.js";
 import { loadOrCreateToken } from "../server/src/security.js";
 import { serveWeb } from "../server/src/serve-web.js";
 
@@ -766,6 +767,18 @@ const compatible = createFakeCompatible({ name: "the fake", key: "sk-fake-e2e-ke
 app.route("/e2e/compat", compatible.app);
 app.get("/e2e/compat-requests", (c) => c.json(compatible.requests.map((r) => ({ path: r.path, authorization: r.authorization }))));
 app.get("/e2e/chatgpt/approve", (c) => c.text(chatgptAuth.approve(c.req.query("url")!)));
+// A ChatGPT plan call for the Usage page (issue #70), as the usage tracker records one. The scripted model can't run
+// as a plan model without a ChatGPT model list, so this writes the content-free record the tracker would.
+app.post("/e2e/usage/plan-call", (c) => {
+  const at = new Date();
+  createUsageStore(db).insert({
+    id: crypto.randomUUID(), kind: "chat", status: "completed", sessionId: null, runId: crypto.randomUUID(), seq: 0,
+    provider: "chatgpt", providerLabel: "ChatGPT plan", model: "chatgpt:e2e-plan", modelLabel: "E2E Plan", effort: null, billing: "subscription",
+    inputTokens: 1_000_000, inputNoCacheTokens: 1_000_000, inputCacheReadTokens: 0, inputCacheWriteTokens: 0, outputTokens: 100_000, outputReasoningTokens: 0,
+    reportedCost: null, price: { input: 2, output: 8, source: "catalog" }, estimatedCost: 2.8, startedAt: at, endedAt: at,
+  });
+  return c.body(null, 204);
+});
 // Lets a test finish a held reply once it has seen the state it wants to check.
 app.post("/e2e/release", (c) => {
   releaseHeld();
