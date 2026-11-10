@@ -53,6 +53,14 @@ export function useLesson(lessonId: string) {
   return { lesson, error, apply };
 }
 
+/** How the topic list announces a lesson's state to a screen reader. */
+function statusLabel(status: LessonView["status"] | undefined) {
+  if (status === "finished") return " (finished)";
+  if (status === "generating") return " (being written)";
+  if (status === "failed") return " (stopped)";
+  return status ? " (started)" : " (not started)";
+}
+
 /** The syllabus as a list of topics, each marked with where its lesson stands. */
 export function TopicList({
   lessons,
@@ -92,7 +100,7 @@ export function TopicList({
                 </span>
                 <span className="min-w-0">
                   {i + 1}. {topic.title}
-                  <span className="sr-only">{status === "finished" ? " (finished)" : status ? " (started)" : " (not started)"}</span>
+                  <span className="sr-only">{statusLabel(status)}</span>
                 </span>
               </button>
             </li>

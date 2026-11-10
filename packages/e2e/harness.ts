@@ -175,7 +175,11 @@ const twoSets = {
   ],
 };
 
-type Step = { controlled: "cancelstream" | "cancelthinking" | "liveThinking" | "continuationLive" | "continuationFailure" } | { tool: string; input: unknown } | { text: string; hold?: boolean; stream?: boolean };
+type Step =
+  | { controlled: "cancelstream" | "cancelthinking" | "liveThinking" | "continuationLive" | "continuationFailure" }
+  | { tool: string; input: unknown; hold?: boolean }
+  | { text: string; hold?: boolean; stream?: boolean }
+  | { error: string; hold?: boolean };
 
 const STREAM_CHUNK_CHARS = 24;
 const STREAM_CHUNK_DELAY_MS = 16;
@@ -555,6 +559,10 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
   if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra lesson request")) {
     const done = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
     const system = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");
+    // A course whose goal says so holds its first lesson until POST /e2e/release, so a test can see it
+    // being written; "lessonbroken" then fails it instead of writing it.
+    if (done === 0 && system.includes("lessonbroken")) return { error: "PROVIDER-LESSON-FAILURE", hold: true };
+    if (done === 0 && system.includes("lessonhold")) return { ...LESSON_STEPS[0]!, hold: true };
     if (!system.includes("previous_lesson")) return LESSON_STEPS[done] ?? { text: "" };
     // The next lesson revisits the missed idea and, since the learner struggled, adapts the plan once.
     const revisited = /"sectionId":"([^"]+)","title":"The idea"/.exec(system)?.[1] ?? "missing";
@@ -692,6 +700,10 @@ const model = new MockLanguageModelV4({
       });
       return { stream: stream as never };
     }
+    if ("error" in step) {
+      if (step.hold) await held();
+      throw new Error(step.error);
+    }
     const chunks: object[] =
       "tool" in step
         ? [
@@ -706,7 +718,7 @@ const model = new MockLanguageModelV4({
             { type: "text-end" as const, id: "t" },
             { type: "finish" as const, finishReason: { unified: "stop" as const, raw: "stop" }, usage },
           ];
-    if ("hold" in step) await held();
+    if ("hold" in step && step.hold) await held();
     const chunkDelayInMs = "stream" in step && step.stream ? STREAM_CHUNK_DELAY_MS : null;
     return { stream: simulateReadableStream({ chunks, initialDelayInMs: null, chunkDelayInMs }) as never };
   },
