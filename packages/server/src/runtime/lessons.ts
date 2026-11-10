@@ -11,7 +11,7 @@ import {
 } from "@mivra/protocol";
 import { convertToModelMessages, stepCountIs, streamText, tool, wrapLanguageModel, type LanguageModel, type Tool, type UIMessage } from "ai";
 import { callOptionsFor, type ModelSelection } from "../model.js";
-import type { ModelSettings } from "../models/selection.js";
+import { TaskModelError, type ModelTask } from "../models/selection.js";
 import type { LessonRow, LessonStore } from "../store/lesson-store.js";
 import type { NoteStore } from "../store/note-store.js";
 import type { SessionStore } from "../store/session-store.js";
@@ -52,8 +52,8 @@ export interface LessonDeps {
   lessons: LessonStore;
   registry: CapabilityRegistry;
   model: (selection: ModelSelection) => LanguageModel;
-  /** The app-wide model selection (ADR-012): lessons are written with the same model as chat. */
-  models: Pick<ModelSettings, "forRun">;
+  /** The lesson model (ADR-012): the main selection unless the learner chose one for lessons in Settings (issue #71). */
+  models: { forTask(task: ModelTask): Promise<ModelSelection> };
   /** The learner's imported notes (ADR-014), searched by each lesson's topic. */
   notes?: NoteStore;
 }
@@ -85,7 +85,9 @@ export function lessonView(lesson: LessonRow, { store, lessons, registry }: Pick
     changedSectionIds: version?.changedSectionIds ?? [],
     changeReason: version?.reason ?? null,
     canFinish: lesson.status === "ready" && complete && checks.answered >= checks.total,
-    error: lesson.status === "failed" ? "The lesson stopped before it was finished." : null,
+    // Only messages that name a fix are shown; others can hold provider detail, which stays on the server.
+    error: lesson.status === "failed" ? (lesson.errorAction ? lesson.error : null) ?? "The lesson stopped before it was finished." : null,
+    errorAction: lesson.status === "failed" ? lesson.errorAction : null,
     createdAt: lesson.createdAt.toISOString(),
     finishedAt: lesson.finishedAt?.toISOString() ?? null,
   };
@@ -350,8 +352,10 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
       parts: [{ type: "text", text: "Mivra lesson request (not a learner message): write the lesson for the topic marked thisLesson in <syllabus>." }],
     };
     let runId: string | undefined;
+    let failure: { error: string; action: "lesson-model" } | undefined;
     try {
-      const selection = models.forRun();
+      // Read once: the whole job uses this model and effort, whatever changes in Settings meanwhile.
+      const selection = await models.forTask("lesson");
       const languageModel = model(selection);
       // Searched before the run starts, so the excerpts and the rules describing them come from one search.
       const topic = topicOf(lesson);
@@ -385,10 +389,12 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
         // Drained here: the learner sees sections as they are saved, not the model's stream.
       }
     } catch (error) {
+      // A lesson model that can't run isn't swapped for another: the learner chooses (issue #71).
+      if (error instanceof TaskModelError) failure = { error: error.message, action: "lesson-model" };
       const run = store.latestRun(session.id);
       if (runId && run?.id === runId && run.status === "running") store.finishRun(runId, session.id, "failed", undefined, errorText(error));
     } finally {
-      lessons.setStatus(lesson.id, nextSlot(lesson.id) === undefined && lessons.latestVersion(lesson.id) ? "ready" : "failed");
+      lessons.setStatus(lesson.id, nextSlot(lesson.id) === undefined && lessons.latestVersion(lesson.id) ? "ready" : "failed", failure?.error, failure?.action);
       active.delete(lesson.id);
       changed(lesson.id);
     }

@@ -30,7 +30,7 @@ import { reasoningEfforts, type ModelSelection } from "./model.js";
 import { staticCatalog, type ModelCatalog } from "./models/catalog.js";
 import { CUSTOM_PREFIX, CustomProviderError, CustomProviderNotFound, createCustomProviders } from "./models/custom-providers.js";
 import type { KeyCheck } from "./models/key-check.js";
-import { MAX_PINNED, ModelId, SelectionInput, createModelSettings } from "./models/selection.js";
+import { MAX_PINNED, ModelId, SelectionInput, TaskModelError, createModelSettings, modelTasks, type ModelTask } from "./models/selection.js";
 import type { Extract } from "./documents/extract-in-child.js";
 import { coreCourse } from "./plugins/core-course.js";
 import { coreLearning } from "./plugins/core-learning.js";
@@ -311,13 +311,50 @@ const listModels = createRoute({
 const selectModel = createRoute({
   method: "put",
   path: "/settings/model",
-  description: "Choose the model and reasoning effort for every later run: chat, syllabus and lessons. A null effort uses the model's default. A run already streaming keeps its model.",
+  description: "Choose the main model and reasoning effort for every later run: chat, syllabus, and lessons unless their task is overridden (`/settings/tasks`). A null effort uses the model's default. A run already streaming keeps its model.",
   request: { body: { content: { "application/json": { schema: SelectionInput } } } },
   responses: {
     200: { description: "The saved selection", content: { "application/json": { schema: Selection } } },
     400: errorResponse("Unknown model, or an effort it doesn't support"),
     503: errorResponse("The model list couldn't be loaded"),
   },
+});
+
+const ModelTaskView = z
+  .object({
+    id: z.enum(modelTasks),
+    override: Selection.nullable().openapi({ description: "The task's own model, or null to use the main model (the picker's), whatever it is when a job starts" }),
+    effective: Selection.openapi({ description: "The model and effort a job of this task starting now would use" }),
+    unavailable: z.string().nullable().openapi({ description: "Why the override can't run now; jobs fail with this until another model is chosen or the override is reset" }),
+  })
+  .openapi("ModelTask");
+const TaskParams = z.object({ task: z.enum(modelTasks) });
+
+const listModelTasks = createRoute({
+  method: "get",
+  path: "/settings/tasks",
+  description: "Background tasks' models (ADR-012, option D): each uses the main model unless overridden. Only lesson generation can be overridden; chat and syllabus generation always use the main model.",
+  responses: { 200: { description: "Each task's model", content: { "application/json": { schema: z.object({ tasks: z.array(ModelTaskView) }) } } } },
+});
+
+const setModelTask = createRoute({
+  method: "put",
+  path: "/settings/tasks/{task}",
+  description: "Give a task its own model and effort, checked like the main selection. Applies from the task's next job; a job already running keeps its model.",
+  request: { params: TaskParams, body: { content: { "application/json": { schema: SelectionInput } } } },
+  responses: {
+    200: { description: "The task's model", content: { "application/json": { schema: ModelTaskView } } },
+    400: errorResponse("Unknown model, or an effort it doesn't support"),
+    503: errorResponse("The model list couldn't be loaded"),
+  },
+});
+
+const resetModelTask = createRoute({
+  method: "delete",
+  path: "/settings/tasks/{task}",
+  description: "Remove a task's override, so its jobs use the main model again and follow later changes to it.",
+  request: { params: TaskParams },
+  responses: { 200: { description: "The task's model", content: { "application/json": { schema: ModelTaskView } } } },
 });
 
 const setPinnedModels = createRoute({
@@ -980,11 +1017,47 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   const resolveModel = (selection: ModelSelection): LanguageModel =>
     selection.model.startsWith(CUSTOM_PREFIX) ? custom.languageModel(selection) : model(selection);
   // A custom model's run records its endpoint, so reasoning never replays to another destination.
+  const withEndpoint = (selection: ModelSelection): ModelSelection => {
+    const endpoint = selection.model.startsWith(CUSTOM_PREFIX) ? custom.endpointFor(selection.model) : undefined;
+    return endpoint ? { ...selection, endpoint } : selection;
+  };
+  /** Why a task's override can't run now, or null. Reuses the custom providers' own messages (issue #69). */
+  const taskProblem = async (selection: ModelSelection) =>
+    custom.unavailable(selection.model)?.replace(/ Choose another model in the picker under the message box\.$/, "") ??
+    providerProblem(selection.model) ??
+    (await models.overrideProblem(selection));
+  /**
+   * A built-in model whose provider can't be called now. Checked apart from the picker's list, which always offers
+   * the default model, so an override of the default still fails clearly once its provider's key is gone.
+   */
+  const providerProblem = (modelId: string): string | null => {
+    const provider = modelId.slice(0, modelId.indexOf(":"));
+    if ((providerIds as readonly string[]).includes(provider) && !credentials.keys()[provider as ProviderId]) {
+      return "Its provider has no API key set up any more.";
+    }
+    if (provider === "chatgpt" && chatgpt && !chatgpt.view().signedIn) return "Mivra isn't signed in with ChatGPT any more.";
+    return null;
+  };
+  const taskView = async (task: ModelTask) => {
+    const override = models.override(task);
+    return { id: task, override, effective: override ?? models.current(), unavailable: override ? await taskProblem(override) : null };
+  };
   const runModels = {
-    forRun(): ModelSelection {
-      const selection = models.forRun();
-      const endpoint = selection.model.startsWith(CUSTOM_PREFIX) ? custom.endpointFor(selection.model) : undefined;
-      return endpoint ? { ...selection, endpoint } : selection;
+    forRun: () => withEndpoint(models.forRun()),
+    /**
+     * The model for a background task's job starting now (ADR-012, option D): its override, or else the main
+     * selection as it is now. An override that can't run fails the job rather than falling back to another model.
+     */
+    async forTask(task: ModelTask): Promise<ModelSelection> {
+      const override = models.override(task);
+      if (!override) return runModels.forRun();
+      const problem = await taskProblem(override);
+      if (problem) {
+        throw new TaskModelError(
+          `The model chosen for lessons in Settings (${override.model}) can't be used: ${problem} Choose another lesson model under Settings → Models, or set it back to Use main model.`,
+        );
+      }
+      return withEndpoint(override);
     },
   };
   store.recoverInterruptedRuns();
@@ -1185,6 +1258,18 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       const result = await models.select(c.req.valid("json"));
       if (!result.ok) return c.json({ error: result.message }, result.kind === "invalid" ? 400 : 503);
       return c.json(result.selection, 200);
+    })
+    .openapi(listModelTasks, async (c) => c.json({ tasks: await Promise.all(modelTasks.map(taskView)) }, 200))
+    .openapi(setModelTask, async (c) => {
+      const { task } = c.req.valid("param");
+      const result = await models.setOverride(task, c.req.valid("json"));
+      if (!result.ok) return c.json({ error: result.message }, result.kind === "invalid" ? 400 : 503);
+      return c.json(await taskView(task), 200);
+    })
+    .openapi(resetModelTask, async (c) => {
+      const { task } = c.req.valid("param");
+      models.clearOverride(task);
+      return c.json(await taskView(task), 200);
     })
     .openapi(listProviderKeys, (c) => c.json(providerKeys(c), 200))
     .openapi(setProviderKey, (c) => {

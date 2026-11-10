@@ -152,9 +152,33 @@ function ModelRow({ model, selected, names }: { model: CatalogModel; selected: b
   );
 }
 
-/** Model and effort controls for the composer. Changes apply from the next reply on. */
-export function ModelPicker({ state, disabled }: { state: ModelPickerState; disabled?: boolean }) {
-  const { view, error, refresh, choose, togglePin } = state;
+/**
+ * Model and effort controls. In the composer they set the main model, from the next reply on. Given `value` and
+ * `onChoose`, they set something else from the same catalog instead, such as a task's model in Settings (issue #71).
+ */
+export function ModelPicker({
+  state,
+  disabled,
+  value,
+  onChoose,
+  unavailable,
+  label = "Model",
+}: {
+  state: ModelPickerState;
+  disabled?: boolean;
+  /** The selection shown; the main model when not given. */
+  value?: ModelSelection;
+  onChoose?: (selection: ModelSelection) => void;
+  /** With `value`: why it can't run, shown in place of the main model's. */
+  unavailable?: string | null;
+  /** Names the control for screen readers: "Model", or "Lesson model", say. */
+  label?: string;
+}) {
+  const { view: loaded, error, refresh, togglePin } = state;
+  const choose = onChoose ?? state.choose;
+  const main = value === undefined;
+  // The rest reads `view.current` as the selection shown.
+  const view = loaded && value ? { ...loaded, current: value, unavailable: unavailable ?? null } : loaded;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
 
@@ -228,7 +252,7 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
             variant="ghost"
             size="sm"
             className="text-muted-foreground max-w-64 min-w-0"
-            aria-label={`Model: ${currentName}. Change model`}
+            aria-label={`${label}: ${currentName}. Change model`}
             disabled={disabled}
           >
             <span className="truncate">{currentName}</span>
@@ -260,7 +284,7 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
           </Command>
         </PopoverContent>
       </Popover>
-      <Button
+      {main && <Button
         type="button"
         variant="ghost"
         size="icon-sm"
@@ -272,12 +296,12 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
         onClick={() => void togglePin(view.current.model)}
       >
         <Star className={cn(pinned && "fill-current")} aria-hidden />
-      </Button>
+      </Button>}
       {efforts.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button type="button" variant="ghost" size="sm" className="text-muted-foreground" disabled={disabled}
-              aria-label={`Reasoning effort: ${view.current.effort ? EFFORT_LABELS[view.current.effort] : "the model's default"}. Change effort`}>
+              aria-label={`${main ? "Reasoning effort" : `${label} reasoning effort`}: ${view.current.effort ? EFFORT_LABELS[view.current.effort] : "the model's default"}. Change effort`}>
               {view.current.effort ? EFFORT_LABELS[view.current.effort] : "Default effort"}
               <ChevronsUpDown aria-hidden />
             </Button>
@@ -300,7 +324,7 @@ export function ModelPicker({ state, disabled }: { state: ModelPickerState; disa
         </DropdownMenu>
       )}
       {/* OpenAI's guidelines: say when replies use the learner's plan, with a way to manage it (ADR-015). */}
-      {view.current.model.startsWith("chatgpt:") && <UsingChatGptPlan />}
+      {main && view.current.model.startsWith("chatgpt:") && <UsingChatGptPlan />}
       {/* A removed custom provider isn't silently replaced: the learner chooses the next model. */}
       {view.unavailable && !error && <span role="alert" className="text-destructive text-xs">{view.unavailable}</span>}
       {error && <span role="alert" className="text-destructive text-xs">{error}</span>}

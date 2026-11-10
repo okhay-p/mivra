@@ -52,6 +52,23 @@ const ENOUGH_OWN = 5;
 
 const KEYS = { current: "model.current", recent: "model.recent", pinned: "model.pinned" } as const;
 
+/**
+ * Background tasks whose model the learner can set apart from the main selection (ADR-012, option D). Each one
+ * uses the main model until overridden. Only tasks that exist are listed: syllabus generation runs inside a chat
+ * turn, so it always uses the main model.
+ */
+export const modelTasks = ["lesson"] as const;
+export type ModelTask = (typeof modelTasks)[number];
+const taskKey = (task: ModelTask) => `model.task.${task}`;
+
+/** A task's model override that can't run any more. Its message is Mivra's own, safe to show the learner. */
+export class TaskModelError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TaskModelError";
+  }
+}
+
 export const ModelId = z.string().min(1).max(200).regex(/^[a-z][a-z0-9-]*:\S+$/, "Use <provider>:<model-id>");
 export const SelectionInput = z.object({ model: ModelId, effort: z.enum(reasoningEfforts).nullable() });
 const Ids = z.array(ModelId);
@@ -87,6 +104,7 @@ export function createModelSettings({ settings, catalog, defaults: defaultsOptio
   const current = (): ModelSelection => read(KEYS.current, SelectionInput, defaults());
   const recent = () => read(KEYS.recent, Ids, []);
   const pinned = () => read(KEYS.pinned, Ids, []);
+  const override = (task: ModelTask): ModelSelection | null => read(taskKey(task), SelectionInput.nullable(), null);
 
   /** The catalog, plus the default when the catalog doesn't list it (offline, or a test's scripted model). */
   async function models() {
@@ -132,19 +150,32 @@ export function createModelSettings({ settings, catalog, defaults: defaultsOptio
       };
     },
     async select(input: z.infer<typeof SelectionInput>): Promise<SelectResult> {
+      const result = await validate(input);
+      if (result.ok) settings.set(KEYS.current, result.selection);
+      return result;
+    },
+    /** A task's own model, or null when it uses the main model. */
+    override,
+    /** Saves a task's override after the same checks as the main selection. */
+    async setOverride(task: ModelTask, input: z.infer<typeof SelectionInput>): Promise<SelectResult> {
+      const result = await validate(input);
+      if (result.ok) settings.set(taskKey(task), result.selection);
+      return result;
+    },
+    /** Back to the main model, followed from then on rather than copied. */
+    clearOverride(task: ModelTask) {
+      settings.delete(taskKey(task));
+    },
+    /**
+     * Why an override can't run now, or null: it left the catalog (its provider's key was removed, say), or no longer
+     * offers its effort. Not checked when the catalog couldn't be loaded at all, as the main selection isn't either.
+     */
+    async overrideProblem(selection: ModelSelection): Promise<string | null> {
       const { models: all, state } = await models();
-      const model = all.find((m) => m.id === input.model);
-      if (!model) {
-        return state === "unavailable"
-          ? { ok: false, kind: "unavailable", message: "The model list couldn't be loaded, so the model can't be checked. Try again later." }
-          : { ok: false, kind: "invalid", message: "That model isn't in the list of models that can use Mivra's tools" };
-      }
-      if (input.effort && !model.reasoning?.efforts.includes(input.effort)) {
-        return { ok: false, kind: "invalid", message: `${model.name} doesn't support the "${input.effort}" effort` };
-      }
-      const selection = { model: model.id, effort: input.effort };
-      settings.set(KEYS.current, selection);
-      return { ok: true, selection };
+      const model = all.find((m) => m.id === selection.model);
+      if (!model) return state === "unavailable" ? null : "It isn't in the list of models Mivra can use any more; its provider's key may have been removed.";
+      if (selection.effort && !model.reasoning?.efforts.includes(selection.effort)) return `${model.name} no longer offers the "${selection.effort}" effort.`;
+      return null;
     },
     setPinned(ids: string[]): string[] {
       const unique = [...new Set(ids)].slice(0, MAX_PINNED);
@@ -152,6 +183,20 @@ export function createModelSettings({ settings, catalog, defaults: defaultsOptio
       return unique;
     },
   };
+
+  async function validate(input: z.infer<typeof SelectionInput>): Promise<SelectResult> {
+    const { models: all, state } = await models();
+    const model = all.find((m) => m.id === input.model);
+    if (!model) {
+      return state === "unavailable"
+        ? { ok: false, kind: "unavailable", message: "The model list couldn't be loaded, so the model can't be checked. Try again later." }
+        : { ok: false, kind: "invalid", message: "That model isn't in the list of models that can use Mivra's tools" };
+    }
+    if (input.effort && !model.reasoning?.efforts.includes(input.effort)) {
+      return { ok: false, kind: "invalid", message: `${model.name} doesn't support the "${input.effort}" effort` };
+    }
+    return { ok: true, selection: { model: model.id, effort: input.effort } };
+  }
 }
 
 export type ModelSettings = ReturnType<typeof createModelSettings>;
