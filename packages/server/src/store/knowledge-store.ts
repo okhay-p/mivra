@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { conceptKey } from "../runtime/learner-context.js";
-import { conceptEdges, conceptSources, concepts, memories, notes, noteTags, type conceptEdgeKinds } from "../db/schema.js";
+import { conceptEdges, conceptSources, concepts, memories, memorySources, notes, noteTags, type conceptEdgeKinds } from "../db/schema.js";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type EdgeKind = (typeof conceptEdgeKinds)[number];
@@ -33,9 +33,24 @@ export function clearDistilled(tx: Db | Tx, noteIds: string[]) {
   for (const batch of batches(noteIds)) {
     tx.delete(conceptSources).where(inArray(conceptSources.noteId, batch)).run();
     tx.delete(conceptEdges).where(inArray(conceptEdges.noteId, batch)).run();
+    detachMemories(tx, batch);
     tx.delete(memories).where(and(inArray(memories.noteId, batch), eq(memories.basis, "import"), isNull(memories.editedAt))).run();
   }
   dropUnsupportedConcepts(tx);
+}
+
+/**
+ * Takes notes out from under the memories they support, before the notes are deleted or rewritten: a memory another
+ * note still supports moves to that note, and the rest keep pointing at theirs for the caller to remove (deleting a
+ * note removes them by cascade). Notes not yet detached may be picked; they move on in turn when they're detached.
+ */
+export function detachMemories(tx: Db | Tx, noteIds: string[]) {
+  if (noteIds.length === 0) return;
+  tx.delete(memorySources).where(inArray(memorySources.noteId, noteIds)).run();
+  const ids = sql.join(noteIds.map((id) => sql`${id}`), sql`, `);
+  tx.run(sql`
+    update memories set note_id = (select min(s.note_id) from memory_sources s where s.memory_id = memories.id)
+    where note_id in (${ids}) and exists (select 1 from memory_sources s where s.memory_id = memories.id)`);
 }
 
 /**
@@ -167,35 +182,51 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
           if (edge.kind === "prerequisite" && tx.select().from(conceptEdges).where(and(eq(conceptEdges.fromId, to), eq(conceptEdges.toId, from), eq(conceptEdges.kind, "prerequisite"))).get()) continue;
           savedEdges += tx.insert(conceptEdges).values({ fromId: from, toId: to, kind: edge.kind, noteId: edge.noteId }).onConflictDoNothing().run().changes;
         }
-        // Repeats are skipped: of what the learner said, or of what this import's notes already gave. Another import
-        // may say the same and keeps its own copy, so deleting one import doesn't take the other's. The memories to
-        // compare with are read once per kind and import, not once per memory: an import of a thousand notes has
-        // about as many memories, and every group would otherwise re-read and re-key them all.
-        const alikeSets = new Map<string, { texts: Set<string>; conceptKeys: Set<string> }>();
+        // Repeats are skipped: of what the learner said, or of what this import's notes already gave. A repeat of this
+        // import's own memory adds its note as one more support, so the memory outlives the note it was first drawn
+        // from. Another import may say the same and keeps its own copy, so deleting one import doesn't take the
+        // other's. The memories to compare with are read once per kind and import, not once per memory: an import of a
+        // thousand notes has about as many memories, and every group would otherwise re-read and re-key them all.
+        // Each set maps a text or concept key to the memory of this import saying it, or null for the learner's own.
+        const alikeSets = new Map<string, { texts: Map<string, string | null>; conceptKeys: Map<string, string | null> }>();
         const alikeFor = (kind: string, importId: string) => {
           const cacheKey = `${kind}\u0000${importId}`;
           let found = alikeSets.get(cacheKey);
           if (!found) {
-            const rows = tx.all<{ text: string; concept: string | null }>(sql`
-              select m.text, m.concept from memories m left join notes n on n.id = m.note_id
+            const rows = tx.all<{ id: string; text: string; concept: string | null; ours: number }>(sql`
+              select m.id, m.text, m.concept, m.basis = 'import' as ours from memories m left join notes n on n.id = m.note_id
               where m.kind = ${kind} and m.status = 'active' and (m.basis != 'import' or n.import_id = ${importId})`);
-            found = { texts: new Set(rows.map((m) => normalText(m.text))), conceptKeys: new Set(rows.flatMap((m) => (m.concept ? [conceptKey(m.concept)] : []))) };
+            found = { texts: new Map(), conceptKeys: new Map() };
+            for (const m of rows) {
+              const id = m.ours ? m.id : null;
+              const text = normalText(m.text);
+              if (!found.texts.get(text)) found.texts.set(text, id);
+              if (m.concept && !found.conceptKeys.get(conceptKey(m.concept))) found.conceptKeys.set(conceptKey(m.concept), id);
+            }
             alikeSets.set(cacheKey, found);
           }
           return found;
         };
         const memoryRows: (typeof memories.$inferInsert)[] = [];
+        const supportRows: (typeof memorySources.$inferInsert)[] = [];
         for (const memory of distilled.memories) {
           if (!current.has(memory.noteId)) continue;
           const alike = alikeFor(memory.kind, importOf.get(memory.noteId)!);
-          if (alike.texts.has(normalText(memory.text))) continue;
+          const text = normalText(memory.text);
           // One `known` memory per concept per import: many notes covering it don't need saying many times.
-          if (memory.kind === "known" && memory.conceptKey && alike.conceptKeys.has(memory.conceptKey)) continue;
-          memoryRows.push({ id: randomUUID(), kind: memory.kind, text: memory.text, concept: memory.concept, basis: "import", noteId: memory.noteId, status: "active", createdAt: now });
-          alike.texts.add(normalText(memory.text));
-          if (memory.concept) alike.conceptKeys.add(conceptKey(memory.concept));
+          const repeat = alike.texts.has(text) ? alike.texts.get(text) : memory.kind === "known" && memory.conceptKey && alike.conceptKeys.has(memory.conceptKey) ? alike.conceptKeys.get(memory.conceptKey) : undefined;
+          if (repeat !== undefined) {
+            if (repeat) supportRows.push({ memoryId: repeat, noteId: memory.noteId });
+            continue;
+          }
+          const id = randomUUID();
+          memoryRows.push({ id, kind: memory.kind, text: memory.text, concept: memory.concept, basis: "import", noteId: memory.noteId, status: "active", createdAt: now });
+          supportRows.push({ memoryId: id, noteId: memory.noteId });
+          alike.texts.set(text, id);
+          if (memory.concept && !alike.conceptKeys.get(conceptKey(memory.concept))) alike.conceptKeys.set(conceptKey(memory.concept), id);
         }
         for (const batch of batches(memoryRows)) tx.insert(memories).values(batch).run();
+        for (const batch of batches(supportRows)) tx.insert(memorySources).values(batch).onConflictDoNothing().run();
         return { concepts: savedConcepts, edges: savedEdges, memories: memoryRows.length };
       });
     },

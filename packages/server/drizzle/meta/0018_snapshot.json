@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "e167eba3-c600-4c94-8c27-6c92ccb14000",
+  "id": "ca5a0eb2-64f6-48f2-81b0-9f6d36b102f1",
   "prevId": "6ac1f129-da19-47be-8f4b-45ac4de60be9",
   "tables": {
     "artifacts": {
@@ -1221,6 +1221,73 @@
         }
       },
       "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "checkConstraints": {}
+    },
+    "memory_sources": {
+      "name": "memory_sources",
+      "columns": {
+        "memory_id": {
+          "name": "memory_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "note_id": {
+          "name": "note_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        }
+      },
+      "indexes": {
+        "memory_sources_note_idx": {
+          "name": "memory_sources_note_idx",
+          "columns": [
+            "note_id"
+          ],
+          "isUnique": false
+        }
+      },
+      "foreignKeys": {
+        "memory_sources_memory_id_memories_id_fk": {
+          "name": "memory_sources_memory_id_memories_id_fk",
+          "tableFrom": "memory_sources",
+          "tableTo": "memories",
+          "columnsFrom": [
+            "memory_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "memory_sources_note_id_notes_id_fk": {
+          "name": "memory_sources_note_id_notes_id_fk",
+          "tableFrom": "memory_sources",
+          "tableTo": "notes",
+          "columnsFrom": [
+            "note_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "memory_sources_memory_id_note_id_pk": {
+          "columns": [
+            "memory_id",
+            "note_id"
+          ],
+          "name": "memory_sources_memory_id_note_id_pk"
+        }
+      },
       "uniqueConstraints": {},
       "checkConstraints": {}
     },

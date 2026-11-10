@@ -28,6 +28,15 @@ CREATE TABLE `concepts` (
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `concepts_key_idx` ON `concepts` (`key`);--> statement-breakpoint
+CREATE TABLE `memory_sources` (
+	`memory_id` text NOT NULL,
+	`note_id` text NOT NULL,
+	PRIMARY KEY(`memory_id`, `note_id`),
+	FOREIGN KEY (`memory_id`) REFERENCES `memories`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`note_id`) REFERENCES `notes`(`id`) ON UPDATE no action ON DELETE cascade
+);
+--> statement-breakpoint
+CREATE INDEX `memory_sources_note_idx` ON `memory_sources` (`note_id`);--> statement-breakpoint
 ALTER TABLE `memories` ADD `note_id` text REFERENCES notes(id) ON DELETE cascade;--> statement-breakpoint
 CREATE INDEX `memories_note_idx` ON `memories` (`note_id`);--> statement-breakpoint
 ALTER TABLE `notes` ADD `distilled_hash` text;

@@ -31,7 +31,7 @@ function notesIn(prompt: unknown): NoteRow[] {
  * A mock model that answers each distillation call with what `propose` makes of its notes, and a stream that never
  * ends (until aborted) for a call whose notes include "HANG".
  */
-function setup(propose: (notes: NoteRow[]) => Proposal | "fail", db: Db = openDb(":memory:"), { instant = false } = {}) {
+function setup(propose: (notes: NoteRow[]) => Proposal | "fail" | "prose" | "invalid", db: Db = openDb(":memory:"), { instant = false } = {}) {
   // `instant` answers without a timer in between (as the e2e harness's scripted model does): only microtasks, so the
   // event loop turns only where Mivra yields.
   const simulateReadableStream = <T,>(options: { chunks: T[] }) => simulate({ ...options, ...(instant ? { initialDelayInMs: null, chunkDelayInMs: null } : {}) });
@@ -58,8 +58,12 @@ function setup(propose: (notes: NoteRow[]) => Proposal | "fail", db: Db = openDb
       }
       const proposal = propose(notes);
       if (proposal === "fail") throw new Error("PROVIDER-SECRET-DETAIL");
+      if (proposal === "prose") {
+        const chunks = [{ type: "text-start", id: "t" }, { type: "text-delta", id: "t", delta: "These notes cover recursion." }, { type: "text-end", id: "t" }, { type: "finish", finishReason: { unified: "stop", raw: "stop" }, usage }];
+        return { stream: simulateReadableStream({ chunks }) as never };
+      }
       const chunks = [
-        { type: "tool-call", toolCallId: crypto.randomUUID(), toolName: "record_from_notes", input: JSON.stringify(proposal) },
+        { type: "tool-call", toolCallId: crypto.randomUUID(), toolName: "record_from_notes", input: proposal === "invalid" ? '{"concepts":"Recursion"}' : JSON.stringify(proposal) },
         { type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage },
       ];
       return { stream: simulateReadableStream({ chunks }) as never };
@@ -407,6 +411,80 @@ describe("distilling an import", () => {
     expect(view).toMatchObject({ status: "failed", pendingNotes: 3, concepts: 0 });
     expect(view.error).toBeTruthy();
     expect(view.error).not.toContain("PROVIDER-SECRET-DETAIL");
+  });
+
+  it("a reply that never records leaves the notes waiting and fails the run, after one call to correct it", async () => {
+    let answer: "prose" | "invalid" | "record" = "prose";
+    const t = setup((notes) => (answer === "record" ? byTitle(notes) : answer));
+    const { result, view } = await t.importVault("Vault", vault);
+    const id = result.import.id;
+    expect(view).toMatchObject({ status: "failed", pendingNotes: 3, groupsDone: 0, concepts: 0, memories: 0 });
+    expect(view.error).toContain("2 groups");
+    // Each group's prose reply got one reminder to call the tool.
+    expect(t.model.doStreamCalls).toHaveLength(4);
+    expect(JSON.stringify(t.model.doStreamCalls[1]!.prompt)).toContain("you didn't call record_from_notes");
+
+    // Arguments that don't parse get the same one correction.
+    answer = "invalid";
+    await t.send("POST", `/imports/${id}/distillation`);
+    expect(await t.settled(id)).toMatchObject({ status: "failed", pendingNotes: 3, concepts: 0 });
+    expect(t.model.doStreamCalls).toHaveLength(8);
+
+    // Try again works once the model records.
+    answer = "record";
+    await t.send("POST", `/imports/${id}/distillation`);
+    expect(await t.settled(id)).toMatchObject({ status: "idle", pendingNotes: 0, error: null, concepts: 3, memories: 3 });
+  });
+
+  it("records after a prose reply when the reminder works", async () => {
+    let calls = 0;
+    const t = setup((notes) => (calls++ === 0 ? "prose" : byTitle(notes)));
+    const { view } = await t.importVault("Vault", [{ path: "Stack.md", text: "Push and pop." }]);
+    expect(view).toMatchObject({ status: "idle", pendingNotes: 0, groupsDone: 1, concepts: 1, memories: 1 });
+  });
+
+  it("re-importing a note's earlier text after an unfinished rewrite distils it again", async () => {
+    const t = setup(byTitle);
+    const a = [{ path: "Stack.md", text: "#cs Push and pop." }];
+    const { result } = await t.importVault("Vault", a);
+    const id = result.import.id;
+    // Rewritten to text that never finishes distilling, then cancelled: what the first text yielded is gone.
+    await t.send("PUT", `/imports/${id}/files`, { files: [{ path: "Stack.md", text: "#cs HANG" }] });
+    await vi.waitFor(() => expect(t.model.doStreamCalls).toHaveLength(2));
+    await t.send("DELETE", `/imports/${id}/distillation`);
+    expect(await t.settled(id)).toMatchObject({ pendingNotes: 1, concepts: 0, memories: 0 });
+
+    const back = await t.reimport(id, a);
+    expect(back.view).toMatchObject({ status: "idle", pendingNotes: 0, concepts: 1, memories: 1 });
+    expect(t.model.doStreamCalls).toHaveLength(3);
+  });
+
+  it("keeps a known memory while any note behind it remains, without reading the others again", async () => {
+    // Every note covers Recursion; only the first note's known memory is saved, the rest support it.
+    const t = setup((notes) => ({
+      concepts: [{ name: "Recursion", notes: notes.map((n) => n.ref) }],
+      edges: [],
+      memories: notes.map((n) => ({ kind: "known", text: `Has notes on Recursion in ${n.title}.`, concept: "Recursion", note: n.ref })),
+    }));
+    const files = [{ path: "A.md", text: "#cs Recursion basics." }, { path: "B.md", text: "#cs Recursion and the stack." }, { path: "C.md", text: "#cs Recursion, tail calls." }];
+    const { result } = await t.importVault("Vault", files);
+    const id = result.import.id;
+    expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in A.", "A.md"]]);
+    const calls = t.model.doStreamCalls.length;
+
+    // The note the memory was drawn from goes; another still supports it, and nothing is read again.
+    await t.reimport(id, files.slice(1));
+    expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in A.", "B.md"]]);
+    // Rewriting the note it now points at moves it on to the last one; the rewritten note is read again and supports it.
+    await t.reimport(id, [{ path: "B.md", text: "#cs Recursion and the call stack." }, files[2]!]);
+    expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in A.", "C.md"]]);
+    expect(t.model.doStreamCalls).toHaveLength(calls + 1);
+    // Then the last two go one at a time, and the memory with the last.
+    await t.reimport(id, [{ path: "B.md", text: "#cs Recursion and the call stack." }]);
+    expect((await t.memoryList()).map((m) => m.source?.path)).toEqual(["B.md"]);
+    await t.reimport(id, []);
+    expect(await t.memoryList()).toEqual([]);
+    expect(t.model.doStreamCalls).toHaveLength(calls + 1);
   });
 
   it("deleting an import mid-call saves nothing from that call", async () => {

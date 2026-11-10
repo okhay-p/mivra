@@ -502,3 +502,21 @@ export const conceptEdges = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.fromId, t.toId, t.kind, t.noteId] }), index("concept_edges_note_idx").on(t.noteId), index("concept_edges_to_idx").on(t.toId)],
 );
+
+/**
+ * Every note that supports a memory drawn from notes, its own `note_id` among them. Repeats aren't saved twice (one
+ * `known` memory per concept per import), so a memory can stand on several notes; it moves to another when its note
+ * goes, and goes only with the last.
+ */
+export const memorySources = sqliteTable(
+  "memory_sources",
+  {
+    memoryId: text("memory_id")
+      .notNull()
+      .references(() => memories.id, { onDelete: "cascade" }),
+    noteId: text("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.memoryId, t.noteId] }), index("memory_sources_note_idx").on(t.noteId)],
+);
