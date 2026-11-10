@@ -150,6 +150,11 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
       return { ...row, tags };
     },
 
+    /** Every note's title and path, without its text, for linking to notes from an export. */
+    noteIndex(): { id: string; title: string; titleKey: string; path: string }[] {
+      return db.select({ id: notes.id, title: notes.title, titleKey: notes.titleKey, path: notes.path }).from(notes).orderBy(asc(notes.path)).all();
+    },
+
     /** An import's notes in path order, with their tags, and every link from them. */
     importGraph(importId: string) {
       const rows = db.select({ id: notes.id, path: notes.path, title: notes.title, titleKey: notes.titleKey, aliases: notes.aliases }).from(notes).where(eq(notes.importId, importId)).orderBy(asc(notes.path)).all();

@@ -282,3 +282,20 @@ export function parseNote(path: string, raw: string): ParsedNote {
   const aliases = [...new Set(meta.aliases.map((a) => a.slice(0, MAX_TARGET_CHARS)))].slice(0, MAX_ALIASES);
   return { title, aliases, tags: [...tags], links: [...links.values()], chunks: packChunks(sections), truncated };
 }
+
+/**
+ * Whether a note is a file Mivra exported: its frontmatter says `mivra: generated`. Importing skips these, so a
+ * vault with the export dropped into it doesn't feed Mivra its own output as the learner's notes.
+ */
+export function isMivraGenerated(text: string): boolean {
+  const body = text.startsWith("\uFEFF") ? text.slice(1) : text;
+  if (!/^---\r?\n/.test(body)) return false;
+  // Only the frontmatter block, read line by line up to a cap, so a huge note costs nothing.
+  const lines = body.slice(0, 64 * 1024).split(/\r?\n/);
+  for (let i = 1; i < Math.min(lines.length, 200); i++) {
+    const line = lines[i]!;
+    if (line === "---" || line === "...") return false;
+    if (/^mivra\s*:\s*(["']?)generated\1\s*$/i.test(line)) return true;
+  }
+  return false;
+}

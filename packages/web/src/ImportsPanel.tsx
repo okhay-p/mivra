@@ -523,6 +523,7 @@ const reasonLabel: Record<VaultImportResult["skipped"][number]["reason"], string
   duplicate: "duplicate",
   too_long: "too long",
   symlink: "link to another file",
+  generated: "exported by Mivra",
 };
 
 function ResultSummary({ result, source, replaced }: { result: VaultImportResult; source: Source; replaced: boolean }) {

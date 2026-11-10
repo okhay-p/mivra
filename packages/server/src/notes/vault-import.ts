@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { DistillationView, NoteGraph, SkipReason, VaultFile, VaultImportResult } from "@mivra/protocol";
 import { DuplicateImportName, type NoteStore, type PreparedNote, type VaultImportRow } from "../store/note-store.js";
-import { noteKey, parseNote } from "./parse.js";
+import { isMivraGenerated, noteKey, parseNote } from "./parse.js";
 import { cleanVaultPath, type SkippedFile } from "./vault-path.js";
 
 export { cleanVaultPath, type SkippedFile };
@@ -22,6 +22,8 @@ const MAX_SUFFIX_SEGMENTS = 8;
 export type ImportOutcome =
   | { ok: true; result: VaultImportResult }
   | { ok: false; kind: "duplicate_name" | "not_found"; message: string };
+
+const unsurprising = new Set<SkipReason>(["not_markdown", "generated"]);
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -57,6 +59,11 @@ async function prepare(files: VaultFile[], previous: Map<string, string>) {
     const cleaned = cleanVaultPath(file.path);
     if ("reason" in cleaned) {
       skipped.push({ path: file.path, reason: cleaned.reason });
+      continue;
+    }
+    // Mivra's own export dropped into the vault (vault-export.ts): its files aren't the learner's notes.
+    if (isMivraGenerated(file.text)) {
+      skipped.push({ path: file.path, reason: "generated" });
       continue;
     }
     // Two paths that differ only in case are the same file on macOS and Windows.
@@ -128,8 +135,8 @@ export async function importVault(
       removed: stored.removed,
       unchanged: snapshot.keep.length,
       skippedCount: skipped.length + alreadySkipped.length,
-      // Attachments are the least surprising, so they're listed last.
-      skipped: [...skipped, ...alreadySkipped.filter((f) => f.reason !== "not_markdown"), ...alreadySkipped.filter((f) => f.reason === "not_markdown")].slice(0, MAX_SKIPPED_LISTED),
+      // Attachments and Mivra's own exported files are the least surprising, so they're listed last.
+      skipped: [...skipped, ...alreadySkipped].sort((a, b) => Number(unsurprising.has(a.reason)) - Number(unsurprising.has(b.reason))).slice(0, MAX_SKIPPED_LISTED),
       truncated,
     },
   };
