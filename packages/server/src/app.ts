@@ -1165,13 +1165,11 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   const describeModel = async (id: string): Promise<ModelFacts> => {
     const own = customPrices.get(id);
     const listed = (await catalog.list()).models.find((m) => m.id === id);
-    // A ChatGPT plan model has no price of its own; its API counterpart's is only a comparison.
-    const published = id.startsWith("chatgpt:") ? listed?.apiPrice : listed?.price;
-    return {
-      modelLabel: listed?.name ?? null,
-      providerLabel: providerLabel(providerOf(id)) ?? providerOf(id),
-      price: own ? { ...own, source: "custom" } : published ? { ...published, source: "catalog" } : null,
-    };
+    const facts = { modelLabel: listed?.name ?? null, providerLabel: providerLabel(providerOf(id)) ?? providerOf(id) };
+    // A ChatGPT plan model has no price of its own; its API counterpart's published price is only a comparison, so a
+    // learner's own price never stands in for it (issue #70: "at published API rates").
+    if (id.startsWith("chatgpt:")) return { ...facts, price: listed?.apiPrice ? { ...listed.apiPrice, source: "catalog" } : null };
+    return { ...facts, price: own ? { ...own, source: "custom" } : listed?.price ? { ...listed.price, source: "catalog" } : null };
   };
   const usage = createUsageTracker({ store: usageStore, describe: describeModel });
   const turns = createTurnRunner({ store, registry, model: resolveModel, models: runModels, lessons, notes: noteStore, usage });
@@ -1556,7 +1554,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       const { from, tz } = c.req.valid("query");
       return c.json(await usageView(from ? new Date(from) : undefined, tz ?? 0), 200);
     })
-    .openapi(clearUsage, (c) => c.json({ deleted: usageStore.clear() }, 200))
+    .openapi(clearUsage, (c) => c.json({ deleted: usage.clear(() => usageStore.clear()) }, 200))
     .openapi(setUsagePrice, (c) => {
       const { model, price } = c.req.valid("json");
       if (!customPrices.set(model, price)) return c.json({ error: "Too many custom prices. Remove one you no longer need first." }, 400);

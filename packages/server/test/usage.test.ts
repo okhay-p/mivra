@@ -221,7 +221,7 @@ type UsageJson = {
 
 function setup() {
   const db = openDb(":memory:");
-  const listed = { models: [MODEL, PLAN, UNPRICED] };
+  const listed: { models: CatalogModel[]; gate?: Promise<void> } = { models: [MODEL, PLAN, UNPRICED] };
   /** Chunks per model call, in order; when it runs out, a short reply. */
   const script: object[][] = [];
   const llm = new MockLanguageModelV4({
@@ -231,7 +231,10 @@ function setup() {
   const app = createApp({
     db,
     model: () => llm,
-    models: { defaults: { model: MODEL.id, effort: null }, catalog: { list: async () => ({ models: listed.models, state: "fresh" as const }) } },
+    models: { defaults: { model: MODEL.id, effort: null }, catalog: { list: async () => {
+      await listed.gate;
+      return { models: listed.models, state: "fresh" as const };
+    } } },
     providers: { credentials: memoryCredentials(), isLocal: () => true, custom: { fetch: compatible.fetch } },
     security: { token: "t", allowedHosts: [] },
   });
@@ -289,6 +292,34 @@ describe("Usage API", () => {
     expect(view.subscription).toMatchObject({ calls: 1, total: 1_100_000, reportedCost: null, estimatedCost: null });
     expect(view.subscription.apiEquivalent).toBeCloseTo(2 + 0.8);
     expect(view.totals.estimatedCost).toBeNull();
+  });
+
+  it("never compares plan usage at a learner's own price, only at a published API price", async () => {
+    const t = setup();
+    t.listed.models = [MODEL, { ...PLAN, apiPrice: null }, UNPRICED];
+    expect((await t.send("/usage/prices", "PUT", { model: PLAN.id, price: { input: 123, output: 456 } })).status).toBe(200);
+    await t.send("/settings/model", "PUT", { model: PLAN.id, effort: null });
+    t.script.push(text("a", usage(1_000_000, 100_000)));
+    await t.chat();
+    const { subscription } = await t.view();
+    expect(subscription).toMatchObject({ calls: 1, apiEquivalent: null, uncompared: 1 });
+  });
+
+  it("doesn't bring back a cleared call whose price was still being looked up", async () => {
+    const t = setup();
+    let release!: () => void;
+    t.listed.gate = new Promise((resolve) => (release = resolve));
+    // The reply finishes while the call's price lookup still waits on the model list.
+    await t.chat();
+    expect((await t.send<{ deleted: number }>("/usage", "DELETE")).status).toBe(200);
+    release();
+    t.listed.gate = undefined;
+    const view = await t.view();
+    expect(view.totals).toMatchObject({ calls: 0 });
+    expect(t.db.select().from(usageRecords).all()).toEqual([]);
+    // Later calls are recorded as usual.
+    await t.chat();
+    expect((await t.view()).totals).toMatchObject({ calls: 1 });
   });
 
   it("applies a custom price to later calls only, and lists models to price", async () => {

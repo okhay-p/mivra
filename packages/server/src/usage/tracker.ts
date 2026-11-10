@@ -53,6 +53,9 @@ type FinishPart = { type: "finish"; usage?: ProviderUsage; providerMetadata?: Re
  */
 export function createUsageTracker({ store, describe, clock = () => new Date() }: UsageTrackerOptions) {
   const pending = new Set<Promise<void>>();
+  // Bumped when the history is cleared: a call that ended before that is part of the cleared history, even if its
+  // price lookup finishes afterwards.
+  let generation = 0;
 
   function middleware(context: UsageContext): LanguageModelMiddleware {
     let seq = 0;
@@ -75,8 +78,10 @@ export function createUsageTracker({ store, describe, clock = () => new Date() }
           const endedAt = clock();
           const tokens = finish ? callTokens(finish.usage) : NO_TOKENS;
           const reported = finish ? reportedCost(provider, finish.providerMetadata) : null;
+          const ended = generation;
           const task = facts
             .then(({ price, modelLabel, providerLabel }) => {
+              if (ended !== generation) return;
               store.insert({
                 id,
                 kind: context.kind,
@@ -160,6 +165,11 @@ export function createUsageTracker({ store, describe, clock = () => new Date() }
   return {
     /** Middleware that records every call of one run, lesson job or model test. */
     middleware,
+    /** Clears the history, including calls that have ended but are still being written. Returns how many rows went. */
+    clear(clearStore: () => number): number {
+      generation++;
+      return clearStore();
+    },
     /** Resolves once every call that has ended is written; for tests. */
     async settled() {
       while (pending.size > 0) await Promise.all(pending);
