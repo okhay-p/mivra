@@ -28,8 +28,10 @@ function scriptedModel(steps: Step[]) {
   const prompts: string[] = [];
   const model = new MockLanguageModelV4({
     doStream: async (options) => {
-      prompts.push(JSON.stringify(options.prompt));
-      const step = steps[call++] ?? { text: "" };
+      // Importing notes starts distilling them (ADR-014); those calls find nothing and don't use the script.
+      const distilling = JSON.stringify(options.prompt).includes("Mivra distillation request");
+      if (!distilling) prompts.push(JSON.stringify(options.prompt));
+      const step = distilling ? { text: "" } : (steps[call++] ?? { text: "" });
       if ("error" in step) throw new Error(step.error);
       const chunks: object[] =
         "toolCalls" in step

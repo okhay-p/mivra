@@ -393,6 +393,7 @@ describe("known memories in the tutor's context", () => {
       [{ id: "a", concept: "Recursion", correct: false, createdAt: new Date() }],
       [row({ id: "g", kind: "goal", text: "Pass the exam.", basis: "chat", concept: null, noteId: null })],
       [],
+      undefined,
       [row({})],
     )!;
     const record = text.indexOf("<learner_concepts>");
