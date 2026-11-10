@@ -31,6 +31,7 @@ CREATE UNIQUE INDEX `concepts_key_idx` ON `concepts` (`key`);--> statement-break
 CREATE TABLE `memory_sources` (
 	`memory_id` text NOT NULL,
 	`note_id` text NOT NULL,
+	`text` text NOT NULL,
 	PRIMARY KEY(`memory_id`, `note_id`),
 	FOREIGN KEY (`memory_id`) REFERENCES `memories`(`id`) ON UPDATE no action ON DELETE cascade,
 	FOREIGN KEY (`note_id`) REFERENCES `notes`(`id`) ON UPDATE no action ON DELETE cascade

@@ -472,19 +472,58 @@ describe("distilling an import", () => {
     expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in A.", "A.md"]]);
     const calls = t.model.doStreamCalls.length;
 
-    // The note the memory was drawn from goes; another still supports it, and nothing is read again.
+    // The note the memory was drawn from goes; another still supports it and lends its own text, and nothing is read again.
     await t.reimport(id, files.slice(1));
-    expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in A.", "B.md"]]);
+    expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in B.", "B.md"]]);
     // Rewriting the note it now points at moves it on to the last one; the rewritten note is read again and supports it.
     await t.reimport(id, [{ path: "B.md", text: "#cs Recursion and the call stack." }, files[2]!]);
-    expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in A.", "C.md"]]);
+    expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in C.", "C.md"]]);
     expect(t.model.doStreamCalls).toHaveLength(calls + 1);
     // Then the last two go one at a time, and the memory with the last.
     await t.reimport(id, [{ path: "B.md", text: "#cs Recursion and the call stack." }]);
-    expect((await t.memoryList()).map((m) => m.source?.path)).toEqual(["B.md"]);
+    expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on Recursion in B.", "B.md"]]);
     await t.reimport(id, []);
     expect(await t.memoryList()).toEqual([]);
     expect(t.model.doStreamCalls).toHaveLength(calls + 1);
+  });
+
+  describe("a known memory moving to another note says what that note said", () => {
+    // Each note's memory says what the note covers, so two notes on one concept give different sentences.
+    const propose = (notes: NoteRow[]) => ({
+      concepts: [{ name: "Recursion", notes: notes.map((n) => n.ref) }],
+      edges: [],
+      memories: notes.map((n) => ({ kind: "known", text: `Has notes on ${n.text.replace("#cs ", "")}`, concept: "Recursion", note: n.ref })),
+    });
+    const a = { path: "A.md", text: "#cs recursion: base and recursive cases" };
+    const b = { path: "B.md", text: "#cs recursion: tail calls" };
+
+    it("when its note is deleted", async () => {
+      const t = setup(propose);
+      const { result } = await t.importVault("Vault", [a, b]);
+      expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on recursion: base and recursive cases", "A.md"]]);
+      await t.reimport(result.import.id, [b]);
+      expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on recursion: tail calls", "B.md"]]);
+    });
+
+    it("when its note is rewritten, and the rewritten note then supports it with its new text", async () => {
+      const t = setup(propose);
+      const { result } = await t.importVault("Vault", [a, b]);
+      const a2 = { path: "A.md", text: "#cs recursion: memoisation" };
+      await t.reimport(result.import.id, [a2, b]);
+      expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on recursion: tail calls", "B.md"]]);
+      // B goes too: the memory moves back to A and says what A says now, not what it said before.
+      await t.reimport(result.import.id, [a2]);
+      expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["Has notes on recursion: memoisation", "A.md"]]);
+    });
+
+    it("unless the learner edited it", async () => {
+      const t = setup(propose);
+      const { result } = await t.importVault("Vault", [a, b]);
+      const [memory] = await t.memoryList();
+      await t.send("PATCH", `/memories/${memory!.id}`, { text: "I know recursion well." });
+      await t.reimport(result.import.id, [b]);
+      expect((await t.memoryList()).map((m) => [m.text, m.source?.path])).toEqual([["I know recursion well.", "B.md"]]);
+    });
   });
 
   it("deleting an import mid-call saves nothing from that call", async () => {

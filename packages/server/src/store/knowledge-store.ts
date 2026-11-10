@@ -41,15 +41,23 @@ export function clearDistilled(tx: Db | Tx, noteIds: string[]) {
 
 /**
  * Takes notes out from under the memories they support, before the notes are deleted or rewritten: a memory another
- * note still supports moves to that note, and the rest keep pointing at theirs for the caller to remove (deleting a
- * note removes them by cascade). Notes not yet detached may be picked; they move on in turn when they're detached.
+ * note still supports moves to the one that has supported it longest and says what that note said (two notes on one
+ * concept may cover different things), unless the learner edited it; the rest keep pointing at theirs for the caller
+ * to remove (deleting a note removes them by cascade). Notes not yet detached may be picked; they move on in turn when
+ * they're detached.
  */
 export function detachMemories(tx: Db | Tx, noteIds: string[]) {
   if (noteIds.length === 0) return;
   tx.delete(memorySources).where(inArray(memorySources.noteId, noteIds)).run();
   const ids = sql.join(noteIds.map((id) => sql`${id}`), sql`, `);
+  // The supporter recorded first takes it (rowid order; note ids are random). SET reads the row as it was, so both
+  // subqueries pick the same one.
   tx.run(sql`
-    update memories set note_id = (select min(s.note_id) from memory_sources s where s.memory_id = memories.id)
+    update memories set
+      note_id = (select s.note_id from memory_sources s where s.memory_id = memories.id order by s.rowid limit 1),
+      text = case when edited_at is null
+        then (select s.text from memory_sources s where s.memory_id = memories.id order by s.rowid limit 1)
+        else text end
     where note_id in (${ids}) and exists (select 1 from memory_sources s where s.memory_id = memories.id)`);
 }
 
@@ -183,8 +191,8 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
           savedEdges += tx.insert(conceptEdges).values({ fromId: from, toId: to, kind: edge.kind, noteId: edge.noteId }).onConflictDoNothing().run().changes;
         }
         // Repeats are skipped: of what the learner said, or of what this import's notes already gave. A repeat of this
-        // import's own memory adds its note as one more support, so the memory outlives the note it was first drawn
-        // from. Another import may say the same and keeps its own copy, so deleting one import doesn't take the
+        // import's own memory adds its note, with its own text, as one more support, so the memory outlives the note it
+        // was first drawn from and then says what the note it moves to said. Another import may say the same and keeps its own copy, so deleting one import doesn't take the
         // other's. The memories to compare with are read once per kind and import, not once per memory: an import of a
         // thousand notes has about as many memories, and every group would otherwise re-read and re-key them all.
         // Each set maps a text or concept key to the memory of this import saying it, or null for the learner's own.
@@ -216,12 +224,12 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
           // One `known` memory per concept per import: many notes covering it don't need saying many times.
           const repeat = alike.texts.has(text) ? alike.texts.get(text) : memory.kind === "known" && memory.conceptKey && alike.conceptKeys.has(memory.conceptKey) ? alike.conceptKeys.get(memory.conceptKey) : undefined;
           if (repeat !== undefined) {
-            if (repeat) supportRows.push({ memoryId: repeat, noteId: memory.noteId });
+            if (repeat) supportRows.push({ memoryId: repeat, noteId: memory.noteId, text: memory.text });
             continue;
           }
           const id = randomUUID();
           memoryRows.push({ id, kind: memory.kind, text: memory.text, concept: memory.concept, basis: "import", noteId: memory.noteId, status: "active", createdAt: now });
-          supportRows.push({ memoryId: id, noteId: memory.noteId });
+          supportRows.push({ memoryId: id, noteId: memory.noteId, text: memory.text });
           alike.texts.set(text, id);
           if (memory.concept && !alike.conceptKeys.get(conceptKey(memory.concept))) alike.conceptKeys.set(conceptKey(memory.concept), id);
         }

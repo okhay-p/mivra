@@ -504,9 +504,10 @@ export const conceptEdges = sqliteTable(
 );
 
 /**
- * Every note that supports a memory drawn from notes, its own `note_id` among them. Repeats aren't saved twice (one
- * `known` memory per concept per import), so a memory can stand on several notes; it moves to another when its note
- * goes, and goes only with the last.
+ * Every note that supports a memory drawn from notes, its own `note_id` among them, with the text that note gave.
+ * Repeats aren't saved twice (one `known` memory per concept per import), so a memory can stand on several notes; it
+ * moves to another when its note goes, taking that note's text unless the learner edited it, and goes only with the
+ * last.
  */
 export const memorySources = sqliteTable(
   "memory_sources",
@@ -517,6 +518,8 @@ export const memorySources = sqliteTable(
     noteId: text("note_id")
       .notNull()
       .references(() => notes.id, { onDelete: "cascade" }),
+    /** What this note said, as the model put it: the memory's text if it moves to this note. */
+    text: text("text").notNull(),
   },
   (t) => [primaryKey({ columns: [t.memoryId, t.noteId] }), index("memory_sources_note_idx").on(t.noteId)],
 );

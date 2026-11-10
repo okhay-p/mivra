@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "ca5a0eb2-64f6-48f2-81b0-9f6d36b102f1",
+  "id": "5eb62b4e-0fd5-4021-9f4b-254be41d70e2",
   "prevId": "6ac1f129-da19-47be-8f4b-45ac4de60be9",
   "tables": {
     "artifacts": {
@@ -1236,6 +1236,13 @@
         },
         "note_id": {
           "name": "note_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false
+        },
+        "text": {
+          "name": "text",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
