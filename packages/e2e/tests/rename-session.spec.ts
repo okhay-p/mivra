@@ -1,7 +1,8 @@
 import { expect, test, type Page } from "../fixtures.js";
 
+/** The sidebar entry titled exactly `title`; a course's button name also says "Course". */
 const entry = (page: Page, title: string) =>
-  page.locator('[data-slot="sidebar-content"] [data-slot="sidebar-menu-item"]').filter({ has: page.getByRole("button", { name: title, exact: true }) });
+  page.locator('[data-slot="sidebar-content"] [data-slot="sidebar-menu-item"]').filter({ has: page.getByText(title, { exact: true }) });
 
 /** Opens an entry's menu and chooses Rename, which swaps its title for a field. */
 async function startRename(page: Page, title: string) {
@@ -31,7 +32,7 @@ test("renames the open chat from the sidebar: Esc cancels, Enter saves, and the 
   await field.fill("Not this one");
   await field.press("Escape");
   await expect(field).toHaveCount(0);
-  await expect(entry(page, prompt).getByRole("button", { name: prompt, exact: true })).toBeFocused();
+  await expect(entry(page, prompt).getByRole("button", { name: prompt })).toBeFocused();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(prompt);
 
   // Enter saves the trimmed title, in the sidebar and the header, and it survives a reload.
@@ -43,7 +44,7 @@ test("renames the open chat from the sidebar: Esc cancels, Enter saves, and the 
   await expect(entry(page, renamed)).toHaveCount(1);
   await expect(entry(page, prompt)).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(renamed);
-  await expect(entry(page, renamed).getByRole("button", { name: renamed, exact: true })).toHaveAttribute("data-active", "true");
+  await expect(entry(page, renamed).getByRole("button", { name: renamed })).toHaveAttribute("data-active", "true");
 
   // An empty title saves nothing.
   field = await startRename(page, renamed);
@@ -53,7 +54,7 @@ test("renames the open chat from the sidebar: Esc cancels, Enter saves, and the 
 
   await page.reload();
   await expect(entry(page, renamed)).toHaveCount(1);
-  await entry(page, renamed).getByRole("button", { name: renamed, exact: true }).click();
+  await entry(page, renamed).getByRole("button", { name: renamed }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(renamed);
 });
 
