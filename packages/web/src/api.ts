@@ -272,3 +272,6 @@ export const checkProviderKey = (id: ProviderId) =>
     () => api.settings.providers[":id"].check.$post({ param: { id } }),
     async (res) => (await res.json()) as { ok: boolean; reason?: "rejected" | "unreachable"; message?: string },
   );
+
+/** Deletes a session and all that belongs only to it; for a course, its lessons and their chats too. */
+export const deleteSession = (id: string) => request(() => api.sessions[":id"].$delete({ param: { id } }), () => undefined);

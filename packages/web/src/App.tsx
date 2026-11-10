@@ -22,6 +22,7 @@ import { ChatGptWelcome, UsageLimitNotice } from "./ChatGpt.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
 import { groupSessions } from "./session-groups.js";
+import { DeleteSessionDialog, SessionMenu } from "./SessionActions.js";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription, EmptyMedia } from "@/components/ui/empty";
@@ -105,6 +106,14 @@ export function App() {
   };
 
   const active = sessions.find((s) => s.id === activeId);
+  // The session whose deletion is being confirmed. Lives here so the dialog outlasts the mobile sidebar.
+  const [deleting, setDeleting] = useState<Session>();
+  const deleted = (session: Session) => {
+    setDeleting(undefined);
+    setSessions((prev) => prev.filter((s) => s.id !== session.id));
+    if (start?.sessionId === session.id) setStart(undefined);
+    if (activeId === session.id) setPane({ kind: "start" });
+  };
   // Lives here because the mobile sidebar unmounts its content when closed, and the theme must keep following the OS.
   const [theme, setTheme] = useTheme();
   // Lives here for the same reason: it has to stay open after the mobile sidebar closes.
@@ -132,6 +141,7 @@ export function App() {
         onThemeChange={setTheme}
         drafting={pane.kind === "draft"}
         onSelect={(id) => setPane({ kind: "session", id })}
+        onDelete={setDeleting}
         onNew={openDraft}
         onNewCourse={() => setPane({ kind: "start" })}
         onOpenMemory={() => setMemoryOpen(true)}
@@ -142,6 +152,7 @@ export function App() {
       <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} />
       <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
       <ChatGptWelcome />
+      <DeleteSessionDialog session={deleting} onClose={() => setDeleting(undefined)} onDeleted={deleted} />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
         <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
@@ -182,6 +193,7 @@ function SessionSidebar({
   theme,
   onThemeChange,
   onSelect,
+  onDelete,
   onNew,
   onNewCourse,
   onOpenMemory,
@@ -195,6 +207,7 @@ function SessionSidebar({
   theme: ThemeChoice;
   onThemeChange: (theme: ThemeChoice) => void;
   onSelect: (id: string) => void;
+  onDelete: (session: Session) => void;
   onNew: () => void;
   onNewCourse: () => void;
   onOpenMemory: () => void;
@@ -263,6 +276,7 @@ function SessionSidebar({
                     {s.courseId ? <GraduationCap aria-label="Course" /> : <MessageSquare />}
                     <span>{s.title}</span>
                   </SidebarMenuButton>
+                  <SessionMenu session={s} onDelete={() => onDelete(s)} />
                 </SidebarMenuItem>
               ))}
             </SidebarMenu>
