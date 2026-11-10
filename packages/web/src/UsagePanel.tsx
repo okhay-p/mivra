@@ -382,9 +382,11 @@ function PriceRow({ price, onChanged }: { price: UsageView["prices"][number]; on
         </span>
       </div>
       <p className="text-muted-foreground text-xs">
-        {price.billing === "subscription" ? `Billed to your ChatGPT plan; a price here only changes the API comparison. ${published}.` : `${published}.`}
+        {price.billing === "subscription"
+          ? `Billed to your ChatGPT plan. Its API comparison uses only published prices, so it has no price of your own. ${published}.`
+          : `${published}.`}
       </p>
-      <div className="flex flex-wrap items-end gap-2">
+      {price.billing !== "subscription" && <div className="flex flex-wrap items-end gap-2">
         {RATE_FIELDS.map((f) => (
           <label key={f.key} className="flex w-28 flex-col gap-1 text-xs">
             {f.label}
@@ -403,7 +405,7 @@ function PriceRow({ price, onChanged }: { price: UsageView["prices"][number]; on
             Remove
           </Button>
         )}
-      </div>
+      </div>}
       {error && <p className="text-destructive text-sm" role="alert">{error}</p>}
     </div>
   );

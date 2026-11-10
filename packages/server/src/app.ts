@@ -665,7 +665,7 @@ const setUsagePrice = createRoute({
   request: { body: { content: { "application/json": { schema: z.object({ model: ModelId, price: CustomPrice.nullable() }) } } } },
   responses: {
     200: { description: "Saved", content: { "application/json": { schema: z.object({ model: z.string(), price: Price.nullable() }) } } },
-    400: errorResponse("Too many custom prices"),
+    400: errorResponse("Too many custom prices, or a ChatGPT plan model"),
   },
 });
 
@@ -1557,6 +1557,8 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .openapi(clearUsage, (c) => c.json({ deleted: usage.clear(() => usageStore.clear()) }, 200))
     .openapi(setUsagePrice, (c) => {
       const { model, price } = c.req.valid("json");
+      // A plan model is compared only at published API rates (issue #70), so a price of the learner's own does nothing.
+      if (price && billingOf(model) === "subscription") return c.json({ error: "A ChatGPT plan model is compared only at published API prices." }, 400);
       if (!customPrices.set(model, price)) return c.json({ error: "Too many custom prices. Remove one you no longer need first." }, 400);
       return c.json({ model, price }, 200);
     })

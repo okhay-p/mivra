@@ -7,9 +7,10 @@ import { openDb } from "../src/db/client.js";
 import { messages, sessions, usageRecords } from "../src/db/schema.js";
 import { parseOpenRouterModels, type CatalogModel } from "../src/models/catalog.js";
 import { createSessionStore } from "../src/store/session-store.js";
+import { createSettingsStore } from "../src/store/settings-store.js";
 import { createUsageStore } from "../src/store/usage-store.js";
 import { callTokens, estimateCost, summarise, type UsageRow } from "../src/usage/accounting.js";
-import { createUsageTracker } from "../src/usage/tracker.js";
+import { createCustomPrices, createUsageTracker } from "../src/usage/tracker.js";
 import { createFakeCompatible } from "./support/fake-compatible.js";
 
 // Lessons generate through the whole app, which is slow when the machine is busy.
@@ -297,7 +298,9 @@ describe("Usage API", () => {
   it("never compares plan usage at a learner's own price, only at a published API price", async () => {
     const t = setup();
     t.listed.models = [MODEL, { ...PLAN, apiPrice: null }, UNPRICED];
-    expect((await t.send("/usage/prices", "PUT", { model: PLAN.id, price: { input: 123, output: 456 } })).status).toBe(200);
+    // Refused now; a price saved before that is still ignored.
+    expect((await t.send("/usage/prices", "PUT", { model: PLAN.id, price: { input: 123, output: 456 } })).status).toBe(400);
+    createCustomPrices(createSettingsStore(t.db)).set(PLAN.id, { input: 123, output: 456 });
     await t.send("/settings/model", "PUT", { model: PLAN.id, effort: null });
     t.script.push(text("a", usage(1_000_000, 100_000)));
     await t.chat();
