@@ -1,4 +1,5 @@
 import { conceptKey } from "../runtime/learner-context.js";
+import { noteKey } from "./parse.js";
 import type { KnowledgeStore } from "../store/knowledge-store.js";
 import type { NoteStore } from "../store/note-store.js";
 import type { SessionStore } from "../store/session-store.js";
@@ -66,6 +67,8 @@ export interface ExportFile {
 /** Longest file name, before `.md`: in characters, and in UTF-8 bytes, since most file systems allow 255. */
 const MAX_NAME_CHARS = 80;
 const MAX_NAME_BYTES = 180;
+/** How much of a raw name is read: enough for the capped name even after collapsing spaces and dropping characters. */
+const MAX_RAW_NAME = 1_000;
 /** Names Windows reserves for devices, with or without an extension. */
 const RESERVED = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²³])$/i;
 
@@ -75,35 +78,61 @@ const RESERVED = /^(con|prn|aux|nul|conin\$|conout\$|com[0-9¹²³]|lpt[0-9¹²�
  * no `..`, no trailing dot or space, not a reserved device name, and capped in length.
  */
 export function safeFileName(raw: string, fallback = "Untitled"): string {
+  // Only the start can reach the name, and trimming a long run of spaces and dots costs quadratic time, so the rest
+  // is dropped first (without leaving half a surrogate pair).
   let name = raw
+    .slice(0, MAX_RAW_NAME)
+    .replace(/[\uD800-\uDBFF]$/, "")
     .normalize("NFC")
     .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
     .replace(/[\\/:*?"<>|#^[\]]/g, " ")
     .replace(/\.{2,}/g, ".")
     .replace(/\s+/g, " ")
     .replace(/^[\s.]+|[\s.]+$/g, "");
-  let chars = 0;
-  let bytes = 0;
-  let cut = "";
-  for (const char of name) {
-    const size = Buffer.byteLength(char, "utf8");
-    if (chars + 1 > MAX_NAME_CHARS || bytes + size > MAX_NAME_BYTES) break;
-    cut += char;
-    chars++;
-    bytes += size;
-  }
-  name = cut.replace(/[\s.]+$/g, "");
+  name = capName(name);
   if (!name) name = fallback;
   if (RESERVED.test(name.split(".")[0]!.trim())) name = `_${name}`;
   return name;
 }
 
-/** Makes names unique within a folder, ignoring case as macOS and Windows do: `Name`, `Name 2`, `Name 3`. */
+/** Cuts a name to the length caps, less `reserve` (a suffix still to come), without splitting a character. */
+function capName(name: string, reserve = ""): string {
+  const maxChars = MAX_NAME_CHARS - [...reserve].length;
+  const maxBytes = MAX_NAME_BYTES - Buffer.byteLength(reserve, "utf8");
+  if (name.length <= maxChars && Buffer.byteLength(name, "utf8") <= maxBytes) return name.replace(/[\s.]+$/g, "");
+  let chars = 0;
+  let bytes = 0;
+  let end = 0;
+  for (const char of name) {
+    const code = char.codePointAt(0)!;
+    const size = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    if (chars + 1 > maxChars || bytes + size > maxBytes) break;
+    chars++;
+    bytes += size;
+    end += char.length;
+  }
+  return name.slice(0, end).replace(/[\s.]+$/g, "");
+}
+
+/**
+ * Makes names unique within a folder, ignoring case as macOS and Windows do: `Name`, `Name 2`, `Name 3`, each within
+ * the length caps. The next number to try is kept per name, so many names that collide cost linear time, not
+ * quadratic (names come from the model and the learner, so a hostile vault could hold thousands of them).
+ */
 function uniqueNames() {
   const taken = new Set<string>();
+  const nextSuffix = new Map<string, number>();
   return (name: string) => {
+    const key = name.toLowerCase();
     let candidate = name;
-    for (let n = 2; taken.has(candidate.toLowerCase()); n++) candidate = `${name} ${n}`;
+    if (taken.has(key)) {
+      let n = nextSuffix.get(key) ?? 2;
+      do {
+        const suffix = ` ${n++}`;
+        candidate = `${capName(name, suffix) || "_"}${suffix}`;
+      } while (taken.has(candidate.toLowerCase()));
+      nextSuffix.set(key, n);
+    }
     taken.add(candidate.toLowerCase());
     return candidate;
   };
@@ -142,6 +171,14 @@ const basisLabel: Record<ExportMemory["basis"], string> = { wrong_answer: "a wro
 
 /** The vault's files, in a stable order: the index, then concepts, then memories. */
 export function buildVault(input: ExportInput): ExportFile[] {
+  return [...vaultSteps(input)].filter((step): step is ExportFile => step !== PAUSE);
+}
+
+/** Marks a point where building may stop for a moment, so a large export doesn't hold up the server. */
+const PAUSE = Symbol("pause");
+
+/** The vault's files, with PAUSE between pieces of work; buildVault and exportVault drive it. */
+function* vaultSteps(input: ExportInput): Generator<ExportFile | typeof PAUSE> {
   const conceptNames = uniqueNames();
   const memoryNames = uniqueNames();
   const conceptFile = new Map<string, string>();
@@ -149,38 +186,67 @@ export function buildVault(input: ExportInput): ExportFile[] {
   for (const concept of input.concepts) {
     conceptFile.set(concept.id, conceptNames(safeFileName(concept.name, "Concept")));
     conceptByKey.set(conceptKey(concept.name), concept);
+    yield PAUSE;
   }
   const conceptLink = (concept: ExportConcept) => `[[${EXPORT_FOLDER}/Concepts/${conceptFile.get(concept.id)}|${linkLabel(concept.name)}]]`;
-
-  // A title shared by two notes would link to whichever Obsidian finds first, so those link by path instead.
-  const titleCount = new Map<string, number>();
-  for (const note of input.notes) titleCount.set(note.titleKey, (titleCount.get(note.titleKey) ?? 0) + 1);
-  const notesById = new Map(input.notes.map((n) => [n.id, n]));
-  const noteLink = (id: string): string | null => {
-    const note = notesById.get(id);
-    if (!note) return null;
-    const target = (titleCount.get(note.titleKey) ?? 0) > 1 ? note.path.replace(/\.md$/i, "") : note.title;
-    return UNLINKABLE.test(target) ? escapeInline(note.title) : `[[${target}]]`;
-  };
 
   const memoryFile = new Map<string, string>();
   for (const memory of input.memories) {
     memoryFile.set(memory.id, memoryNames(safeFileName(`${kindLabel[memory.kind]} - ${memory.text}`, kindLabel[memory.kind])));
+    yield PAUSE;
   }
+  // A link by title resolves to any file with that name, so a note's title shared with another note, or with a file
+  // in the export (a concept named like the note it came from), would link to whichever Obsidian finds first: those
+  // notes link by path instead, showing their title.
+  const titleCount = new Map<string, number>();
+  for (const note of input.notes) titleCount.set(note.titleKey, (titleCount.get(note.titleKey) ?? 0) + 1);
+  const generated = new Set([EXPORT_FOLDER, ...conceptFile.values(), ...memoryFile.values()].map(noteKey));
+  const notesById = new Map(input.notes.map((n) => [n.id, n]));
+  const noteLink = (id: string): string | null => {
+    const note = notesById.get(id);
+    if (!note) return null;
+    const ambiguous = (titleCount.get(note.titleKey) ?? 0) > 1 || generated.has(note.titleKey);
+    const path = note.path.replace(/\.md$/i, "");
+    if (!ambiguous) return UNLINKABLE.test(note.title) ? escapeInline(note.title) : `[[${note.title}]]`;
+    if (UNLINKABLE.test(path)) return escapeInline(note.title);
+    return path === note.title ? `[[${path}]]` : `[[${path}|${linkLabel(note.title)}]]`;
+  };
+
   const memoryLink = (memory: ExportMemory) => `[[${EXPORT_FOLDER}/Memories/${memoryFile.get(memory.id)}|${linkLabel(memory.text)}]]`;
   const memoryConcept = (memory: ExportMemory) => (memory.concept ? conceptByKey.get(conceptKey(memory.concept)) : undefined);
 
-  const files: ExportFile[] = [];
-  files.push({ path: `${EXPORT_FOLDER}/Mivra.md`, text: indexNote(input, conceptLink, memoryLink) });
+  yield { path: `${EXPORT_FOLDER}/Mivra.md`, text: indexNote(input, conceptLink, memoryLink) };
 
   const byId = new Map(input.concepts.map((c) => [c.id, c]));
+  // Grouped once, so building stays linear in concepts, edges and memories.
+  const neighbours = new Map<string, { builds: string[]; leads: string[]; related: string[] }>();
+  const neighboursOf = (id: string) => {
+    let entry = neighbours.get(id);
+    if (!entry) neighbours.set(id, (entry = { builds: [], leads: [], related: [] }));
+    return entry;
+  };
+  for (const edge of input.edges) {
+    if (edge.kind === "prerequisite") {
+      neighboursOf(edge.to).builds.push(edge.from);
+      neighboursOf(edge.from).leads.push(edge.to);
+    } else {
+      neighboursOf(edge.from).related.push(edge.to);
+      if (edge.to !== edge.from) neighboursOf(edge.to).related.push(edge.from);
+    }
+  }
+  const memoriesByConcept = new Map<string, ExportMemory[]>();
+  for (const memory of input.memories) {
+    const concept = memoryConcept(memory);
+    if (!concept) continue;
+    const list = memoriesByConcept.get(concept.id);
+    if (list) list.push(memory);
+    else memoriesByConcept.set(concept.id, [memory]);
+  }
   for (const concept of input.concepts) {
-    const builds = input.edges.filter((e) => e.kind === "prerequisite" && e.to === concept.id).map((e) => e.from);
-    const leads = input.edges.filter((e) => e.kind === "prerequisite" && e.from === concept.id).map((e) => e.to);
-    const related = input.edges.filter((e) => e.kind === "related" && (e.from === concept.id || e.to === concept.id)).map((e) => (e.from === concept.id ? e.to : e.from));
+    const { builds, leads, related } = neighbours.get(concept.id) ?? { builds: [], leads: [], related: [] };
     const links = (ids: string[]) => [...new Set(ids)].flatMap((id) => (byId.has(id) ? [`- ${conceptLink(byId.get(id)!)}`] : []));
     const sourceLinks = [...new Set(concept.notes.map(noteLink).filter((l): l is string => l !== null))].map((l) => `- ${l}`);
-    const memories = input.memories.filter((m) => memoryConcept(m)?.id === concept.id).map((m) => `- ${memoryLink(m)}`);
+    const memories = (memoriesByConcept.get(concept.id) ?? []).map((m) => `- ${memoryLink(m)}`);
     const sections: [string, string[]][] = [
       ["From your notes", sourceLinks],
       ["Builds on", links(builds)],
@@ -199,7 +265,7 @@ export function buildVault(input: ExportInput): ExportFile[] {
         .filter(([, lines]) => lines.length > 0)
         .map(([heading, lines]) => `\n## ${heading}\n\n${lines.join("\n")}\n`)
         .join("");
-    files.push({ path: `${EXPORT_FOLDER}/Concepts/${conceptFile.get(concept.id)}.md`, text });
+    yield { path: `${EXPORT_FOLDER}/Concepts/${conceptFile.get(concept.id)}.md`, text };
   }
 
   for (const memory of input.memories) {
@@ -221,9 +287,8 @@ export function buildVault(input: ExportInput): ExportFile[] {
         ["edited", memory.editedAt ? date(memory.editedAt) : null],
         ["tags", `[mivra/memory, mivra/${memory.kind}]`],
       ]) + `\n${escapeInline(memory.text)}\n\n${details.join("\n")}\n`;
-    files.push({ path: `${EXPORT_FOLDER}/Memories/${memoryFile.get(memory.id)}.md`, text });
+    yield { path: `${EXPORT_FOLDER}/Memories/${memoryFile.get(memory.id)}.md`, text };
   }
-  return files;
 }
 
 function indexNote(input: ExportInput, conceptLink: (c: ExportConcept) => string, memoryLink: (m: ExportMemory) => string): string {
@@ -246,11 +311,17 @@ function indexNote(input: ExportInput, conceptLink: (c: ExportConcept) => string
   return parts.join("");
 }
 
-/** Reads what to export from the stores and builds the vault's files. Held memories are counted, never read out. */
-export function exportVault(deps: { store: SessionStore; knowledge: KnowledgeStore; notes: NoteStore; checkKinds: string[]; exportedAt: Date }): ExportFile[] {
+/** How long building runs before letting other requests in. */
+const SLICE_MS = 10;
+
+/**
+ * Reads what to export from the stores and builds the vault's files. Held memories are counted, never read out.
+ * Building gives way to the event loop every few milliseconds, so a large export doesn't stall other requests.
+ */
+export async function exportVault(deps: { store: SessionStore; knowledge: KnowledgeStore; notes: NoteStore; checkKinds: string[]; exportedAt: Date }): Promise<ExportFile[]> {
   const graph = deps.knowledge.conceptGraph();
   const listed = deps.store.listMemoriesForLearner(deps.checkKinds);
-  return buildVault({
+  const steps = vaultSteps({
     concepts: graph.concepts,
     edges: graph.edges,
     notes: deps.notes.noteIndex(),
@@ -258,4 +329,14 @@ export function exportVault(deps: { store: SessionStore; knowledge: KnowledgeSto
     held: listed.filter((m) => m.held).length,
     exportedAt: deps.exportedAt,
   });
+  const files: ExportFile[] = [];
+  let sliceStart = performance.now();
+  for (const step of steps) {
+    if (step !== PAUSE) files.push(step);
+    if (performance.now() - sliceStart > SLICE_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      sliceStart = performance.now();
+    }
+  }
+  return files;
 }

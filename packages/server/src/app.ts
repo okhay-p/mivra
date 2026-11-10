@@ -1761,9 +1761,9 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       if (!outcome.ok) return c.json({ error: outcome.error.message }, zipImportErrorStatus[outcome.error.kind]);
       return c.json(outcome.result, 201);
     })
-    .get("/export/obsidian", (c) => {
+    .get("/export/obsidian", async (c) => {
       const exportedAt = new Date();
-      const files = exportVault({ store, knowledge, notes: noteStore, checkKinds: registry.checkKinds(), exportedAt });
+      const files = await exportVault({ store, knowledge, notes: noteStore, checkKinds: registry.checkKinds(), exportedAt });
       let body: ReadableStream<Uint8Array>;
       try {
         body = zipStream(files.map((f) => ({ name: f.path, data: Buffer.from(f.text, "utf8") })), exportedAt);

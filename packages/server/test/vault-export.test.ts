@@ -135,7 +135,7 @@ describe("exporting an Obsidian vault", () => {
 
     const bs = files.get("Mivra/Concepts/Binary search.md")!;
     expect(bs).toContain("- [[Searching]]");
-    expect(bs).toContain("- [[Week 1/Intro]]");
+    expect(bs).toContain("- [[Week 1/Intro|Intro]]");
     expect(bs).toContain("## Builds on\n\n- [[Mivra/Concepts/Sorted arrays|Sorted arrays]]");
     expect(bs).toContain("## Related\n\n- [[Mivra/Concepts/etc passwd|../../etc/passwd]]");
     expect(bs).toContain("[[Mivra/Memories/Known - Knows binary search halves the range|Knows binary search halves the range]]");
@@ -192,6 +192,26 @@ describe("exporting an Obsidian vault", () => {
     expect(zipped).toMatchObject({ added: 1, skippedCount: files.size, import: { noteCount: 1 } });
   });
 
+  it("lets other work run while it builds a large export", async () => {
+    const { app, db } = setup();
+    const now = new Date("2026-11-09T10:00:00Z");
+    db.insert(memories)
+      .values(Array.from({ length: 3_000 }, (_, i) => ({ id: `m${i}`, kind: "goal" as const, text: `${"Same long goal ".repeat(10)}${i}`, concept: null, basis: "chat" as const, status: "active" as const, createdAt: now })))
+      .run();
+    let ticks = 0;
+    let running = true;
+    const tick = () => {
+      ticks++;
+      if (running) setImmediate(tick);
+    };
+    setImmediate(tick);
+    const res = await app.request("/api/export/obsidian", { headers: auth });
+    running = false;
+    expect(res.status).toBe(200);
+    expect(ticks).toBeGreaterThan(1);
+    expect((await readZip(new Uint8Array(await res.arrayBuffer()))).size).toBe(3_001);
+  });
+
   it("is behind the API token", async () => {
     const { app } = setup();
     expect((await app.request("/api/export/obsidian")).status).toBe(401);
@@ -211,6 +231,13 @@ describe("safeFileName", () => {
     expect(safeFileName("LPT1.txt")).toBe("_LPT1.txt");
     expect(safeFileName("Console")).toBe("Console");
     expect(safeFileName("tab\there\u202Eflip\u0000")).toBe("tab here flip");
+  });
+
+  it("reads only the start of a long name, so trimming it stays fast", () => {
+    const started = performance.now();
+    expect(safeFileName(`a${" .".repeat(100_000)}b`)).toBe("a");
+    expect(safeFileName(`${"😀".repeat(499)}${"😀".repeat(10)}`)).toBe("😀".repeat(45));
+    expect(performance.now() - started).toBeLessThan(1_000);
   });
 
   it("caps the length in characters and in bytes, without splitting a character", () => {
@@ -234,6 +261,53 @@ describe("buildVault", () => {
       ],
     });
     expect(files.map((f) => f.path)).toEqual(["Mivra/Mivra.md", "Mivra/Concepts/Recursion.md", "Mivra/Concepts/recursion 2.md", "Mivra/Concepts/Recursion 3.md"]);
+  });
+
+  it("keeps thousands of colliding names unique and within the caps, in linear time", () => {
+    const prefix = "x".repeat(200);
+    const memories: ExportInput["memories"] = Array.from({ length: 5_000 }, (_, i) => ({
+      id: `m${i}`,
+      kind: "goal",
+      text: `${prefix} ${i}`,
+      concept: null,
+      basis: "chat",
+      noteId: null,
+      createdAt: new Date(0),
+      editedAt: null,
+    }));
+    // Names a suffix would take, so allocation has to skip past them too.
+    const concepts = Array.from({ length: 2_000 }, (_, i) => ({ id: `c${i}`, name: i === 0 ? "Loop" : `loop ${i + 1}`, notes: [] }));
+    concepts.push(...Array.from({ length: 2_000 }, (_, i) => ({ id: `d${i}`, name: "LOOP", notes: [] })));
+    const started = performance.now();
+    const files = buildVault({ ...base, concepts, memories });
+    const elapsed = performance.now() - started;
+    const names = files.map((f) => f.path.toLowerCase());
+    expect(new Set(names).size).toBe(files.length);
+    expect(files).toHaveLength(1 + 4_000 + 5_000);
+    for (const f of files) {
+      const name = f.path.split("/").pop()!.replace(/\.md$/, "");
+      expect([...name].length).toBeLessThanOrEqual(80);
+      expect(Buffer.byteLength(name)).toBeLessThanOrEqual(180);
+    }
+    expect(files.some((f) => f.path === "Mivra/Memories/Goal - " + "x".repeat(68) + " 5000.md")).toBe(true);
+    expect(files.some((f) => f.path === "Mivra/Concepts/LOOP 4000.md")).toBe(true);
+    // The quadratic version took seconds for 2,000; this is well under a second even on a loaded machine.
+    expect(elapsed).toBeLessThan(2_000);
+  });
+
+  it("links a note by its path when a file in the export shares its name", () => {
+    const [, concept, memory] = buildVault({
+      ...base,
+      concepts: [{ id: "a", name: "recursion", notes: ["n"] }],
+      notes: [
+        { id: "n", title: "Recursion", titleKey: "recursion", path: "CS/Recursion.md" },
+        { id: "r", title: "Mivra", titleKey: "mivra", path: "Notes/Mivra.md" },
+      ],
+      memories: [{ id: "m", kind: "known", text: "Knows it", concept: null, basis: "import", noteId: "r", createdAt: new Date(0), editedAt: null }],
+    });
+    expect(concept!.path).toBe("Mivra/Concepts/recursion.md");
+    expect(concept!.text).toContain("- [[CS/Recursion|Recursion]]");
+    expect(memory!.text).toContain("- From your notes: [[Notes/Mivra|Mivra]]");
   });
 
   it("names a note it can't link to in plain text", () => {
