@@ -1023,7 +1023,21 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   };
   /** Why a task's override can't run now, or null. Reuses the custom providers' own messages (issue #69). */
   const taskProblem = async (selection: ModelSelection) =>
-    custom.unavailable(selection.model)?.replace(/ Choose another model in the picker under the message box\.$/, "") ?? (await models.overrideProblem(selection));
+    custom.unavailable(selection.model)?.replace(/ Choose another model in the picker under the message box\.$/, "") ??
+    providerProblem(selection.model) ??
+    (await models.overrideProblem(selection));
+  /**
+   * A built-in model whose provider can't be called now. Checked apart from the picker's list, which always offers
+   * the default model, so an override of the default still fails clearly once its provider's key is gone.
+   */
+  const providerProblem = (modelId: string): string | null => {
+    const provider = modelId.slice(0, modelId.indexOf(":"));
+    if ((providerIds as readonly string[]).includes(provider) && !credentials.keys()[provider as ProviderId]) {
+      return "Its provider has no API key set up any more.";
+    }
+    if (provider === "chatgpt" && chatgpt && !chatgpt.view().signedIn) return "Mivra isn't signed in with ChatGPT any more.";
+    return null;
+  };
   const taskView = async (task: ModelTask) => {
     const override = models.override(task);
     return { id: task, override, effective: override ?? models.current(), unavailable: override ? await taskProblem(override) : null };

@@ -55,7 +55,7 @@ interface LessonJson {
   lesson: { id: string; status: string; error: string | null; errorAction: string | null };
 }
 
-function setup({ db = openDb(":memory:"), catalog = [MAIN, OTHER, CHEAP], gate }: { db?: Db; catalog?: CatalogModel[]; gate?: Promise<void> } = {}) {
+function setup({ db = openDb(":memory:"), catalog = [MAIN, OTHER, CHEAP], gate, credentials = memoryCredentials({ saved: { openrouter: "sk-or-test-0000TEST" } }) }: { db?: Db; catalog?: CatalogModel[]; gate?: Promise<void>; credentials?: ReturnType<typeof memoryCredentials> } = {}) {
   const listed = { models: catalog };
   /** Every model built for a run, with the selection it was built for and how often it was called. */
   const built: { selection: ModelSelection; calls: number }[] = [];
@@ -73,7 +73,7 @@ function setup({ db = openDb(":memory:"), catalog = [MAIN, OTHER, CHEAP], gate }
       });
     },
     models: { defaults: { model: MAIN.id, effort: null }, catalog: { list: async () => ({ models: listed.models, state: "fresh" as const }) } },
-    providers: { credentials: memoryCredentials(), isLocal: () => true },
+    providers: { credentials, isLocal: () => true },
     security: { token: "t", allowedHosts: [] },
   });
   const headers = { authorization: "Bearer t", "content-type": "application/json" };
@@ -106,7 +106,7 @@ function setup({ db = openDb(":memory:"), catalog = [MAIN, OTHER, CHEAP], gate }
     const sessionId = createLessonStore(db).findLesson(id)!.sessionId;
     return db.select({ model: runs.model, effort: runs.effort }).from(runs).where(eq(runs.sessionId, sessionId)).all();
   };
-  return { db, app, built, listed, call, send, task, override, reset, selectMain, startLesson, lesson, settled, provenance };
+  return { db, app, built, listed, call, send, task, override, reset, selectMain, startLesson, lesson, settled, provenance, credentials };
 }
 
 describe("per-task model overrides (issue #71)", () => {
@@ -224,6 +224,20 @@ describe("per-task model overrides (issue #71)", () => {
     const resumed = await t.settled(id);
     expect(resumed).toMatchObject({ status: "ready", errorAction: null, error: null });
     expect(t.provenance(id)).toEqual([{ model: MAIN.id, effort: null }]);
+  });
+
+  it("fails a lesson whose override is the default model once its provider's key is gone", async () => {
+    // The picker always offers the default model, so the catalog alone can't tell that its provider went away.
+    const t = setup({ catalog: [OTHER] });
+    await t.override({ model: MAIN.id, effort: null });
+    expect((await t.task()).unavailable).toBeNull();
+    t.credentials.remove("openrouter");
+    expect((await t.task()).unavailable).toMatch(/no API key/);
+
+    const failed = await t.settled(await t.startLesson());
+    expect(failed).toMatchObject({ status: "failed", errorAction: "lesson-model" });
+    expect(failed.error).toMatch(/no API key/);
+    expect(t.built).toEqual([]);
   });
 
   it("fails a lesson whose override's custom provider was removed, with the provider's own reason", async () => {
