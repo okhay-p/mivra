@@ -1,5 +1,5 @@
-# Releases a version tag to npm and GHCR (ADR-013 step 6). It only builds and publishes: tests run in the review gate
-# before a PR merges, not here.
+# Releases a version tag to npm and GHCR (ADR-013 step 6). It only builds and publishes: tests run on the pull request
+# (test.yml) before a change merges, not here.
 #
 # Push a tag `v<version>` matching packages/mivra/package.json on a commit that's on main. npm accepts the publish through
 # trusted publishing (OIDC), so no npm token is stored anywhere, and each release gets a provenance statement. Run it by
