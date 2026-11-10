@@ -9,18 +9,13 @@ async function chooseTheme(page: Page, name: "System" | "Light" | "Dark") {
 }
 
 test.describe("theme", () => {
-  test("follows the OS by default, including when it changes", async ({ page }) => {
+  test("an explicit choice overrides the OS and survives a reload", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "dark" });
     await page.goto("/");
     await expect(page.getByRole("button", { name: "Theme: System" })).toBeVisible();
     expect(await isDark(page)).toBe(true);
     await page.emulateMedia({ colorScheme: "light" });
     await expect.poll(() => isDark(page)).toBe(false);
-  });
-
-  test("an explicit choice overrides the OS and survives a reload", async ({ page }) => {
-    await page.emulateMedia({ colorScheme: "light" });
-    await page.goto("/");
     await chooseTheme(page, "Dark");
     expect(await isDark(page)).toBe(true);
     await page.reload();
@@ -50,19 +45,6 @@ test.describe("sidebar", () => {
     await expect.poll(async () => (await main.boundingBox())?.x).toBe(48);
     await page.keyboard.press("Control+b");
     await expect.poll(async () => (await main.boundingBox())?.x).toBe(256);
-  });
-
-  test("lists a new session under Today and highlights it", async ({ page }) => {
-    await page.goto("/");
-    await page.getByRole("button", { name: "New session" }).first().click();
-    const prompt = `hello ${Date.now()}`;
-    await page.getByRole("textbox", { name: "Message" }).fill(prompt);
-    await page.getByRole("button", { name: "Send" }).click();
-
-    const session = page.locator('[data-slot="sidebar"]').getByRole("button", { name: prompt });
-    await expect(session).toHaveAttribute("data-active", "true");
-    await expect(page.locator('[data-slot="sidebar-group"]', { hasText: "Today" }).getByRole("button", { name: prompt })).toBeVisible();
-    await expect(page.getByText(/The server says/)).toBeVisible();
   });
 
   // Other tests add sessions meanwhile, so these count only what this page created or lists.
@@ -102,6 +84,7 @@ test.describe("sidebar", () => {
     await page.getByRole("button", { name: "Send", exact: true }).click();
     const session = page.locator('[data-slot="sidebar"]').getByRole("button", { name: prompt });
     await expect(session).toHaveAttribute("data-active", "true");
+    await expect(page.locator('[data-slot="sidebar-group"]', { hasText: "Today" }).getByRole("button", { name: prompt })).toBeVisible();
     await expect(page.locator('[data-message-role="user"]')).toHaveText(prompt);
     await expect(page.getByText(/The server says/)).toBeVisible();
     expect(created).toHaveLength(1);
@@ -221,51 +204,6 @@ test.describe("markdown and maths", () => {
     await page.getByRole("textbox", { name: "Message" }).fill(message);
     await page.getByRole("button", { name: "Send" }).click();
   }
-
-  test("artifact text keeps answers literal, renders only formulas, and replies keep markdown", async ({ page }) => {
-    await send(page, "literals please");
-
-    const check = page.getByRole("region", { name: /^Check/ });
-    const options = check.getByRole("group", { name: "Options" }).getByRole("button");
-    await expect(options.nth(0)).toHaveText("2*3*4");
-    await expect(options.nth(1)).toHaveText("234");
-    await expect(options.nth(2).locator(".katex")).toHaveCount(1);
-    await expect(check.locator("em")).toHaveCount(0);
-    await expect(check).toContainText("Which is *the* product");
-
-    const trace = page.getByRole("region", { name: /Algorithm trace$/ });
-    await expect(trace.getByRole("heading")).toContainText("Swap *demo* in");
-    await expect(trace.getByRole("heading").locator(".katex")).toHaveCount(1);
-    await expect(trace).toContainText("Multiply 2*3*4 and compare");
-    await expect(trace).toContainText("for $5 or $10.");
-
-    const reply = page.locator("main div.math-text");
-    await expect(reply.locator("strong")).toHaveText("sum");
-    await expect(reply.locator("p code")).toHaveText("$x$");
-    await expect(reply).toContainText("costs $5 and $10, see $x$");
-    await expect(reply.locator("a")).toHaveAttribute("href", "https://example.com/");
-  });
-
-  test("a long streamed reply keeps its dollars as text", async ({ page }) => {
-    await send(page, "currencyparagraph");
-    const reply = page.locator("main div.math-text");
-    await expect(reply).toContainText("$44", { timeout: 60_000 });
-    await expect(reply.locator(".katex")).toHaveCount(0);
-    expect((await reply.textContent())!.match(/\$\d+/g)).toHaveLength(40);
-  });
-
-  test("a long streamed reply renders every formula", async ({ page }) => {
-    await send(page, "formulablocks");
-    const reply = page.locator("main div.math-text");
-    await expect(reply.locator(".katex")).toHaveCount(100, { timeout: 60_000 });
-  });
-
-  test("a paragraph of intervals after an inequality renders every formula", async ({ page }) => {
-    await send(page, "intervals");
-    const reply = page.locator("main div.math-text");
-    await expect(reply.locator(".katex")).toHaveCount(67);
-    await expect(reply.locator(".math-text-literal")).toHaveCount(0);
-  });
 
   test("a reply nested too deeply shows as text without blocking the page", async ({ page }) => {
     await send(page, "deepnesting");

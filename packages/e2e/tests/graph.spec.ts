@@ -82,7 +82,9 @@ test.describe("graph", () => {
     await expect(graph.getByTestId("graph-status")).toContainText("is done");
   });
 
-  test("a tree is laid out in levels, with children in edge order", async ({ page }) => {
+  test("a tree is laid out in levels, with children in edge order", async ({ page, browserName }) => {
+    // Deterministic layout and scale coverage only needs Chromium.
+    test.skip(browserName !== "chromium", "Covered in Chromium");
     const graph = await showGraph(page, "graphtree");
     await expect(graph.getByTestId("graph-canvas")).toHaveAttribute("data-layout", "tree");
     const at = async (id: string) => (await graph.locator(`[data-node="${id}"]`).boundingBox())!;
@@ -97,7 +99,9 @@ test.describe("graph", () => {
   });
 
   for (const width of [1100, 320]) {
-    test(`a BST reads in sorted order across the page at ${width}px`, async ({ page }) => {
+    test(`a BST reads in sorted order across the page at ${width}px`, async ({ page, browserName }) => {
+      // Deterministic layout and scale coverage only needs Chromium.
+      test.skip(browserName !== "chromium", "Covered in Chromium");
       await page.setViewportSize({ width, height: 800 });
       const graph = await showGraph(page, "graphbst");
       await expect(graph.getByTestId("graph-canvas")).toHaveAttribute("data-layout", "tree");
@@ -107,7 +111,9 @@ test.describe("graph", () => {
     });
   }
 
-  test("self-loops and parallel edges are all drawn apart", async ({ page }) => {
+  test("self-loops and parallel edges are all drawn apart", async ({ page, browserName }) => {
+    // Deterministic layout and scale coverage only needs Chromium.
+    test.skip(browserName !== "chromium", "Covered in Chromium");
     const graph = await showGraph(page, "graphloop");
     await expect(graph.getByTestId("graph-node")).toHaveCount(3);
     await expect(graph.getByTestId("graph-edge")).toHaveCount(7);

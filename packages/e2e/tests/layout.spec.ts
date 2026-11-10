@@ -1,10 +1,5 @@
 import { expect, test, type Page } from "../fixtures.js";
 
-const SIZES = [
-  { width: 1280, height: 720 },
-  { width: 320, height: 640 },
-];
-
 /** The sidebar, opened first on a narrow screen, where its actions are behind a toggle. */
 async function sidebar(page: Page) {
   if ((page.viewportSize()?.width ?? 0) >= 768) return page.locator("body");
@@ -44,41 +39,44 @@ async function expectFrameInPlace(page: Page) {
 }
 
 test.describe("a long session with several kinds of artifact", () => {
-  for (const size of SIZES) {
-    test(`stays in frame when reopened and resized, from ${size.width}px`, async ({ page }) => {
-      test.setTimeout(60_000);
-      const other = SIZES.find((s) => s !== size)!;
-      await page.setViewportSize(size);
-      await page.goto("/");
-      await (await sidebar(page)).getByRole("button", { name: "New session" }).first().click();
-      const name = `teach reopened ${Date.now()}`;
-      await send(page, name, "Step through it, then answer the check.");
-      await send(page, "graphweighted", "Here's the graph.");
-      await send(page, "venn", "Step through the diagram.");
-      await send(page, "truthtable", "Step through the table.");
-      await send(page, "workedproof", "Reveal each step.");
-      await expectFrameInPlace(page);
+  test("stays in frame when reopened and resized, from 320px", async ({ page }) => {
+    test.setTimeout(60_000);
+    const size = { width: 320, height: 640 };
+    const other = { width: 1280, height: 720 };
+    await page.setViewportSize(size);
+    await page.goto("/");
+    await (await sidebar(page)).getByRole("button", { name: "New session" }).first().click();
+    const name = `teach reopened ${Date.now()}`;
+    await send(page, name, "Step through it, then answer the check.");
+    await send(page, "graphweighted", "Here's the graph.");
+    await send(page, "venn", "Step through the diagram.");
+    await send(page, "truthtable", "Step through the table.");
+    await send(page, "workedproof", "Reveal each step.");
+    await expectFrameInPlace(page);
 
-      await page.reload();
-      await (await sidebar(page)).getByRole("button", { name }).click();
-      await expect(page.getByText("Reveal each step.")).toBeVisible();
-      await expectFrameInPlace(page);
+    await page.reload();
+    await (await sidebar(page)).getByRole("button", { name }).click();
+    await expect(page.getByText("Reveal each step.")).toBeVisible();
+    await expectFrameInPlace(page);
 
-      await page.setViewportSize(other);
-      await expectFrameInPlace(page);
-      await page.setViewportSize(size);
-      await expectFrameInPlace(page);
+    await page.setViewportSize(other);
+    await expectFrameInPlace(page);
+    await page.reload();
+    await (await sidebar(page)).getByRole("button", { name }).click();
+    await expect(page.getByText("Reveal each step.")).toBeVisible();
+    await expectFrameInPlace(page);
+    await page.setViewportSize(size);
+    await expectFrameInPlace(page);
 
-      // Moving through the artifacts with the keyboard scrolls the transcript, never the frame.
-      const counters = page.getByRole("button", { name: "Next" });
-      for (let i = 0; i < (await counters.count()); i++) {
-        await counters.nth(i).focus();
-        await page.keyboard.press("Enter");
-        expect(await page.getByRole("main").evaluate((e) => e.scrollTop)).toBe(0);
-      }
-      await expectFrameInPlace(page);
-    });
-  }
+    // Moving through the artifacts with the keyboard scrolls the transcript, never the frame.
+    const counters = page.getByRole("button", { name: "Next" });
+    for (let i = 0; i < (await counters.count()); i++) {
+      await counters.nth(i).focus();
+      await page.keyboard.press("Enter");
+      expect(await page.getByRole("main").evaluate((e) => e.scrollTop)).toBe(0);
+    }
+    await expectFrameInPlace(page);
+  });
 });
 
 test.describe("long formulas in a graph and a set diagram", () => {

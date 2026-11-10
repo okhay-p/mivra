@@ -69,6 +69,28 @@ test.describe("keyboard stops at 320px", () => {
       const counter = card.getByTestId("step-counter");
       if (script === "tabset") await boxesMeasured(card, ["Top left label:", "Universe:"], ["W", "U", "M", "V"].map((letter) => letter.repeat(22)));
       else await boxesMeasured(card);
+      if (script === "tabset") {
+        const list = card.getByTestId("set-overflow");
+        await expect(list).toContainText("Top left label:");
+        await expect(list).toContainText("Universe:");
+        const reachable = (formula: string) => card.locator('[data-testid="step-scroll"]', { hasText: formula });
+        for (const letter of ["W", "U", "M", "V"]) await expect(reachable(letter.repeat(22)).first()).toBeVisible();
+        // Screen readers get each of these once, from the description rather than the boxes.
+        await expect(card.getByTestId("set-description")).toContainText("M".repeat(22));
+        await expect(list.locator('[data-testid="step-scroll"] > [aria-hidden="true"]').first()).toBeAttached();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+        const inCard = await card.evaluate((root) => {
+          const { right } = root.getBoundingClientRect();
+          return [...root.querySelectorAll('[data-testid="set-key"] > *, [data-testid="set-variables"] > *')].every((item) => item.getBoundingClientRect().right <= right);
+        });
+        expect(inCard).toBe(true);
+      } else if (script === "tabgraph" || script === "tabtrace") {
+        const inCard = await card.evaluate((root) => {
+          const { right } = root.getBoundingClientRect();
+          return [...root.querySelectorAll("dl > *")].every((chip) => chip.getBoundingClientRect().right <= right);
+        });
+        expect(inCard).toBe(true);
+      }
       const stops = await tabStops(page, card);
       expect(stops.filter((stop) => stop.hidden)).toEqual([]);
       expect(stops.filter((stop) => stop.button).length).toBe(3);
@@ -90,36 +112,4 @@ test.describe("keyboard stops at 320px", () => {
       await expect(counter).toHaveText("Step 2 of 2");
     });
   }
-
-  for (const [script, reply, region] of [
-    ["tabgraph", "Tab through the graph.", /graph$/i],
-    ["tabtrace", "Tab through the trace.", /Algorithm trace/],
-  ] as const) {
-    test(`${script}: a long variable wraps inside the card rather than running off it`, async ({ page }) => {
-      const card = await showAt320(page, script, reply, region);
-      const inCard = await card.evaluate((root) => {
-        const { right } = root.getBoundingClientRect();
-        return [...root.querySelectorAll("dl > *")].every((chip) => chip.getBoundingClientRect().right <= right);
-      });
-      expect(inCard).toBe(true);
-    });
-  }
-
-  test("what's cut off or too wide in a set diagram can all be read in full, and fits the page", async ({ page }) => {
-    const card = await showAt320(page, "tabset", "Tab through the diagram.", /Set diagram/);
-    const list = card.getByTestId("set-overflow");
-    await expect(list).toContainText("Top left label:");
-    await expect(list).toContainText("Universe:");
-    const reachable = (formula: string) => card.locator('[data-testid="step-scroll"]', { hasText: formula });
-    for (const letter of ["W", "U", "M", "V"]) await expect(reachable(letter.repeat(22)).first()).toBeVisible();
-    // Screen readers get each of these once, from the description rather than the boxes.
-    await expect(card.getByTestId("set-description")).toContainText("M".repeat(22));
-    await expect(list.locator('[data-testid="step-scroll"] > [aria-hidden="true"]').first()).toBeAttached();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
-    const inCard = await card.evaluate((root) => {
-      const { right } = root.getBoundingClientRect();
-      return [...root.querySelectorAll('[data-testid="set-key"] > *, [data-testid="set-variables"] > *')].every((item) => item.getBoundingClientRect().right <= right);
-    });
-    expect(inCard).toBe(true);
-  });
 });

@@ -34,7 +34,7 @@ describe("MemoryPanel", () => {
     expect(screen.getByText("From chat")).toBeTruthy();
   });
 
-  it("says so when there is nothing yet, and shows load errors", async () => {
+  it("says so when there is nothing yet", async () => {
     openPanel(json([]));
     expect(await screen.findByText("No memories yet")).toBeTruthy();
   });
