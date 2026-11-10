@@ -150,6 +150,23 @@ describe("groupNotes", () => {
     ]);
   });
 
+  it("groups a hostile vault of linked untagged notes quickly (ADR-010)", () => {
+    // 20 tagged notes and 9,980 untagged ones in one linked component, each linking to 19 tagged notes: ~200,000 links.
+    const tagged = Array.from({ length: 20 }, (_, i) => pending(`t/${String(i).padStart(2, "0")}.md`, ["cs"]));
+    const untagged = Array.from({ length: 9_980 }, (_, i) => pending(`u/${String(i).padStart(4, "0")}.md`));
+    const links: { from: string; to: string }[] = [];
+    untagged.forEach((note, i) => {
+      if (i > 0) links.push({ from: note.path, to: untagged[i - 1]!.path });
+      for (const t of tagged.slice(1)) links.push({ from: note.path, to: t.path });
+    });
+    const started = performance.now();
+    const groups = groupNotes([...tagged, ...untagged], links);
+    // About 55 s when the component was scanned for every link; a generous bound so a loaded machine doesn't flake.
+    expect(performance.now() - started).toBeLessThan(3_000);
+    expect(new Set(groups.map((g) => g.reason))).toEqual(new Set(["tag #cs"]));
+    expect(groups.reduce((sum, g) => sum + g.notes.length, 0)).toBe(10_000);
+  });
+
   it("splits a group too large for one call, the same way every time", () => {
     const notes = Array.from({ length: MAX_GROUP_NOTES + 3 }, (_, i) => pending(`n${String(i).padStart(2, "0")}.md`, ["cs"]));
     const groups = groupNotes(notes, []);

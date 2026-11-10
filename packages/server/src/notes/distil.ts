@@ -60,10 +60,17 @@ export function groupNotes(pending: PendingNote[], links: { from: string; to: st
         }
       }
     }
-    const taggedNeighbour = component
-      .flatMap((n) => [...(neighbours.get(n.id) ?? [])].filter((id) => groupOf.has(id) && !component.some((c) => c.id === id)))
-      .map((id) => byId.get(id)!)
-      .sort((a, b) => a.path.localeCompare(b.path))[0];
+    // The tagged note it links to with the first path. One pass over the component's links: a hostile vault can give
+    // a large component thousands of links each (ADR-010), so nothing here may scan the component per link.
+    const members = new Set(component.map((n) => n.id));
+    let taggedNeighbour: PendingNote | undefined;
+    for (const note of component) {
+      for (const id of neighbours.get(note.id) ?? []) {
+        if (members.has(id) || !groupOf.has(id)) continue;
+        const candidate = byId.get(id)!;
+        if (!taggedNeighbour || candidate.path.localeCompare(taggedNeighbour.path) < 0) taggedNeighbour = candidate;
+      }
+    }
     component.sort((a, b) => a.path.localeCompare(b.path));
     const group = taggedNeighbour ? groupOf.get(taggedNeighbour.id)! : component.length > 1 ? `links from ${component[0]!.path}` : `folder ${dirname(start.path) || "(top)"}`;
     for (const note of component) groupOf.set(note.id, group);
@@ -72,7 +79,9 @@ export function groupNotes(pending: PendingNote[], links: { from: string; to: st
   const groups = new Map<string, PendingNote[]>();
   for (const note of [...pending].sort((a, b) => a.path.localeCompare(b.path))) {
     const key = groupOf.get(note.id)!;
-    groups.set(key, [...(groups.get(key) ?? []), note]);
+    const members = groups.get(key);
+    if (members) members.push(note);
+    else groups.set(key, [note]);
   }
   const split: NoteGroup[] = [];
   for (const [reason, members] of [...groups].sort(([a], [b]) => a.localeCompare(b))) {
