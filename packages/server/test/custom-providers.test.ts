@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { simulateReadableStream, type UIMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { memoryCredentials, type CredentialStore } from "../src/credentials.js";
 import { openDb } from "../src/db/client.js";
@@ -219,9 +219,13 @@ describe("custom provider configuration", () => {
     // A key from the environment can't be replaced here.
     expect((await update("alpha", { key: KEY_B })).body.error).toMatch(/MIVRA_PROVIDER_ALPHA_API_KEY/);
 
-    const bad = setup({ env: { MIVRA_PROVIDER_ALPHA_BASE_URL: "https://alpha.test/v1?key=x" } });
-    const shown = await bad.create({ name: "Alpha" });
-    expect(shown.body.custom[0]!.baseUrl).toMatchObject({ value: null, source: null, error: expect.stringMatching(/isn't used/) });
+    // A rejected URL may hold credentials, so it's never sent back: only the reason it isn't used.
+    for (const url of ["https://alpha.test/v1?api_key=secret-in-query", "https://user:secret-in-userinfo@alpha.test/v1"]) {
+      const bad = setup({ env: { MIVRA_PROVIDER_ALPHA_BASE_URL: url } });
+      const shown = await bad.create({ name: "Alpha" });
+      expect(shown.body.custom[0]!.baseUrl).toMatchObject({ value: null, source: null, env: null, error: expect.stringMatching(/isn't used/) });
+      expect(JSON.stringify(await bad.view())).not.toMatch(/secret-in/);
+    }
   });
 });
 
@@ -409,6 +413,30 @@ describe("custom models in the picker and runs", () => {
     expect(recorded[0]!.endpoint).toMatch(/^[0-9a-f]{16}$/);
     expect(recorded[0]!.endpoint).not.toBe(recorded[1]!.endpoint);
     expect(recorded[2]!.endpoint).toBeNull();
+  });
+
+  it("keeps the key out of logs and runs.error when the provider echoes it back in an error", async () => {
+    const echo = (async () =>
+      new Response(JSON.stringify({ error: { message: `Invalid API key: ${KEY_A}` } }), { status: 401, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { create, json, chat, db } = setup({ extraFetch: echo });
+      await create({ name: "Echo", baseUrl: "https://echo.test/v1", key: KEY_A, models: [{ id: "m" }] });
+      await json("/settings/model", "PUT", { model: "custom:echo/m", effort: null });
+      const reply = await chat();
+      expect(reply.stream).not.toContain(KEY_A);
+      const recorded = db.select({ status: runs.status, error: runs.error }).from(runs).all();
+      expect(recorded).toEqual([{ status: "failed", error: expect.stringContaining("[key]") }]);
+      expect(recorded[0]!.error).not.toContain(KEY_A);
+      expect(JSON.stringify(logged.mock.calls, (_k, v) => (v instanceof Error ? { message: v.message, body: (v as { responseBody?: string }).responseBody } : v))).not.toContain(KEY_A);
+
+      const tested = await json<{ result: { ok: boolean; message: string } }>("/settings/providers/custom/echo/test", "POST", { model: "m" });
+      expect(tested.body.result).toMatchObject({ ok: false, message: expect.stringMatching(/rejected the API key/) });
+      expect(tested.body.result.message).not.toContain(KEY_A);
+      expect(JSON.stringify(logged.mock.calls, (_k, v) => (v instanceof Error ? { message: v.message, body: (v as { responseBody?: string }).responseBody } : v))).not.toContain(KEY_A);
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("records a new endpoint after the URL changes, so earlier reasoning metadata isn't replayed there", async () => {

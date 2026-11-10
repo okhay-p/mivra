@@ -209,16 +209,40 @@ interface Resolved {
 
 const hintFor = (key: string) => (key.length >= 12 ? key.slice(-4) : null);
 
-/** Removes a key, and anything that looks like a bearer token, from text a provider sent back. */
-function scrub(text: string, key: string | undefined): string {
+/** Removes a key, and anything that looks like a bearer token, from text a provider sent back. Keeps its length and layout. */
+function redact(text: string, key: string | undefined): string {
   let out = text;
   if (key) out = out.split(key).join("[key]");
-  return out
-    .replace(/Bearer\s+\S+/gi, "Bearer [key]")
-    .replace(/\b(sk|key|token)[-_][A-Za-z0-9_-]{8,}/gi, "[key]")
-    .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .trim()
-    .slice(0, 300);
+  return out.replace(/Bearer\s+\S+/gi, "Bearer [key]").replace(/\b(sk|key|token)[-_][A-Za-z0-9_-]{8,}/gi, "[key]");
+}
+
+/** `redact`, cut to a short single line for a message the learner sees. */
+function scrub(text: string, key: string | undefined): string {
+  return redact(text, key).replace(/[\u0000-\u001f\u007f]+/g, " ").trim().slice(0, 300);
+}
+
+/**
+ * The same error with the key taken out of its message and the provider's response body, so neither the SDK's
+ * logging nor `runs.error` can carry it (a provider may echo the key back, e.g. in a 401 body).
+ */
+function redactedError(error: unknown, key: string | undefined): unknown {
+  if (APICallError.isInstance(error)) {
+    return new APICallError({
+      message: redact(error.message, key),
+      url: error.url,
+      requestBodyValues: error.requestBodyValues,
+      statusCode: error.statusCode,
+      responseHeaders: error.responseHeaders,
+      responseBody: error.responseBody === undefined ? undefined : redact(error.responseBody, key),
+      isRetryable: error.isRetryable,
+    });
+  }
+  if (error instanceof Error) {
+    const clean = new Error(redact(error.message, key));
+    clean.name = error.name;
+    return clean;
+  }
+  return typeof error === "string" ? redact(error, key) : error;
 }
 
 /** The provider's own error message, when its body has one: `{ error: { message } }`, `{ error: "…" }` or `{ message }`. */
@@ -290,7 +314,8 @@ export function createCustomProviders({ settings, credentials, env = () => undef
       provider,
       baseUrl,
       baseUrlSource: provider.baseUrl ? "saved" : envUrl ? "env" : null,
-      envUrl: rawEnvUrl,
+      // Only a URL that passed validation: a rejected one may hold credentials (user:pass@ or ?api_key=).
+      envUrl,
       envUrlError,
       key,
       keySource,
@@ -412,7 +437,34 @@ export function createCustomProviders({ settings, credentials, env = () => undef
       fetch: guardedFetch(resolved.baseUrl),
       includeUsage: true,
     });
-    const chat = provider.chatModel(model.id);
+    const key = resolved.key;
+    const clean = (error: unknown) => redactedError(error, key);
+    // Every error leaves the model without the key, before the SDK logs it or a run stores it (runs.error).
+    const chat = wrapLanguageModel({
+      model: provider.chatModel(model.id),
+      middleware: {
+        specificationVersion: "v4",
+        wrapGenerate: async ({ doGenerate }) => {
+          try {
+            return await doGenerate();
+          } catch (error) {
+            throw clean(error);
+          }
+        },
+        wrapStream: async ({ doStream }) => {
+          let result: Awaited<ReturnType<typeof doStream>>;
+          try {
+            result = await doStream();
+          } catch (error) {
+            throw clean(error);
+          }
+          const stream = result.stream.pipeThrough(
+            new TransformStream({ transform: (part, controller) => controller.enqueue(part.type === "error" ? { ...part, error: clean(part.error) } : part) }),
+          );
+          return { ...result, stream };
+        },
+      },
+    });
     const maxOutputTokens = model.maxOutputTokens;
     if (!maxOutputTokens) return chat;
     // A limit the learner entered under Advanced caps each call; without one, the provider's own default applies.
@@ -522,6 +574,8 @@ export function createCustomProviders({ settings, credentials, env = () => undef
         stopWhen: stepCountIs(2),
         maxRetries: 0,
         abortSignal: abort,
+        // The error is classified below; without this the SDK would log it to the console.
+        onError: () => {},
       });
       let step = 0;
       for await (const part of result.fullStream) {
