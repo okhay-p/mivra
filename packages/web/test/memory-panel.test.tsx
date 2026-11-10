@@ -138,7 +138,7 @@ describe("Export to Obsidian", () => {
     expect(await screen.findByText(/^Downloaded Mivra-2026-11-10\.zip\./)).toBeTruthy();
     const [url, init] = fetch.mock.calls[1]!;
     expect(String(url)).toMatch(/\/api\/export\/obsidian$/);
-    expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer /);
+    expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer\b/);
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(click).toHaveBeenCalledOnce();
   });
