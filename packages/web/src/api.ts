@@ -73,6 +73,8 @@ export interface Session {
   title: string;
   updatedAt: string;
   courseId: string | null;
+  /** A course's subject icon by Lucide name; null for free chat or before the tutor names the course. */
+  icon?: string | null;
 }
 
 /** Creates an empty session; the app does this only once a draft is sent or given a file. */

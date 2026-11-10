@@ -10,6 +10,7 @@ import { addToLesson, undoSyllabusChange, api, authHeaders, createSession, error
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
+import { CourseIcon } from "./CourseIcon.js";
 import { LessonPage, TopicList, type LessonSection } from "./Lesson.js";
 import { AttachButton, DocumentChips, useDocuments, type Documents } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
@@ -289,7 +290,7 @@ function SessionSidebar({
                           closeOnMobile();
                         }}
                       >
-                        {s.courseId ? <GraduationCap aria-label="Course" /> : <MessageSquare />}
+                        {s.courseId ? <CourseIcon icon={s.icon} aria-label="Course" /> : <MessageSquare />}
                         <span>{s.title}</span>
                       </SidebarMenuButton>
                       <SessionMenu onRename={() => setRenamingId(s.id)} onDelete={() => onDelete(s)} />

@@ -5,6 +5,7 @@ import {
   AddToLesson,
   ArtifactView,
   CourseLessonsView,
+  CourseIcon,
   CourseView,
   DocumentView,
   LessonView,
@@ -82,6 +83,8 @@ const Session = z
     updatedAt: z.string().datetime(),
     /** The course this session teaches, or null for free chat. */
     courseId: z.string().nullable(),
+    /** The course's subject icon, by Lucide name; null for free chat or a course the tutor hasn't titled yet. */
+    icon: CourseIcon.nullable(),
   })
   .openapi("Session");
 
@@ -716,13 +719,15 @@ const turnErrorStatus = { not_found: 404, invalid: 400, conflict: 409, unavailab
 
 const attemptErrorStatus = { not_found: 404, invalid: 400, conflict: 409 } as const;
 
-function toSessionJson(row: SessionRow & { courseId?: string | null }) {
+function toSessionJson(row: SessionRow & { courseId?: string | null; icon?: string | null }) {
   return {
     id: row.id,
     title: row.title,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     courseId: row.courseId ?? null,
+    // Only a name from the fixed list leaves the server, whatever the column holds.
+    icon: CourseIcon.safeParse(row.icon).data ?? null,
   };
 }
 
@@ -847,7 +852,8 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       const { id } = c.req.valid("param");
       const row = store.renameSession(id, c.req.valid("json").title);
       if (!row) return c.json({ error: "Session not found" }, 404);
-      return c.json(toSessionJson({ ...row, courseId: store.findCourseBySession(id)?.id ?? null }), 200);
+      const course = store.findCourseBySession(id);
+      return c.json(toSessionJson({ ...row, courseId: course?.id ?? null, icon: course?.icon ?? null }), 200);
     }, (result, c) => {
       // The web UI shows `error` as is, so say what a title needs rather than return Zod's issues.
       if (!result.success) return c.json({ error: "A title needs 1 to 120 characters." }, 400);

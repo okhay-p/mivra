@@ -196,6 +196,8 @@ export const courses = sqliteTable(
       .references(() => sessions.id, { onDelete: "cascade" }),
     goal: text("goal").notNull(),
     status: text("status", { enum: courseStatuses }).notNull(),
+    /** The subject icon's Lucide name, from protocol's `courseIcons`, chosen by the tutor with the first syllabus; null until then. */
+    icon: text("icon"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
   },
