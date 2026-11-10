@@ -273,5 +273,9 @@ export const checkProviderKey = (id: ProviderId) =>
     async (res) => (await res.json()) as { ok: boolean; reason?: "rejected" | "unreachable"; message?: string },
   );
 
+/** Gives a session or course the learner's own title, which automatic titling then leaves alone. */
+export const renameSession = (id: string, title: string) =>
+  request(() => api.sessions[":id"].$patch({ param: { id }, json: { title } }), async (res) => (await res.json()) as Session);
+
 /** Deletes a session and all that belongs only to it; for a course, its lessons and their chats too. */
 export const deleteSession = (id: string) => request(() => api.sessions[":id"].$delete({ param: { id } }), () => undefined);

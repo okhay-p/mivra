@@ -4,6 +4,8 @@ import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "driz
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
+  /** The learner renamed it, so automatic titling (a first message, the tutor's course title) leaves it alone. */
+  titleSetByLearner: integer("title_set_by_learner", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });

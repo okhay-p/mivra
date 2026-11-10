@@ -115,7 +115,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     createCourse(goal: string): { course: CourseRow; session: SessionRow } {
       return db.transaction((tx) => {
         const now = clock();
-        const session = { id: randomUUID(), title: goal.trim().slice(0, 60), createdAt: now, updatedAt: now };
+        const session = { id: randomUUID(), title: goal.trim().slice(0, 60), titleSetByLearner: false, createdAt: now, updatedAt: now };
         tx.insert(sessions).values(session).run();
         const course = { id: randomUUID(), sessionId: session.id, goal: goal.trim(), status: "interviewing" as const, createdAt: now, updatedAt: now };
         tx.insert(courses).values(course).run();
@@ -364,9 +364,17 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
 
     createSession(title?: string): SessionRow {
       const now = new Date();
-      const row = { id: randomUUID(), title: title ?? DEFAULT_TITLE, createdAt: now, updatedAt: now };
+      const row = { id: randomUUID(), title: title ?? DEFAULT_TITLE, titleSetByLearner: false, createdAt: now, updatedAt: now };
       db.insert(sessions).values(row).run();
       return row;
+    },
+
+    /**
+     * Gives a session the learner's title, which automatic titling then never replaces. It isn't counted
+     * as activity, so the session keeps its place in the sidebar. Undefined if there's no such session.
+     */
+    renameSession(id: string, title: string): SessionRow | undefined {
+      return db.update(sessions).set({ title, titleSetByLearner: true }).where(eq(sessions.id, id)).returning().get();
     },
 
     findSession(id: string): SessionRow | undefined {
@@ -444,7 +452,7 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
           .values({ id: runId, sessionId: session.id, userMessageId: message.id, status: "running", startedAt: now, model: selection?.model, effort: selection?.effort })
           .run();
 
-        const title = seq === 1 && session.title === DEFAULT_TITLE ? firstText(message)?.trim().slice(0, 60) : undefined;
+        const title = seq === 1 && session.title === DEFAULT_TITLE && !session.titleSetByLearner ? firstText(message)?.trim().slice(0, 60) : undefined;
         tx.update(sessions)
           .set({ updatedAt: now, ...(title ? { title } : {}) })
           .where(eq(sessions.id, session.id))
