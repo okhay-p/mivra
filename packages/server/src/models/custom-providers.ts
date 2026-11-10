@@ -242,7 +242,16 @@ function redactedError(error: unknown, key: string | undefined): unknown {
     clean.name = error.name;
     return clean;
   }
-  return typeof error === "string" ? redact(error, key) : error;
+  if (typeof error === "string") return redact(error, key);
+  // A streamed `{"error":{"message":…}}` arrives as a plain object, which the SDK turns into an error's message later.
+  if (error && typeof error === "object") {
+    try {
+      return JSON.parse(redact(JSON.stringify(error), key)) as unknown;
+    } catch {
+      return { message: "The provider sent an error Mivra couldn't read." };
+    }
+  }
+  return error;
 }
 
 /** The provider's own error message, when its body has one: `{ error: { message } }`, `{ error: "…" }` or `{ message }`. */

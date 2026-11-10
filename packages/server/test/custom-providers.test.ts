@@ -439,6 +439,28 @@ describe("custom models in the picker and runs", () => {
     }
   });
 
+  it("keeps the key out of runs.error when a streamed error event echoes it", async () => {
+    const sse = (async () =>
+      new Response(`data: ${JSON.stringify({ error: { message: `Invalid API key: ${KEY_A}`, type: "invalid_request_error" } })}\n\n`, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      })) as typeof fetch;
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { create, json, chat, db } = setup({ extraFetch: sse });
+      await create({ name: "Stream", baseUrl: "https://sse.test/v1", key: KEY_A, models: [{ id: "m" }] });
+      await json("/settings/model", "PUT", { model: "custom:stream/m", effort: null });
+      const reply = await chat();
+      expect(reply.stream).not.toContain(KEY_A);
+      const recorded = db.select({ status: runs.status, error: runs.error }).from(runs).all();
+      expect(recorded).toEqual([{ status: "failed", error: expect.any(String) }]);
+      expect(recorded[0]!.error).not.toContain(KEY_A);
+      expect(JSON.stringify(logged.mock.calls, (_k, v) => (v instanceof Error ? { message: v.message } : v))).not.toContain(KEY_A);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   it("records a new endpoint after the URL changes, so earlier reasoning metadata isn't replayed there", async () => {
     const { create, update, json, chat, db } = setup();
     await create(alphaInput);
