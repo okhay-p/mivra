@@ -36,7 +36,14 @@ function setup() {
   const importVault = async (name: string, files: VaultFile[]) => {
     const res = await app.request("/api/imports", { method: "POST", headers: json, body: JSON.stringify({ name, files }) });
     expect(res.status).toBe(201);
-    return ((await res.json()) as { import: { id: string } }).import.id;
+    const id = ((await res.json()) as { import: { id: string } }).import.id;
+    // Importing starts distilling the notes with the same model (ADR-014); let it finish, so the turns below are the
+    // only model calls left.
+    await vi.waitFor(async () => {
+      const view = (await (await app.request(`/api/imports/${id}/distillation`, { headers: auth })).json()) as { status: string };
+      expect(["queued", "running"]).not.toContain(view.status);
+    });
+    return id;
   };
   const newSession = async () => ((await (await app.request("/api/sessions", { method: "POST", headers: auth })).json()) as { id: string }).id;
   const textOf = (content: unknown) => (typeof content === "string" ? content : (content as { type: string; text?: string }[]).map((part) => part.text ?? "").join(""));
@@ -47,7 +54,7 @@ function setup() {
     expect(res.status).toBe(200);
     const stream = await res.text();
     await vi.waitFor(() => expect(db.select().from(runs).where(eq(runs.sessionId, sessionId)).all().every((r) => r.status !== "running")).toBe(true));
-    const prompt = model.doStreamCalls.at(-1)!.prompt;
+    const prompt = model.doStreamCalls.findLast((call) => !JSON.stringify(call.prompt).includes("Mivra distillation request"))!.prompt;
     const users = prompt.filter((m) => m.role === "user").map((m) => textOf(m.content));
     return { instructions: textOf(prompt[0]!.content), notes: users.find((u) => u.startsWith(NOTE_EXCERPTS_LABEL)), users, stream };
   };
