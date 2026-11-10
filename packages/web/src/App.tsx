@@ -4,9 +4,9 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
 import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
-import { Brain, GraduationCap, KeyRound, Library, MessageSquare, MessagesSquare, Plus, Settings, SquarePlus } from "lucide-react";
+import { BarChart3, Brain, GraduationCap, KeyRound, Library, MessageSquare, MessagesSquare, Plus, Settings, SquarePlus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
-import { OPEN_SETTINGS, addToLesson, undoSyllabusChange, api, authHeaders, createSession, errorMessage, type Session, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
+import { OPEN_SETTINGS, OPEN_USAGE, addToLesson, undoSyllabusChange, api, authHeaders, createSession, errorMessage, type Session, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
@@ -20,6 +20,7 @@ import { MemoryPanel } from "./MemoryPanel.js";
 import { ModelPicker, modelLabel, useModelPicker, type ModelPickerState } from "./ModelPicker.js";
 import { ProvidersPanel, hasAnyKey } from "./ProvidersPanel.js";
 import { SettingsPanel } from "./SettingsPanel.js";
+import { UsagePanel } from "./UsagePanel.js";
 import { ChatGptWelcome, UsageLimitNotice } from "./ChatGpt.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { useTheme, type ThemeChoice } from "./theme.js";
@@ -123,10 +124,19 @@ export function App() {
   const [importsOpen, setImportsOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   useEffect(() => {
     const show = () => setSettingsOpen(true);
+    const showUsage = () => {
+      setSettingsOpen(false);
+      setUsageOpen(true);
+    };
     window.addEventListener(OPEN_SETTINGS, show);
-    return () => window.removeEventListener(OPEN_SETTINGS, show);
+    window.addEventListener(OPEN_USAGE, showUsage);
+    return () => {
+      window.removeEventListener(OPEN_SETTINGS, show);
+      window.removeEventListener(OPEN_USAGE, showUsage);
+    };
   }, []);
   // With no API key anywhere, the providers panel opens as first-run setup (ADR-013).
   const [firstRun, setFirstRun] = useState(false);
@@ -157,11 +167,13 @@ export function App() {
         onOpenImports={() => setImportsOpen(true)}
         onOpenProviders={() => setProvidersOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenUsage={() => setUsageOpen(true)}
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
       <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} />
       <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
       <SettingsPanel open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <UsagePanel open={usageOpen} onOpenChange={setUsageOpen} />
       <ChatGptWelcome />
       <DeleteSessionDialog session={deleting} onClose={() => setDeleting(undefined)} onDeleted={deleted} />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
@@ -212,6 +224,7 @@ function SessionSidebar({
   onOpenImports,
   onOpenProviders,
   onOpenSettings,
+  onOpenUsage,
 }: {
   sessions: Session[];
   activeId: string | undefined;
@@ -229,6 +242,7 @@ function SessionSidebar({
   onOpenImports: () => void;
   onOpenProviders: () => void;
   onOpenSettings: () => void;
+  onOpenUsage: () => void;
 }) {
   const { isMobile, setOpenMobile } = useSidebar();
   // The entry whose title is being edited in place.
@@ -365,6 +379,19 @@ function SessionSidebar({
             >
               <Settings />
               <span>Settings</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Usage"
+              data-usage-trigger
+              onClick={() => {
+                onOpenUsage();
+                closeOnMobile();
+              }}
+            >
+              <BarChart3 />
+              <span>Usage</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
