@@ -1,11 +1,24 @@
 import { MAX_VAULT_BYTES, NoteGraph, NoteView, VaultImportResult, VaultImportView, type VaultFile } from "@mivra/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
 import { noteChunks, noteLinks, noteTags, notes } from "../src/db/schema.js";
 import { MAX_LINKS_PER_NOTE, parseNote } from "../src/notes/parse.js";
 import { cleanVaultPath } from "../src/notes/vault-import.js";
 import { createNoteStore } from "../src/store/note-store.js";
+
+// Counts the notes parsed, so a test can tell when an import is part-way through parsing.
+const parsed = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../src/notes/parse.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/notes/parse.js")>();
+  return {
+    ...actual,
+    parseNote: (...args: Parameters<typeof actual.parseNote>) => {
+      parsed.count++;
+      return actual.parseNote(...args);
+    },
+  };
+});
 
 const auth = { authorization: "Bearer t" };
 
@@ -224,16 +237,17 @@ describe("vault import API", () => {
   it("keeps answering other requests while a large vault is parsed", async () => {
     const { send } = setup();
     const files = Array.from({ length: 1000 }, (_, i) => ({ path: `n${i}.md`, text: `# Note ${i}\n${"Some [[Link]] text and #tag. ".repeat(40)}` }));
-    let finished = false;
-    const importing = Promise.resolve(send("POST", "/imports", { name: "big", files })).then((res) => {
-      finished = true;
-      return res;
-    });
-    // Let the request start parsing, then ask for something else.
-    await new Promise((r) => setTimeout(r, 30));
-    expect((await send("GET", "/health")).status).toBe(200);
-    expect(finished).toBe(false);
+    parsed.count = 0;
+    const importing = Promise.resolve(send("POST", "/imports", { name: "big", files }));
+    // Wait, a turn of the event loop at a time, until parsing has begun. Without yielding, the first turn we get is
+    // after the whole vault is parsed and stored.
+    while (parsed.count === 0) await new Promise((r) => setImmediate(r));
+    expect(parsed.count).toBeLessThan(files.length);
+    const health = Promise.resolve(send("GET", "/health"));
+    expect(await Promise.race([health.then(() => "health"), importing.then(() => "import")])).toBe("health");
+    expect((await health).status).toBe(200);
     expect((await importing).status).toBe(201);
+    expect(parsed.count).toBe(files.length);
   }, 60_000);
 
   it("requires the API token", async () => {

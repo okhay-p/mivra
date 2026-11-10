@@ -32,12 +32,21 @@ test("one graded answer continues exactly once without a learner bubble, even af
   await expect(other.getByText("Lesson continued after correct.")).toHaveCount(1);
   await other.close();
   await page.reload();
+  // Opening the session checks for a continuation once (204 here) and reloads the transcript after it.
+  const api = new Map<import("@playwright/test").Request, { path: string; done: boolean; status?: number }>();
+  page.on("request", r => { if (r.url().includes("/api/")) api.set(r, { path: new URL(r.url()).pathname, done: false }); });
+  page.on("requestfinished", async r => { const a = api.get(r); if (a) Object.assign(a, { status: (await r.response())?.status(), done: true }); });
+  page.on("requestfailed", r => { const a = api.get(r); if (a) a.done = true; });
   await page.getByRole("button", { name: title, exact: true }).click();
   await expect(page.getByText("Lesson continued after correct.")).toHaveCount(1);
   await expect(page.locator('[data-message-role="user"]')).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
-  // Let the one completion reconciliation settle, then observe more than two old idle intervals.
-  await page.waitForTimeout(250);
+  // Let that reconciliation settle, then observe more than two old idle intervals.
+  await expect.poll(() => {
+    const seen = [...api.values()];
+    const check = seen.findIndex(a => a.path.endsWith("/continuation") && a.status === 204);
+    return check >= 0 && seen.slice(check + 1).some(a => a.path.endsWith("/messages")) && seen.every(a => a.done);
+  }).toBe(true);
   const idleRequests: string[] = [];
   page.on("request", r => { if (r.url().includes("/api/")) idleRequests.push(r.url()); });
   await page.waitForTimeout(1400);
@@ -81,6 +90,8 @@ test("lost grading response and a dropped stream recover on focus without changi
   const transcript = page.getByTestId("transcript");
   await transcript.focus();
   await page.keyboard.press("Home");
+  // Home scrolls smoothly, over several frames. The learner is at the top once it lands.
+  await expect.poll(() => transcript.evaluate(e => e.scrollTop)).toBe(0);
   await input.focus();
   await request.post("/e2e/release");
   // The reply grows below a learner who scrolled up; it must not pull them down.
