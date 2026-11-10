@@ -402,7 +402,7 @@ export const noteTags = sqliteTable(
   (t) => [primaryKey({ columns: [t.noteId, t.tag] }), index("note_tags_tag_idx").on(t.tag)],
 );
 
-export const usageKinds = ["chat", "continuation", "lesson", "test"] as const;
+export const usageKinds = ["chat", "continuation", "lesson", "distillation", "test"] as const;
 export const usageStatuses = ["completed", "failed", "cancelled"] as const;
 export const usageBillings = ["api", "subscription"] as const;
 

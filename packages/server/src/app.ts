@@ -1282,7 +1282,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     };
   };
   const knowledge = createKnowledgeStore(db);
-  const distiller = createDistiller({ notes: noteStore, knowledge, model: resolveModel, models: runModels });
+  const distiller = createDistiller({ notes: noteStore, knowledge, model: resolveModel, models: runModels, usage });
   /** After every import: distil its changed notes in the background, and describe where that stands. */
   const afterImport = (importId: string) => {
     distiller.start(importId);

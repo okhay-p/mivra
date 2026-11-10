@@ -1,10 +1,11 @@
 import { ConceptGraph, DistillationView, MemoryView, RecordFromNotesInput, VaultImportResult, VaultImportView, type VaultFile } from "@mivra/protocol";
+import { eq } from "drizzle-orm";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
-import { conceptEdges, conceptSources, concepts, memories } from "../src/db/schema.js";
+import { conceptEdges, conceptSources, concepts, memories, notes as noteTable } from "../src/db/schema.js";
 import { appearsIn, closeSpelling, groupNotes, MAX_GROUP_NOTES, validateProposal } from "../src/notes/distil.js";
 import { learnerContext } from "../src/runtime/learner-context.js";
 import type { PendingNote } from "../src/store/knowledge-store.js";
@@ -306,6 +307,29 @@ describe("distilling an import", () => {
     expect(graph.edges).toEqual([]);
     expect((await t.memoryList()).map((m) => m.source?.importName)).toEqual(["B"]);
     expect(t.db.select().from(conceptEdges).all()).toEqual([]);
+  });
+
+  it("deleting a note deletes the memories drawn from it (the migration's hand-added cascade)", async () => {
+    const t = setup(byTitle);
+    await t.importVault("Vault", vault);
+    const drawn = t.db.select().from(memories).all();
+    expect(drawn).toHaveLength(3);
+    const stack = drawn.find((m) => m.text === "Has notes on Stack.")!;
+    t.db.delete(noteTable).where(eq(noteTable.id, stack.noteId!)).run();
+    expect(t.db.select().from(memories).all().map((m) => m.text).sort()).toEqual(["Has notes on Limits.", "Has notes on Recursion."]);
+  });
+
+  it("records each distillation call's usage as background note reading, with no session", async () => {
+    const t = setup(byTitle);
+    await t.importVault("Vault", vault);
+    const view = (await (await t.send("GET", "/usage")).json()) as {
+      byKind: { kind: string; calls: number }[];
+      runs: { kind: string; session: string | null; calls: number }[];
+    };
+    // Two groups (#cs and #maths), one call each, and each group its own run.
+    expect(view.byKind).toEqual([expect.objectContaining({ kind: "distillation", calls: 2 })]);
+    const run = expect.objectContaining({ kind: "distillation", session: null, calls: 1 });
+    expect(view.runs).toEqual([run, run]);
   });
 
   it("bulk-deletes memories drawn from notes, leaving the others", async () => {

@@ -1,11 +1,13 @@
 import { RecordFromNotesInput, type DistillationView } from "@mivra/protocol";
-import { stepCountIs, streamText, tool, type LanguageModel } from "ai";
+import { randomUUID } from "node:crypto";
+import { stepCountIs, streamText, tool, wrapLanguageModel, type LanguageModel } from "ai";
 import { callOptionsFor, type ModelSelection } from "../model.js";
 import type { ModelSettings } from "../models/selection.js";
 import { DISTIL_INSTRUCTIONS, distilPrompt, groupNotes, validateProposal, type NoteGroup } from "../notes/distil.js";
 import { resolveGraph } from "../notes/vault-import.js";
 import type { KnowledgeStore } from "../store/knowledge-store.js";
 import type { NoteStore } from "../store/note-store.js";
+import type { UsageTracker } from "../usage/tracker.js";
 import { publicErrorText } from "./errors.js";
 
 /** One call to record, and one more to correct rejected items. */
@@ -19,6 +21,8 @@ export interface DistillerDeps {
   model: (selection: ModelSelection) => LanguageModel;
   /** Distilling uses the app-wide model, as chat and lessons do (ADR-012). */
   models: Pick<ModelSettings, "forRun">;
+  /** Records each model call's token usage as background note reading (issue #70), with no session. */
+  usage?: Pick<UsageTracker, "middleware">;
 }
 
 type Job = { status: "queued" | "running" | "cancelled" | "failed" | "idle"; groups: number; groupsDone: number; error: string | null; controller?: AbortController; again?: boolean };
@@ -29,7 +33,7 @@ type Job = { status: "queued" | "running" | "cancelled" | "failed" | "idle"; gro
  * unchanged notes costs no model call. Cancelling stops after the current call; what earlier groups saved stays, and
  * the notes not reached stay waiting for the next run.
  */
-export function createDistiller({ notes, knowledge, model, models }: DistillerDeps) {
+export function createDistiller({ notes, knowledge, model, models, usage }: DistillerDeps) {
   const jobs = new Map<string, Job>();
   const queue: string[] = [];
   let pumping: Promise<void> | undefined;
@@ -43,8 +47,12 @@ export function createDistiller({ notes, knowledge, model, models }: DistillerDe
     const read = new Map(group.notes.map((n) => [n.id, n.hash]));
     let streamError: unknown;
     const selection = models.forRun();
+    const languageModel = model(selection);
     const result = streamText({
-      model: model(selection),
+      // One usage run per group: its recording call and any correcting call.
+      model: usage && typeof languageModel !== "string"
+        ? wrapLanguageModel({ model: languageModel, middleware: usage.middleware({ kind: "distillation", selection, runId: randomUUID() }) })
+        : languageModel,
       instructions: DISTIL_INSTRUCTIONS,
       messages: [{ role: "user", content: text }],
       tools: {

@@ -176,9 +176,10 @@ const KIND_DETAILS: Record<string, string> = {
   chat: "Your messages and the tutor's replies, syllabus writing included",
   continuation: "The tutor carrying on after you answer its checks",
   lesson: "Background generation of lessons",
+  distillation: "Background reading of imported notes into concepts and memories",
   test: "Test model under Model providers",
 };
-const KIND_SHORT: Record<string, string> = { chat: "Chat", continuation: "Continuation", lesson: "Lesson", test: "Test model" };
+const KIND_SHORT: Record<string, string> = { chat: "Chat", continuation: "Continuation", lesson: "Lesson", distillation: "Note reading", test: "Test model" };
 
 function apiHeadline(t: UsageTotals): string {
   const known = (t.reportedCost ?? 0) + (t.estimatedCost ?? 0);
