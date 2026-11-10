@@ -12,6 +12,10 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(page.locator('[data-message-role="user"]').first()).toHaveText(goal);
   const course = page.getByRole("region", { name: "Course" });
   await expect(course.getByText("Placement interview")).toBeVisible();
+  // Until the syllabus, the course is titled after its goal, with the graduation cap.
+  const entry = page.locator("[data-session-id]").filter({ hasText: goal.slice(0, 60) });
+  await expect(entry.locator('svg[data-icon="graduation-cap"]')).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(goal.slice(0, 60));
   const derivative = page.getByRole("region", { name: "Placement question: derivative" });
   const limit = page.getByRole("region", { name: "Placement question: limit" });
   await expect(derivative.getByRole("button", { name: "Not sure" })).toBeEnabled();
@@ -29,8 +33,11 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(course.getByRole("list", { name: "Syllabus topics" })).toContainText("Limits");
   await expect(course.getByRole("list", { name: "What Mivra thinks you know" })).toContainText("From the test");
 
-  // The course is marked in the sidebar.
-  await expect(page.getByRole("button", { name: goal.slice(0, 60) })).toBeVisible();
+  // The tutor's title and subject icon replace the placeholder, without a reload.
+  const titled = page.locator("[data-session-id]").filter({ hasText: "Calculus for ML" });
+  await expect(titled.locator('svg[data-icon="sigma"]')).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Calculus for ML");
+  await expect(page.locator("[data-session-id]").filter({ hasText: goal.slice(0, 60) })).toHaveCount(0);
 
   // The first lesson is written when the learner reaches it, and becomes the page.
   await course.getByRole("button", { name: "Start lesson 1" }).click();
