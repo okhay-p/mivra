@@ -5,18 +5,18 @@ import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
 import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
 import { Brain, GraduationCap, KeyRound, Library, MessageSquare, MessagesSquare, Plus, SquarePlus } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { addToLesson, undoSyllabusChange, api, authHeaders, errorMessage, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
+import { addToLesson, undoSyllabusChange, api, authHeaders, createSession, errorMessage, type Session, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "./chat-artifacts.js";
 import { CourseBar, StartCourseForm, type StartedCourse } from "./Course.js";
 import { LessonPage, TopicList, type LessonSection } from "./Lesson.js";
-import { AttachButton, DocumentChips, useDocuments } from "./Documents.js";
+import { AttachButton, DocumentChips, useDocuments, type Documents } from "./Documents.js";
 import { ChainOfThought, ChainOfThoughtHeader, ChainOfThoughtContent, ChainOfThoughtStep } from "@/components/ai-elements/chain-of-thought";
 import { MathText } from "./MathText.js";
 import { ImportsPanel } from "./ImportsPanel.js";
 import { MemoryPanel } from "./MemoryPanel.js";
-import { ModelPicker, modelLabel, useModelPicker } from "./ModelPicker.js";
+import { ModelPicker, modelLabel, useModelPicker, type ModelPickerState } from "./ModelPicker.js";
 import { ProvidersPanel, hasAnyKey } from "./ProvidersPanel.js";
 import { ChatGptWelcome, UsageLimitNotice } from "./ChatGpt.js";
 import { ThemeToggle } from "./ThemeToggle.js";
@@ -46,19 +46,29 @@ import {
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 
-interface Session {
-  id: string;
-  title: string;
-  updatedAt: string;
-  courseId: string | null;
+/** What the main pane shows: the start-a-course form, an unsaved chat, or a saved session. */
+type Pane = { kind: "start" } | { kind: "draft" } | { kind: "session"; id: string };
+
+/** What a session created from a course or a draft starts with, applied once when it opens. */
+interface SessionStart {
+  sessionId: string;
+  /** Sent as the first message. */
+  message?: string;
+  /** Uploaded to the session. */
+  file?: File;
+  /** Put in the message box, unsent. */
+  input?: string;
 }
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeId, setActiveId] = useState<string>();
+  const [pane, setPane] = useState<Pane>({ kind: "start" });
+  const activeId = pane.kind === "session" ? pane.id : undefined;
   const [error, setError] = useState<string>();
-  // The goal of a course just started, sent as its session's first message so the interview begins.
-  const [firstMessage, setFirstMessage] = useState<{ sessionId: string; text: string }>();
+  const [start, setStart] = useState<SessionStart>();
+  // The draft lives here, so its text survives the pane showing something else for a while.
+  const [draftText, setDraftText] = useState("");
+  const [draftFocus, setDraftFocus] = useState(0);
 
   const refreshSessions = async () => {
     try {
@@ -75,22 +85,23 @@ export function App() {
     void refreshSessions();
   }, []);
 
-  const newSession = async () => {
-    try {
-      const res = await api.sessions.$post({ json: {} });
-      if (!res.ok) return setError(await errorMessage(res));
-      const session = await res.json();
-      setSessions((prev) => [session, ...prev]);
-      setActiveId(session.id);
-    } catch {
-      setError("Can't reach the Mivra server.");
-    }
+  /** New session opens a draft; nothing is saved until it's sent or given a file. */
+  const openDraft = () => {
+    setPane({ kind: "draft" });
+    setDraftFocus((n) => n + 1);
   };
 
-  const startedCourse = ({ session, goal }: StartedCourse) => {
+  const openStarted = (session: Session, begin: Omit<SessionStart, "sessionId">) => {
     setSessions((prev) => [session, ...prev]);
-    setFirstMessage({ sessionId: session.id, text: goal });
-    setActiveId(session.id);
+    setStart({ sessionId: session.id, ...begin });
+    setPane({ kind: "session", id: session.id });
+  };
+
+  const startedCourse = ({ session, goal }: StartedCourse) => openStarted(session, { message: goal });
+
+  const savedDraft = (session: Session, begin: Omit<SessionStart, "sessionId">) => {
+    setDraftText("");
+    openStarted(session, begin);
   };
 
   const active = sessions.find((s) => s.id === activeId);
@@ -119,9 +130,10 @@ export function App() {
         activeId={activeId}
         theme={theme}
         onThemeChange={setTheme}
-        onSelect={setActiveId}
-        onNew={newSession}
-        onNewCourse={() => setActiveId(undefined)}
+        drafting={pane.kind === "draft"}
+        onSelect={(id) => setPane({ kind: "session", id })}
+        onNew={openDraft}
+        onNewCourse={() => setPane({ kind: "start" })}
         onOpenMemory={() => setMemoryOpen(true)}
         onOpenImports={() => setImportsOpen(true)}
         onOpenProviders={() => setProvidersOpen(true)}
@@ -134,7 +146,7 @@ export function App() {
         <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
           <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-          <h1 className="truncate text-base font-medium">{active?.title ?? "Mivra"}</h1>
+          <h1 className="truncate text-base font-medium">{active?.title ?? (pane.kind === "draft" ? "New session" : "Mivra")}</h1>
         </header>
         {!token ? (
           <Notice error>No API token found. Start the server, then reload this page.</Notice>
@@ -145,12 +157,14 @@ export function App() {
             key={activeId}
             sessionId={activeId}
             course={Boolean(active?.courseId)}
-            firstMessage={firstMessage?.sessionId === activeId ? firstMessage.text : undefined}
-            onFirstMessageSent={() => setFirstMessage(undefined)}
+            start={start?.sessionId === activeId ? start : undefined}
+            onStartUsed={() => setStart(undefined)}
             onReply={refreshSessions}
           />
+        ) : pane.kind === "draft" ? (
+          <DraftChat text={draftText} onTextChange={setDraftText} focus={draftFocus} onSaved={savedDraft} />
         ) : (
-          <StartCourseForm onStarted={startedCourse} onFreeChat={newSession} />
+          <StartCourseForm onStarted={startedCourse} onFreeChat={openDraft} />
         )}
       </SidebarInset>
     </SidebarProvider>
@@ -164,6 +178,7 @@ function Notice({ error, children }: { error?: boolean; children: ReactNode }) {
 function SessionSidebar({
   sessions,
   activeId,
+  drafting,
   theme,
   onThemeChange,
   onSelect,
@@ -175,6 +190,8 @@ function SessionSidebar({
 }: {
   sessions: Session[];
   activeId: string | undefined;
+  /** A draft is open, which New session stands for until it's saved. */
+  drafting: boolean;
   theme: ThemeChoice;
   onThemeChange: (theme: ThemeChoice) => void;
   onSelect: (id: string) => void;
@@ -204,6 +221,7 @@ function SessionSidebar({
             <SidebarMenuButton
               variant="outline"
               tooltip="New session"
+              isActive={drafting}
               onClick={() => {
                 onNew();
                 closeOnMobile();
@@ -302,9 +320,9 @@ function SessionSidebar({
 
 interface SessionProps {
   sessionId: string;
-  /** Sent once, as soon as the empty session opens. */
-  firstMessage?: string;
-  onFirstMessageSent: () => void;
+  /** Applied once, as soon as the empty session opens; `onStartUsed` clears it. */
+  start?: Omit<SessionStart, "sessionId">;
+  onStartUsed: () => void;
   onReply: () => void;
   /** Called whenever the chat settles after a reply, e.g. to pick up a syllabus written in it. */
   onSettled?: () => void;
@@ -555,8 +573,8 @@ function SessionLoader({ sessionId, onReply, ...props }: SessionProps) {
 function Chat({
   sessionId,
   initialMessages,
-  firstMessage,
-  onFirstMessageSent,
+  start,
+  onStartUsed,
   onReply,
   onSettled,
   lessonId,
@@ -569,7 +587,7 @@ function Chat({
   const [showInterview, setShowInterview] = useState(false);
   const lessonRef = useRef(lessonId);
   lessonRef.current = lessonId;
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(start?.input ?? "");
   const documents = useDocuments(sessionId);
   const modelPicker = useModelPicker();
   const documentsRef = useRef(documents);
@@ -655,13 +673,16 @@ function Chat({
     }
   }, [prompt, sendMessage, onPromptUsed]);
 
-  const firstSent = useRef(false);
+  // A new session's start: a course's goal or a draft's text is sent, a draft's file uploaded.
+  const started = useRef(false);
+  const { upload } = documents;
   useEffect(() => {
-    if (!firstMessage || firstSent.current || initialMessages.length > 0) return;
-    firstSent.current = true;
-    onFirstMessageSent();
-    void sendMessage({ text: firstMessage }, { body: { documentIds: [] } });
-  }, [firstMessage, initialMessages.length, onFirstMessageSent, sendMessage]);
+    if (!start || started.current || initialMessages.length > 0) return;
+    started.current = true;
+    onStartUsed();
+    if (start.file) void upload(start.file);
+    if (start.message) void sendMessage({ text: start.message }, { body: { documentIds: [] } });
+  }, [start, initialMessages.length, onStartUsed, sendMessage, upload]);
 
   useEffect(() => {
     const scroll = conversation.scrollRef.current;
@@ -760,10 +781,14 @@ function Chat({
   };
   const checkRef = useRef(checkContinuation);
   checkRef.current = checkContinuation;
+  // A session opened to send its first message has no continuation to find, and checking for one
+  // would race that send: resuming replaces the SDK's active request before its status says busy, so
+  // the 204 would end the chat's reply on screen while it still runs on the server.
+  const sendsFirst = useRef(Boolean(start?.message) && initialMessages.length === 0);
   useEffect(() => {
     mounted.current = true;
     const check = () => { if (document.visibilityState === "visible") void checkRef.current(); };
-    check();
+    if (!sendsFirst.current) check();
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", check);
     return () => {
@@ -817,15 +842,7 @@ function Chat({
             if (e.key !== "Tab" && (e.target as HTMLElement).closest("button, input, [role=region]")) conversation.stopScroll();
           }}>
 
-          {messages.length === 0 && !busy && (
-            <Empty className="my-auto">
-              <EmptyHeader>
-                <EmptyMedia variant="icon"><MessagesSquare aria-hidden="true" /></EmptyMedia>
-                <EmptyTitle>Start a conversation</EmptyTitle>
-                <EmptyDescription>Ask a question, explore a concept or attach course notes to learn from.</EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          )}
+          {messages.length === 0 && !busy && <ChatWelcome />}
           {interviewEnd >= 0 && !showInterview && (
             <Button variant="ghost" size="sm" className="text-muted-foreground self-center" onClick={() => setShowInterview(true)}>
               Show the placement interview
@@ -896,51 +913,173 @@ function Chat({
         </ConversationContent>
         <ConversationScrollButton aria-label="Scroll to bottom" onClick={() => void conversation.scrollToBottom("instant")} />
       </Conversation>
-      <form onSubmit={submit} className="border-t">
-        <DocumentChips documents={documents} />
-        <div className="mx-auto w-full max-w-3xl p-3">
-          <InputGroup className="h-auto min-h-11" aria-label="Message composer">
-            <InputGroupAddon align="inline-start">
-              <AttachButton documents={documents} />
-            </InputGroupAddon>
-            <InputGroupInput
-              ref={messageInput}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={placeholder}
-              aria-label="Message"
-              autoFocus
-            />
-            <InputGroupAddon align="inline-end">
-              {busy ? (
-                <Button type="button" variant="secondary" onClick={async (event) => {
-                  const stopButton = event.currentTarget;
-                  const restoreFocus = document.activeElement === stopButton;
-                  try {
-                    if (stopRequested.current) return;
-                    stopRequested.current = true;
-                    const messageId = continuationStopId.current ?? messages.findLast((message) => message.role === "user")?.id;
-                    if (!messageId) return;
-                    const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
-                    // Disabling Send can blur Stop before this request resolves. Restore only
-                    // its focus, and leave any element the learner moved to alone.
-                    if (result.ok && restoreFocus && (document.activeElement === stopButton || document.activeElement === document.body)) {
-                      messageInput.current?.focus();
-                    }
-                    if (!result.ok) stopRequested.current = false;
-                    if (!result.ok) setStopError("Couldn’t stop the reply. Try again.");
-                  } catch { stopRequested.current = false; setStopError("Couldn’t stop the reply. Try again."); }
-                }}>Stop</Button>
-              ) : (
-                <Button type="submit" disabled={!input.trim()}>Send</Button>
-              )}
-            </InputGroupAddon>
-          </InputGroup>
-        </div>
-        <div className="mx-auto flex max-w-3xl px-3 pb-2">
-          <ModelPicker state={modelPicker} />
-        </div>
-      </form>
+      <Composer
+        documents={documents}
+        input={input}
+        onInputChange={setInput}
+        onSubmit={submit}
+        inputRef={messageInput}
+        placeholder={placeholder}
+        modelPicker={modelPicker}
+        action={busy ? (
+          <Button type="button" variant="secondary" onClick={async (event) => {
+            const stopButton = event.currentTarget;
+            const restoreFocus = document.activeElement === stopButton;
+            try {
+              if (stopRequested.current) return;
+              stopRequested.current = true;
+              const messageId = continuationStopId.current ?? messages.findLast((message) => message.role === "user")?.id;
+              if (!messageId) return;
+              const result = await api.sessions[":id"].stop.$post({ param: { id: sessionId }, json: { messageId } });
+              // Disabling Send can blur Stop before this request resolves. Restore only
+              // its focus, and leave any element the learner moved to alone.
+              if (result.ok && restoreFocus && (document.activeElement === stopButton || document.activeElement === document.body)) {
+                messageInput.current?.focus();
+              }
+              if (!result.ok) stopRequested.current = false;
+              if (!result.ok) setStopError("Couldn’t stop the reply. Try again.");
+            } catch { stopRequested.current = false; setStopError("Couldn’t stop the reply. Try again."); }
+          }}>Stop</Button>
+        ) : (
+          <Button type="submit" disabled={!input.trim()}>Send</Button>
+        )}
+      />
+    </div>
+  );
+}
+
+function ChatWelcome() {
+  return (
+    <Empty className="my-auto">
+      <EmptyHeader>
+        <EmptyMedia variant="icon"><MessagesSquare aria-hidden="true" /></EmptyMedia>
+        <EmptyTitle>Start a conversation</EmptyTitle>
+        <EmptyDescription>Ask a question, explore a concept or attach course notes to learn from.</EmptyDescription>
+      </EmptyHeader>
+    </Empty>
+  );
+}
+
+/** The message box, attachments and model picker under a chat. `action` is its Send or Stop button. */
+function Composer({
+  documents,
+  input,
+  onInputChange,
+  onSubmit,
+  inputRef,
+  placeholder,
+  modelPicker,
+  action,
+  disabled,
+}: {
+  documents: Documents;
+  input: string;
+  onInputChange: (text: string) => void;
+  onSubmit: (e: FormEvent) => void;
+  inputRef: Ref<HTMLInputElement>;
+  placeholder: string;
+  modelPicker: ModelPickerState;
+  action: ReactNode;
+  disabled?: boolean;
+}) {
+  return (
+    <form onSubmit={onSubmit} className="border-t">
+      <DocumentChips documents={documents} />
+      <div className="mx-auto w-full max-w-3xl p-3">
+        <InputGroup className="h-auto min-h-11" aria-label="Message composer">
+          <InputGroupAddon align="inline-start">
+            <AttachButton documents={documents} />
+          </InputGroupAddon>
+          <InputGroupInput
+            ref={inputRef}
+            value={input}
+            onChange={(e) => onInputChange(e.target.value)}
+            placeholder={placeholder}
+            aria-label="Message"
+            readOnly={disabled}
+            autoFocus
+          />
+          <InputGroupAddon align="inline-end">{action}</InputGroupAddon>
+        </InputGroup>
+      </div>
+      <div className="mx-auto flex max-w-3xl px-3 pb-2">
+        <ModelPicker state={modelPicker} />
+      </div>
+    </form>
+  );
+}
+
+/**
+ * A chat not saved yet (#55). Sending it, or attaching a file, creates the session and hands over to it;
+ * until then the server has nothing, so leaving it adds no empty session to the sidebar.
+ */
+function DraftChat({
+  text,
+  onTextChange,
+  focus,
+  onSaved,
+}: {
+  text: string;
+  onTextChange: (text: string) => void;
+  /** Focuses the message box whenever it changes, e.g. when New session is clicked again. */
+  focus: number;
+  onSaved: (session: Session, start: Omit<SessionStart, "sessionId">) => void;
+}) {
+  // The model and effort are app-wide (ADR-012), so the one chosen here answers the first message.
+  const modelPicker = useModelPicker();
+  const input = useRef<HTMLInputElement>(null);
+  const [saving, setSaving] = useState<{ file?: string }>();
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    input.current?.focus();
+  }, [focus]);
+
+  const save = async (start: Omit<SessionStart, "sessionId">, file?: string) => {
+    if (saving) return;
+    setSaving({ file });
+    setError(undefined);
+    const result = await createSession();
+    setSaving(undefined);
+    if (!result.ok) return setError(result.error);
+    onSaved(result.value, start);
+  };
+
+  // Stands in for the session's documents: a file creates the session, which then uploads it.
+  const documents: Documents = {
+    documents: [],
+    uploading: saving?.file,
+    error,
+    upload: (file) => save({ file, input: text }, file.name),
+    remove: async () => {},
+    refresh: async () => {},
+  };
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col overflow-y-auto p-4">
+        <ChatWelcome />
+        {saving && !saving.file && (
+          <p className="text-muted-foreground flex items-center gap-2" role="status">
+            <Spinner aria-hidden="true" /> Thinking…
+          </p>
+        )}
+      </div>
+      <Composer
+        documents={documents}
+        input={text}
+        onInputChange={onTextChange}
+        onSubmit={(e) => {
+          e.preventDefault();
+          const message = text.trim();
+          if (message) void save({ message });
+        }}
+        inputRef={input}
+        placeholder="What do you want to learn?"
+        modelPicker={modelPicker}
+        disabled={saving !== undefined}
+        action={<Button type="submit" disabled={!text.trim() || saving !== undefined}>Send</Button>}
+      />
     </div>
   );
 }
