@@ -208,19 +208,87 @@ export function noteGraphView(graph: NoteGraph, concepts: ConceptGraph, query: N
 /** The import's tags and folders with how many notes each holds, the fullest first, for the filters. */
 function facetsOf(notes: NoteGraph["notes"]) {
   const tagCounts = new Map<string, number>();
-  const folderCounts = new Map<string, number>();
-  for (const note of notes) {
-    for (const tag of new Set(note.tags)) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
-    const parts = note.path.split("/").slice(0, -1);
-    for (let depth = 1; depth <= parts.length; depth++) {
-      const folder = parts.slice(0, depth).join("/");
-      folderCounts.set(folder, (folderCounts.get(folder) ?? 0) + 1);
+  for (const note of notes) for (const tag of new Set(note.tags)) tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
+  const tags = [...tagCounts]
+    .sort(([a, x], [b, y]) => y - x || compare(a, b))
+    .slice(0, MAX_GRAPH_FACETS)
+    .map(([name, count]) => ({ name, notes: count }));
+  return { tags, folders: topFolders(notes) };
+}
+
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** A folder as the run of notes under it in path order: `notes[from..to)` all start with `path` + "/". */
+interface Folder {
+  path: string;
+  from: number;
+  to: number;
+}
+
+/** Fuller folders first, ties by path, as a heap's order. */
+const before = (a: Folder, b: Folder) => b.to - b.from - (a.to - a.from) || compare(a.path, b.path);
+
+/**
+ * The MAX_GRAPH_FACETS fullest folders, ties by path, with `notes` sorted by path. Listing every folder of every
+ * path first would cost the square of a path's depth per note (a hostile vault of 10,000 notes, each hundreds of
+ * folders deep, took over a minute). Instead, as the notes under a folder are one run in path order, and a folder
+ * never holds more notes than its parent and sorts before it, this opens folders best first from the root, only
+ * splitting the runs of the folders it lists into their subfolders, found by bisection. So the work grows with the
+ * folders listed and their subfolders, plus one look at each note filed directly in a listed folder.
+ */
+function topFolders(notes: NoteGraph["notes"]): { path: string; notes: number }[] {
+  const heap: Folder[] = [];
+  const push = (folder: Folder) => {
+    let i = heap.push(folder) - 1;
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (before(heap[parent]!, heap[i]!) <= 0) break;
+      [heap[parent], heap[i]] = [heap[i]!, heap[parent]!];
+      i = parent;
     }
+  };
+  const pop = () => {
+    const top = heap[0]!;
+    const last = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = last;
+      for (let i = 0; ; ) {
+        const left = 2 * i + 1;
+        const smaller = left + 1 < heap.length && before(heap[left + 1]!, heap[left]!) < 0 ? left + 1 : left;
+        if (smaller >= heap.length || before(heap[i]!, heap[smaller]!) <= 0) break;
+        [heap[smaller], heap[i]] = [heap[i]!, heap[smaller]!];
+        i = smaller;
+      }
+    }
+    return top;
+  };
+  /** Pushes the subfolders of the folder whose notes are `notes[from..to)` and whose paths go on at `start`. */
+  const open = (from: number, to: number, start: number) => {
+    for (let i = from; i < to; ) {
+      const path = notes[i]!.path;
+      const end = path.indexOf("/", start);
+      if (end < 0) {
+        i++;
+        continue;
+      }
+      // The subfolder's notes are one run from here: find where it ends by bisection rather than note by note.
+      const prefix = path.slice(0, end + 1);
+      let after = i + 1;
+      for (let last = to; after < last; ) {
+        const mid = (after + last) >> 1;
+        if (notes[mid]!.path.startsWith(prefix)) after = mid + 1;
+        else last = mid;
+      }
+      push({ path: path.slice(0, end), from: i, to: after });
+      i = after;
+    }
+  };
+  open(0, notes.length, 0);
+  const folders: { path: string; notes: number }[] = [];
+  while (heap.length > 0 && folders.length < MAX_GRAPH_FACETS) {
+    const folder = pop();
+    folders.push({ path: folder.path, notes: folder.to - folder.from });
+    open(folder.from, folder.to, folder.path.length + 1);
   }
-  const top = <K extends string>(counts: Map<string, number>, key: K) =>
-    [...counts]
-      .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0))
-      .slice(0, MAX_GRAPH_FACETS)
-      .map(([name, count]) => ({ [key]: name, notes: count }) as Record<K, string> & { notes: number });
-  return { tags: top(tagCounts, "name"), folders: top(folderCounts, "path") };
+  return folders;
 }

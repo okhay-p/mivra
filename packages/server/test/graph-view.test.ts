@@ -1,4 +1,5 @@
 import {
+  MAX_GRAPH_FACETS,
   MAX_GRAPH_VIEW_EDGES,
   MAX_GRAPH_VIEW_NODES,
   MAX_GRAPH_VIEW_NOTES,
@@ -137,6 +138,54 @@ describe("noteGraphView", () => {
     const drawn = new Set(ids(v));
     expect(v.edges.every((e) => drawn.has(e.from) && drawn.has(e.to))).toBe(true);
     expect(v.tags.length).toBe(200);
+  });
+
+  it("lists the fullest folders, ties by path, as counting every folder of every note would", () => {
+    // The plain way, which costs the square of a path's depth per note: fine for these few notes.
+    const naive = (paths: string[]) => {
+      const counts = new Map<string, number>();
+      for (const path of paths) {
+        const parts = path.split("/").slice(0, -1);
+        for (let depth = 1; depth <= parts.length; depth++) counts.set(parts.slice(0, depth).join("/"), (counts.get(parts.slice(0, depth).join("/")) ?? 0) + 1);
+      }
+      return [...counts]
+        .sort(([a, x], [b, y]) => y - x || (a < b ? -1 : a > b ? 1 : 0))
+        .slice(0, MAX_GRAPH_FACETS)
+        .map(([path, notes]) => ({ path, notes }));
+    };
+    // Names that sort around "/" (" ", "-", ".", "0"), empty folders from "//", and many small folders, so the
+    // limit cuts through ties.
+    const names = ["a", "a b", "a-b", "a.b", "a0", "", "b"];
+    let seed = 7;
+    const random = (n: number) => ((seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31) % n);
+    const paths = new Set<string>();
+    while (paths.size < 1_500) {
+      const depth = random(6);
+      paths.add([...Array.from({ length: depth }, () => names[random(names.length)]!), `n${random(100_000)}.md`].join("/"));
+    }
+    const notes = [...paths].map((path, i) => note(`n${i}`, [], path));
+    const folders = view({ notes, links: [] }, { tag: "none" }).folders;
+    expect(folders).toHaveLength(MAX_GRAPH_FACETS);
+    expect(folders).toEqual(naive([...paths]));
+  });
+
+  it("lists the folders of a 10,000-note vault hundreds of folders deep quickly", () => {
+    // Paths just under 512 characters: counting every folder of every path took over a minute here.
+    const deep = "a/".repeat(240);
+    const shapes = [(i: number) => `${deep}n${i}.md`, (i: number) => `d${i}/${deep}n.md`, (i: number) => `d${i % 50}/${deep}n${i}.md`];
+    for (const shape of shapes) {
+      const notes = Array.from({ length: 10_000 }, (_, i) => note(`n${i}`, [], shape(i)));
+      expect(notes[0]!.path.length).toBeLessThan(512);
+      const started = performance.now();
+      const v = view({ notes, links: [] }, { tag: "none" });
+      // Well under 100 ms unloaded; generous for a busy machine.
+      expect(performance.now() - started).toBeLessThan(1_000);
+      expect(v.nodes).toEqual([]);
+      expect(v.folders).toHaveLength(MAX_GRAPH_FACETS);
+    }
+    const shared = view({ notes: Array.from({ length: 10_000 }, (_, i) => note(`n${i}`, [], shapes[0]!(i))), links: [] }, { tag: "none" });
+    expect(shared.folders[0]).toEqual({ path: "a", notes: 10_000 });
+    expect(shared.folders[MAX_GRAPH_FACETS - 1]).toEqual({ path: deep.slice(0, 2 * MAX_GRAPH_FACETS - 1), notes: 10_000 });
   });
 });
 
