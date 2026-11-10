@@ -256,3 +256,17 @@ describe("ImportsPanel", () => {
     expect(init?.method).toBe("DELETE");
   });
 });
+
+describe("ImportsPanel graph", () => {
+  it("opens an import's graph and closes the panel, offering none for an empty import", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(json([view(), view({ id: "i2", name: "Empty", noteCount: 0 })]));
+    const onOpenGraph = vi.fn();
+    const onOpenChange = vi.fn();
+    render(<ImportsPanel open onOpenChange={onOpenChange} onOpenGraph={onOpenGraph} />);
+    const entry = await screen.findByRole("listitem", { name: "Vault" });
+    expect(within(screen.getByRole("listitem", { name: "Empty" })).queryByRole("button", { name: "Graph" })).toBeNull();
+    fireEvent.click(within(entry).getByRole("button", { name: "Graph" }));
+    expect(onOpenGraph).toHaveBeenCalledWith("i1");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});

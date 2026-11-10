@@ -14,8 +14,8 @@ export default defineConfig({
   use: { trace: "retain-on-failure" },
   projects: [
     { name: "chromium", use: devices["Desktop Chrome"] },
-    // The graph's labels are positioned HTML over an SVG, so it's checked where engines differ on that.
-    { name: "firefox", testMatch: "graph.spec.ts", use: devices["Desktop Firefox"] },
-    { name: "webkit", testMatch: "graph.spec.ts", use: devices["Desktop Safari"] },
+    // The graphs' labels are positioned HTML over an SVG, so it's checked where engines differ on that.
+    { name: "firefox", testMatch: ["graph.spec.ts", "notes-graph.spec.ts"], use: devices["Desktop Firefox"] },
+    { name: "webkit", testMatch: ["graph.spec.ts", "notes-graph.spec.ts"], use: devices["Desktop Safari"] },
   ],
 });

@@ -17,6 +17,9 @@ import {
   MemoryEdit,
   MemoryView,
   NoteGraph,
+  NoteGraphView,
+  NoteGraphViewQuery,
+  NoteSummary,
   NoteView,
   StartCourse,
   VaultImportInput,
@@ -45,6 +48,7 @@ import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js
 import { courseLessons, createLessonGenerator, lessonRevision, lessonView, reconcileCompletion } from "./runtime/lessons.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
+import { noteGraphView } from "./notes/graph-view.js";
 import { importVault, importView, resolveGraph } from "./notes/vault-import.js";
 import { createZipImporter, type UnzipVault, type ZipImportError } from "./notes/vault-zip-import.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
@@ -985,6 +989,29 @@ const getImportGraph = createRoute({
   },
 });
 
+const getImportGraphView = createRoute({
+  method: "get",
+  path: "/imports/{id}/graph/view",
+  description:
+    "What the web UI's graph of an import draws: notes, unresolved links as ghosts, and the tags and concepts that connect notes. Up to 500 matching notes are drawn whole; above that, or with `mode=local`, the notes within `depth` hops of `focus`. Bounded whatever the vault's size; `truncated` says when the limits left something out.",
+  request: { params: ImportParams, query: NoteGraphViewQuery },
+  responses: {
+    200: { description: "The view", content: { "application/json": { schema: NoteGraphView } } },
+    404: errorResponse("Unknown import"),
+  },
+});
+
+const findImportNotes = createRoute({
+  method: "get",
+  path: "/imports/{id}/notes",
+  description: "Up to 20 of an import's notes whose title or path contains `q`, ignoring case.",
+  request: { params: ImportParams, query: z.object({ q: z.string().trim().min(1).max(200) }) },
+  responses: {
+    200: { description: "The notes", content: { "application/json": { schema: z.array(NoteSummary) } } },
+    404: errorResponse("Unknown import"),
+  },
+});
+
 const getDistillation = createRoute({
   method: "get",
   path: "/imports/{id}/distillation",
@@ -1690,6 +1717,16 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       const { id } = c.req.valid("param");
       if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
       return c.json(resolveGraph(noteStore.importGraph(id)), 200);
+    })
+    .openapi(getImportGraphView, (c) => {
+      const { id } = c.req.valid("param");
+      if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
+      return c.json(noteGraphView(resolveGraph(noteStore.importGraph(id)), knowledge.conceptGraph(), c.req.valid("query")), 200);
+    })
+    .openapi(findImportNotes, (c) => {
+      const { id } = c.req.valid("param");
+      if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
+      return c.json(noteStore.findNotes(id, c.req.valid("query").q, 20), 200);
     })
     .openapi(getNote, (c) => {
       const note = noteStore.findNote(c.req.valid("param").id);

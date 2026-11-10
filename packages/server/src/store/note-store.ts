@@ -164,6 +164,19 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
       return { notes: rows.map((n) => ({ ...n, tags: tags.get(n.id) ?? [] })), links };
     },
 
+    /**
+     * Up to `limit` of an import's notes whose title or path contains `text`, ignoring case: titles that start
+     * with it first, then shorter paths. `%`, `_` and `\` in `text` are matched as written.
+     */
+    findNotes(importId: string, text: string, limit: number): { id: string; title: string; path: string }[] {
+      const escaped = text.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+      return db.all<{ id: string; title: string; path: string }>(sql`
+        select id, title, path from notes
+        where import_id = ${importId} and (lower(title) like ${`%${escaped}%`} escape '\\' or lower(path) like ${`%${escaped}%`} escape '\\')
+        order by lower(title) like ${`${escaped}%`} escape '\\' desc, length(path), path
+        limit ${limit}`);
+    },
+
     /** Chunks of every imported note matching an FTS5 query, best first. The query must already be safe: see ftsQuery. */
     searchNoteChunks(query: string, limit: number): NoteExcerpt[] {
       return db.all<NoteExcerpt>(sql`

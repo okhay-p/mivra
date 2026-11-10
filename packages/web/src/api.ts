@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, VaultImportResult, VaultImportView, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -149,6 +149,37 @@ export const cancelDistillation = (id: string) =>
   request(
     () => api.imports[":id"].distillation.$delete({ param: { id } }),
     async (res) => DistillationView.parse(await res.json()),
+  );
+
+/** What the graph of an import draws for these filters (ADR-014). Empty filters are left out. */
+export interface GraphViewFilters {
+  mode: "auto" | "local";
+  focus?: string;
+  depth: number;
+  tag?: string;
+  folder?: string;
+}
+
+export const getGraphView = (id: string, { mode, focus, depth, tag, folder }: GraphViewFilters) =>
+  request(
+    () =>
+      api.imports[":id"].graph.view.$get({
+        param: { id },
+        query: { mode, depth: String(depth), ...(focus ? { focus } : {}), ...(tag ? { tag } : {}), ...(folder ? { folder } : {}) },
+      }),
+    async (res) => NoteGraphView.parse(await res.json()),
+  );
+
+export const findNotes = (id: string, q: string) =>
+  request(
+    () => api.imports[":id"].notes.$get({ param: { id }, query: { q } }),
+    async (res) => NoteSummary.array().parse(await res.json()),
+  );
+
+export const getNote = (id: string) =>
+  request(
+    () => api.notes[":id"].$get({ param: { id } }),
+    async (res) => NoteView.parse(await res.json()),
   );
 
 /** A new import with this name, or a re-import of an existing one. */
