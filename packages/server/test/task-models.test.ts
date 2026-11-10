@@ -16,11 +16,11 @@ vi.setConfig({ testTimeout: 30_000 });
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
 let callId = 0;
-const toolCall = (name: string, input: unknown) => [
+const toolCall = (name: string, input: unknown): object[] => [
   { type: "tool-call", toolCallId: `call_${callId++}`, toolName: name, input: JSON.stringify(input) },
   { type: "finish", finishReason: { unified: "tool-calls", raw: "tool_calls" }, usage },
 ];
-const text = (delta: string) => [
+const text = (delta: string): object[] => [
   { type: "text-start", id: "t" },
   { type: "text-delta", id: "t", delta },
   { type: "text-end", id: "t" },
