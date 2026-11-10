@@ -125,20 +125,22 @@ export const memories = sqliteTable(
   "memories",
   {
     id: text("id").primaryKey(),
-    kind: text("kind", { enum: ["goal", "preference", "misconception"] }).notNull(),
+    kind: text("kind", { enum: ["goal", "preference", "misconception", "known"] }).notNull(),
     text: text("text").notNull(),
     concept: text("concept"),
-    basis: text("basis", { enum: ["wrong_answer", "chat"] }).notNull(),
+    basis: text("basis", { enum: ["wrong_answer", "chat", "import"] }).notNull(),
     attemptId: text("attempt_id").references(() => attempts.id, { onDelete: "set null" }),
     sessionId: text("session_id").references(() => sessions.id, { onDelete: "set null" }),
     runId: text("run_id").references(() => runs.id, { onDelete: "set null" }),
     status: text("status", { enum: memoryStatuses }).notNull(),
     /** The memory this one corrects, kept until this one is deleted. */
     replacesId: text("replaces_id"),
+    /** For basis `import`, the imported note it was drawn from (ADR-014): deleting the note deletes the memory. */
+    noteId: text("note_id").references(() => notes.id, { onDelete: "cascade" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     editedAt: integer("edited_at", { mode: "timestamp_ms" }),
   },
-  (t) => [index("memories_status_idx").on(t.status, t.createdAt), index("memories_run_idx").on(t.runId)],
+  (t) => [index("memories_status_idx").on(t.status, t.createdAt), index("memories_run_idx").on(t.runId), index("memories_note_idx").on(t.noteId)],
 );
 
 export const documentKinds = ["pdf", "pptx"] as const;
@@ -349,6 +351,8 @@ export const notes = sqliteTable(
     aliases: text("aliases", { mode: "json" }).$type<string[]>().notNull(),
     body: text("body").notNull(),
     hash: text("hash").notNull(),
+    /** The hash this note had when it was last distilled, or null if it never was. Differing from `hash` means it's waiting. */
+    distilledHash: text("distilled_hash"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
   },
@@ -398,7 +402,7 @@ export const noteTags = sqliteTable(
   (t) => [primaryKey({ columns: [t.noteId, t.tag] }), index("note_tags_tag_idx").on(t.tag)],
 );
 
-export const usageKinds = ["chat", "continuation", "lesson", "test"] as const;
+export const usageKinds = ["chat", "continuation", "lesson", "distillation", "test"] as const;
 export const usageStatuses = ["completed", "failed", "cancelled"] as const;
 export const usageBillings = ["api", "subscription"] as const;
 
@@ -445,4 +449,77 @@ export const usageRecords = sqliteTable(
     endedAt: integer("ended_at", { mode: "timestamp_ms" }).notNull(),
   },
   (t) => [index("usage_records_started_idx").on(t.startedAt), index("usage_records_run_idx").on(t.runId)],
+);
+
+/**
+ * A node of the knowledge graph (ADR-014), drawn from imported notes. `key` is the name's `conceptKey` (ADR-009), so
+ * one concept has one node however its name is written. A concept lives as long as at least one note supports it.
+ */
+export const concepts = sqliteTable(
+  "concepts",
+  {
+    id: text("id").primaryKey(),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [uniqueIndex("concepts_key_idx").on(t.key)],
+);
+
+/** Which notes a concept was drawn from. */
+export const conceptSources = sqliteTable(
+  "concept_sources",
+  {
+    conceptId: text("concept_id")
+      .notNull()
+      .references(() => concepts.id, { onDelete: "cascade" }),
+    noteId: text("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.conceptId, t.noteId] }), index("concept_sources_note_idx").on(t.noteId)],
+);
+
+export const conceptEdgeKinds = ["prerequisite", "related"] as const;
+
+/**
+ * An edge between two concepts, one row per note that supports it. `prerequisite` reads "from is a prerequisite of
+ * to"; a `related` edge is stored once, with the smaller id as `from`.
+ */
+export const conceptEdges = sqliteTable(
+  "concept_edges",
+  {
+    fromId: text("from_id")
+      .notNull()
+      .references(() => concepts.id, { onDelete: "cascade" }),
+    toId: text("to_id")
+      .notNull()
+      .references(() => concepts.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: conceptEdgeKinds }).notNull(),
+    noteId: text("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.fromId, t.toId, t.kind, t.noteId] }), index("concept_edges_note_idx").on(t.noteId), index("concept_edges_to_idx").on(t.toId)],
+);
+
+/**
+ * Every note that supports a memory drawn from notes, its own `note_id` among them, with the text that note gave.
+ * Repeats aren't saved twice (one `known` memory per concept per import), so a memory can stand on several notes; it
+ * moves to another when its note goes, taking that note's text unless the learner edited it, and goes only with the
+ * last.
+ */
+export const memorySources = sqliteTable(
+  "memory_sources",
+  {
+    memoryId: text("memory_id")
+      .notNull()
+      .references(() => memories.id, { onDelete: "cascade" }),
+    noteId: text("note_id")
+      .notNull()
+      .references(() => notes.id, { onDelete: "cascade" }),
+    /** What this note said, as the model put it: the memory's text if it moves to this note. */
+    text: text("text").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.memoryId, t.noteId] }), index("memory_sources_note_idx").on(t.noteId)],
 );

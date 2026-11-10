@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DistillationView } from "./knowledge.js";
 
 /**
  * Importing a learner's Obsidian vault (ADR-014). A vault is hostile input (ADR-010), so every size is capped.
@@ -41,6 +42,8 @@ export const VaultImportView = z
     noteCount: z.number().int(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
+    /** Distilling its notes into concepts and memories, which starts after every import (ADR-014). */
+    distillation: DistillationView,
   })
   .strict();
 export type VaultImportView = z.infer<typeof VaultImportView>;

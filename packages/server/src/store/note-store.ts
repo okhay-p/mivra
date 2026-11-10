@@ -3,6 +3,7 @@ import { asc, count, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { noteChunks, noteLinks, noteTags, notes, vaultImports } from "../db/schema.js";
 import type { ParsedNote } from "../notes/parse.js";
+import { clearDistilled, detachMemories, dropUnsupportedConcepts } from "./knowledge-store.js";
 
 export type VaultImportRow = typeof vaultImports.$inferSelect & { noteCount: number };
 export type NoteRow = typeof notes.$inferSelect;
@@ -60,11 +61,19 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
     const existing = new Map(tx.select({ id: notes.id, path: notes.path }).from(notes).where(eq(notes.importId, importId)).all().map((n) => [n.path, n.id]));
     const present = new Set([...snapshot.keep, ...snapshot.write.map((n) => n.path)]);
     const gone = [...existing].filter(([path]) => !present.has(path)).map(([, id]) => id);
-    for (const batch of batches(gone)) tx.delete(notes).where(inArray(notes.id, batch)).run();
+    for (const batch of batches(gone)) {
+      // A memory other notes support too moves to one of them; the rest go with their note by cascade.
+      detachMemories(tx, batch);
+      tx.delete(notes).where(inArray(notes.id, batch)).run();
+    }
 
     const written = snapshot.write.map((note) => ({ note, id: existing.get(note.path) ?? randomUUID(), isNew: !existing.has(note.path) }));
-    const values = (note: PreparedNote) => ({ title: note.parsed.title, titleKey: note.titleKey, aliases: note.aliasKeys, body: note.body, hash: note.hash, updatedAt: now });
+    // The note's new text has never been distilled, even if an earlier text with this hash was: what that yielded is
+    // cleared below, so a stale hash would leave the note with nothing and never waiting.
+    const values = (note: PreparedNote) => ({ title: note.parsed.title, titleKey: note.titleKey, aliases: note.aliasKeys, body: note.body, hash: note.hash, distilledHash: null, updatedAt: now });
     const rewritten = written.filter((w) => !w.isNew);
+    // What the old text yielded goes with it, and the new text waits to be distilled; gone notes take theirs by cascade.
+    clearDistilled(tx, rewritten.map((w) => w.id));
     for (const { note, id } of rewritten) tx.update(notes).set(values(note)).where(eq(notes.id, id)).run();
     for (const batch of batches(rewritten.map((w) => w.id))) {
       tx.delete(noteChunks).where(inArray(noteChunks.noteId, batch)).run();
@@ -122,9 +131,16 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
       });
     },
 
-    /** Deletes an import; its notes, chunks, links and tags follow by cascade, and triggers drop them from search. */
+    /**
+     * Deletes an import; its notes, chunks, links and tags follow by cascade, and triggers drop them from search. So do
+     * the memories, concept sources and edges drawn from its notes, and then any concept no other note supports.
+     */
     deleteImport(id: string): boolean {
-      return db.delete(vaultImports).where(eq(vaultImports.id, id)).run().changes > 0;
+      return db.transaction((tx) => {
+        const deleted = tx.delete(vaultImports).where(eq(vaultImports.id, id)).run().changes > 0;
+        if (deleted) dropUnsupportedConcepts(tx);
+        return deleted;
+      });
     },
 
     findNote(id: string): (NoteRow & { tags: string[] }) | undefined {

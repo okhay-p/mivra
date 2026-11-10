@@ -4,7 +4,7 @@ import { runInChild, type ExtractOptions } from "../documents/extract-in-child.j
 import { DocumentError } from "../documents/extract.js";
 import { readUpload, sanitizeFilename, type UploadRequest } from "../documents/upload.js";
 import type { NoteStore } from "../store/note-store.js";
-import { importVault } from "./vault-import.js";
+import { importVault, type AfterImport } from "./vault-import.js";
 import type { UnzippedVault } from "./vault-zip.js";
 
 /**
@@ -49,7 +49,7 @@ function importName(field: string | undefined, filename: string): string | undef
   return parsed.success ? parsed.data : undefined;
 }
 
-export function createZipImporter({ store, unzip = unzipVaultInChild, readTimeoutMs }: { store: NoteStore; unzip?: UnzipVault; readTimeoutMs?: number }) {
+export function createZipImporter({ store, after, unzip = unzipVaultInChild, readTimeoutMs }: { store: NoteStore; after: AfterImport; unzip?: UnzipVault; readTimeoutMs?: number }) {
   let importing = 0;
   return async (
     target: { new: true } | { importId: string },
@@ -80,7 +80,7 @@ export function createZipImporter({ store, unzip = unzipVaultInChild, readTimeou
       }
       const vault = await unzip(bytes, { signal });
       if (vault.files.length === 0) return { ok: false, error: { kind: "unreadable", message: "No Markdown notes were found in this zip." } };
-      const outcome = await importVault(store, "importId" in target ? { importId: target.importId, files: vault.files } : { name: name!, files: vault.files }, vault.skipped);
+      const outcome = await importVault(store, "importId" in target ? { importId: target.importId, files: vault.files } : { name: name!, files: vault.files }, vault.skipped, after);
       if (!outcome.ok) return { ok: false, error: { kind: outcome.kind, message: outcome.message } };
       return { ok: true, result: outcome.result };
     } catch (error) {

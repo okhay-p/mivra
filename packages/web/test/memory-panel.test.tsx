@@ -10,6 +10,7 @@ const memory = (over: Partial<MemoryView> = {}): MemoryView => ({
   text: "Wants to pass interviews",
   concept: null,
   basis: "chat",
+  source: null,
   createdAt: "2026-10-30T00:00:00.000Z",
   editedAt: null,
   ...over,
@@ -96,5 +97,32 @@ describe("MemoryPanel", () => {
 
     await waitFor(() => expect(screen.queryByText("Wants to pass interviews")).toBeNull());
     expect(fetch.mock.calls[1]![1]?.method).toBe("DELETE");
+  });
+
+  it("shows memories drawn from notes with their note, filters them, and deletes them all at once", async () => {
+    const source = { noteId: "n1", importId: "i1", importName: "Vault", path: "CS/Recursion.md", title: "Recursion" };
+    const fetch = openPanel(
+      json([memory(), memory({ id: "k1", kind: "known", text: "Has notes on recursion.", concept: "Recursion", basis: "import", source })]),
+      json({ deleted: 1 }),
+    );
+    expect(await screen.findByText("Known from your notes")).toBeTruthy();
+    expect(screen.getByText("From your note Recursion")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "From notes" }));
+    expect(screen.queryByText("Wants to pass interviews")).toBeNull();
+    expect(screen.getByText("Has notes on recursion.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "From learning" }));
+    expect(screen.queryByText("Has notes on recursion.")).toBeNull();
+    expect(screen.getByText("Wants to pass interviews")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "From notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete all from notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Yes, delete all" }));
+    await waitFor(() => expect(screen.queryByText("Has notes on recursion.")).toBeNull());
+    expect(screen.getByText("Wants to pass interviews")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "From notes" })).toBeNull();
+    const [url, init] = fetch.mock.calls[1]!;
+    expect(String(url)).toMatch(/\/api\/memories\?basis=import$/);
+    expect(init?.method).toBe("DELETE");
   });
 });

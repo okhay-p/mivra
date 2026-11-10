@@ -5,12 +5,15 @@ import type { LanguageModel } from "ai";
 import {
   AddToLesson,
   ArtifactView,
+  ConceptGraph,
   CourseLessonsView,
   CourseIcon,
+  DistillationView,
   CourseView,
   DocumentView,
   LessonView,
   MAX_VAULT_BYTES,
+  MemoryBulkDelete,
   MemoryEdit,
   MemoryView,
   NoteGraph,
@@ -45,9 +48,11 @@ import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./se
 import { importVault, importView, resolveGraph } from "./notes/vault-import.js";
 import { createZipImporter, type UnzipVault, type ZipImportError } from "./notes/vault-zip-import.js";
 import { createLessonStore, type LessonStore } from "./store/lesson-store.js";
-import { createNoteStore, type NoteRow } from "./store/note-store.js";
+import { createKnowledgeStore } from "./store/knowledge-store.js";
+import { createNoteStore, type NoteRow, type VaultImportRow } from "./store/note-store.js";
+import { createDistiller } from "./runtime/distiller.js";
 import { createSettingsStore } from "./store/settings-store.js";
-import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type SessionRow, type SessionStore } from "./store/session-store.js";
+import { createSessionStore, type CourseRow, type DocumentRow, type MemoryRow, type MemorySource, type SessionRow, type SessionStore } from "./store/session-store.js";
 import { createUsageStore } from "./store/usage-store.js";
 import { BUILT_IN_PROVIDERS, billingOf, providerOf, summarise, usageKindList } from "./usage/accounting.js";
 import { CustomPrice, createCustomPrices, createUsageTracker, type ModelFacts } from "./usage/tracker.js";
@@ -829,6 +834,16 @@ const deleteMemory = createRoute({
   },
 });
 
+const deleteMemoriesByBasis = createRoute({
+  method: "delete",
+  path: "/memories",
+  description: "Permanently deletes every memory with a basis: `import` removes all those drawn from imported notes.",
+  request: { query: MemoryBulkDelete },
+  responses: {
+    200: { description: "How many were deleted", content: { "application/json": { schema: z.object({ deleted: z.number().int() }) } } },
+  },
+});
+
 const listDocuments = createRoute({
   method: "get",
   path: "/sessions/{id}/documents",
@@ -887,7 +902,7 @@ const createImport = createRoute({
   method: "post",
   path: "/imports",
   description:
-    "Imports an Obsidian vault from its Markdown files. Only `.md` files outside hidden folders such as `.obsidian` are read; anything else is skipped and reported. No model runs: notes, links, tags and searchable chunks come from the text alone.",
+    "Imports an Obsidian vault from its Markdown files. Only `.md` files outside hidden folders such as `.obsidian` are read; anything else is skipped and reported. No model runs during the import: notes, links, tags and searchable chunks come from the text alone. Afterwards the new and changed notes are distilled into concepts and memories in the background (see `/imports/{id}/distillation`).",
   request: { body: { content: { "application/json": { schema: VaultImportInput } } } },
   responses: {
     201: { description: "What the import stored", content: { "application/json": { schema: VaultImportResult } } },
@@ -970,6 +985,48 @@ const getImportGraph = createRoute({
   },
 });
 
+const getDistillation = createRoute({
+  method: "get",
+  path: "/imports/{id}/distillation",
+  description: "Where distilling an import's notes into concepts, edges and memories stands (ADR-014).",
+  request: { params: ImportParams },
+  responses: {
+    200: { description: "Its progress", content: { "application/json": { schema: DistillationView } } },
+    404: errorResponse("Unknown import"),
+  },
+});
+
+const startDistillation = createRoute({
+  method: "post",
+  path: "/imports/{id}/distillation",
+  description: "Distils the import's notes that are waiting, such as after a cancel or a failure. Importing starts this by itself.",
+  request: { params: ImportParams },
+  responses: {
+    202: { description: "Started or queued; nothing happens when no notes wait", content: { "application/json": { schema: DistillationView } } },
+    404: errorResponse("Unknown import"),
+  },
+});
+
+const cancelDistillation = createRoute({
+  method: "delete",
+  path: "/imports/{id}/distillation",
+  description: "Stops distilling the import after the current model call. What was saved stays; the rest waits.",
+  request: { params: ImportParams },
+  responses: {
+    200: { description: "Its progress", content: { "application/json": { schema: DistillationView } } },
+    404: errorResponse("Unknown import"),
+  },
+});
+
+const getConceptGraph = createRoute({
+  method: "get",
+  path: "/concepts",
+  description: "Every concept drawn from imported notes and the edges between them, each with the ids of the notes it came from.",
+  responses: {
+    200: { description: "The concept graph", content: { "application/json": { schema: ConceptGraph } } },
+  },
+});
+
 const getNote = createRoute({
   method: "get",
   path: "/notes/{id}",
@@ -1036,7 +1093,7 @@ function toCourseJson(row: CourseRow, store: SessionStore, lessons: LessonStore)
 }
 
 /** Leaves out everything a held memory says: it could give away an unanswered check. */
-function toMemoryJson(row: MemoryRow & { held: boolean }): MemoryView {
+function toMemoryJson(row: MemoryRow & { held: boolean; source: MemorySource | null }): MemoryView {
   return {
     id: row.id,
     kind: row.kind,
@@ -1044,6 +1101,7 @@ function toMemoryJson(row: MemoryRow & { held: boolean }): MemoryView {
     text: row.held ? null : row.text,
     concept: row.held ? null : row.concept,
     basis: row.held ? null : row.basis,
+    source: row.held ? null : row.source,
     createdAt: row.createdAt.toISOString(),
     editedAt: row.editedAt?.toISOString() ?? null,
   };
@@ -1223,6 +1281,14 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       }),
     };
   };
+  const knowledge = createKnowledgeStore(db);
+  const distiller = createDistiller({ notes: noteStore, knowledge, model: resolveModel, models: runModels, usage });
+  /** After every import: distil its changed notes in the background, and describe where that stands. */
+  const afterImport = (importId: string) => {
+    distiller.start(importId);
+    return distiller.view(importId);
+  };
+  const importJson = (row: VaultImportRow) => importView(row, distiller.view(row.id));
   lessons.onChange(generator.changed);
   const lessonJson = (id: string) => {
     const row = lessons.findLesson(id);
@@ -1232,7 +1298,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   };
   const attachDocument = createDocumentAttacher({ store, ...(extractDocument ? { extract: extractDocument } : {}) });
 
-  const importZip = createZipImporter({ store: noteStore, ...(unzipVault ? { unzip: unzipVault } : {}) });
+  const importZip = createZipImporter({ store: noteStore, after: afterImport, ...(unzipVault ? { unzip: unzipVault } : {}) });
 
   const base = new OpenAPIHono();
   base.openAPIRegistry.registerPath(uploadDocument);
@@ -1565,15 +1631,18 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .openapi(setPinnedModels, (c) => c.json({ pinned: models.setPinned(c.req.valid("json").models) }, 200))
     .openapi(listMemories, (c) => c.json(store.listMemoriesForLearner(registry.checkKinds()).map(toMemoryJson), 200))
     .openapi(editMemory, (c) => {
-      const result = store.editMemory(c.req.valid("param").id, c.req.valid("json").text, registry.checkKinds());
-      if (result.ok) return c.json(toMemoryJson(result.memory), 200);
-      return result.reason === "held"
+      const { id } = c.req.valid("param");
+      const result = store.editMemory(id, c.req.valid("json").text, registry.checkKinds());
+      const edited = result.ok && store.listMemoriesForLearner(registry.checkKinds()).find((m) => m.id === id);
+      if (edited) return c.json(toMemoryJson(edited), 200);
+      return !result.ok && result.reason === "held"
         ? c.json({ error: "This memory can't be edited until the check is answered" }, 409)
         : c.json({ error: "Memory not found" }, 404);
     })
     .openapi(deleteMemory, (c) =>
       store.deleteMemory(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Memory not found" }, 404),
     )
+    .openapi(deleteMemoriesByBasis, (c) => c.json({ deleted: store.deleteMemoriesByBasis(c.req.valid("query").basis) }, 200))
     .openapi(listDocuments, (c) => {
       const { id } = c.req.valid("param");
       if (!store.findSession(id)) return c.json({ error: "Session not found" }, 404);
@@ -1582,18 +1651,41 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     .openapi(deleteDocument, (c) =>
       store.deleteDocument(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Document not found" }, 404),
     )
-    .openapi(listImports, (c) => c.json(noteStore.listImports().map(importView), 200))
+    .openapi(listImports, (c) => c.json(noteStore.listImports().map(importJson), 200))
     .openapi(createImport, async (c) => {
-      const outcome = await importVault(noteStore, c.req.valid("json"));
+      const outcome = await importVault(noteStore, c.req.valid("json"), [], afterImport);
       if (!outcome.ok) return c.json({ error: outcome.message }, 409);
       return c.json(outcome.result, 201);
     })
     .openapi(replaceImportFiles, async (c) => {
-      const outcome = await importVault(noteStore, { importId: c.req.valid("param").id, files: c.req.valid("json").files });
+      const outcome = await importVault(noteStore, { importId: c.req.valid("param").id, files: c.req.valid("json").files }, [], afterImport);
       if (!outcome.ok) return c.json({ error: outcome.message }, 404);
       return c.json(outcome.result, 200);
     })
-    .openapi(deleteImport, (c) => (noteStore.deleteImport(c.req.valid("param").id) ? c.body(null, 204) : c.json({ error: "Import not found" }, 404)))
+    .openapi(deleteImport, (c) => {
+      const { id } = c.req.valid("param");
+      // Stopped first, so a model call already under way saves nothing: its notes are gone when it returns.
+      distiller.forget(id);
+      return noteStore.deleteImport(id) ? c.body(null, 204) : c.json({ error: "Import not found" }, 404);
+    })
+    .openapi(getDistillation, (c) => {
+      const { id } = c.req.valid("param");
+      if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
+      return c.json(distiller.view(id), 200);
+    })
+    .openapi(startDistillation, (c) => {
+      const { id } = c.req.valid("param");
+      if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
+      distiller.start(id);
+      return c.json(distiller.view(id), 202);
+    })
+    .openapi(cancelDistillation, (c) => {
+      const { id } = c.req.valid("param");
+      if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
+      distiller.cancel(id);
+      return c.json(distiller.view(id), 200);
+    })
+    .openapi(getConceptGraph, (c) => c.json(knowledge.conceptGraph(), 200))
     .openapi(getImportGraph, (c) => {
       const { id } = c.req.valid("param");
       if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
