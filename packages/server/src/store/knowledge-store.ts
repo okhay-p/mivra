@@ -22,7 +22,8 @@ export const MAX_CONCEPT_NODES = 5_000;
 
 const BATCH = 500;
 const batches = <T>(items: T[]) => Array.from({ length: Math.ceil(items.length / BATCH) }, (_, i) => items.slice(i * BATCH, (i + 1) * BATCH));
-const sameText = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+/** A memory's text as repeats are compared: ignoring case and surrounding space. */
+const normalText = (text: string) => text.trim().toLowerCase();
 
 /**
  * Forgets what notes yielded, before they're rewritten (ADR-014: re-import is a snapshot). Memories the learner
@@ -52,6 +53,12 @@ export function dropUnsupportedConcepts(tx: Db | Tx) {
  * basis `import`. Like the other stores, the only code that talks to Drizzle about these tables (ADR-007).
  */
 export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date()) {
+  // Prepared once: it runs for every note distilled.
+  const markOne = db
+    .update(notes)
+    .set({ distilledHash: sql`${sql.placeholder("hash")}` })
+    .where(and(eq(notes.id, sql.placeholder("id")), eq(notes.hash, sql.placeholder("hash"))))
+    .prepare();
   return {
     /** An import's notes not yet distilled at their current text, in path order, with their tags. */
     pendingNotes(importId: string): PendingNote[] {
@@ -112,71 +119,91 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
     saveDistilled(read: Map<string, string>, distilled: Distilled): { concepts: number; edges: number; memories: number } {
       const now = clock();
       return db.transaction((tx) => {
+        // Statements are batched: a group of notes yields dozens of rows, and each statement built and prepared on its
+        // own costs about a millisecond of the server's time, which a streaming reply would wait on.
         const current = new Set<string>();
+        const importOf = new Map<string, string>();
         for (const batch of batches([...read.keys()])) {
-          for (const row of tx.select({ id: notes.id, hash: notes.hash }).from(notes).where(inArray(notes.id, batch)).all()) {
-            if (read.get(row.id) === row.hash) current.add(row.id);
+          for (const row of tx.select({ id: notes.id, hash: notes.hash, importId: notes.importId }).from(notes).where(inArray(notes.id, batch)).all()) {
+            if (read.get(row.id) === row.hash) {
+              current.add(row.id);
+              importOf.set(row.id, row.importId);
+            }
           }
         }
         const ids = new Map<string, string>();
-        const conceptId = (key: string) => {
-          if (ids.has(key)) return ids.get(key);
-          const id = tx.select({ id: concepts.id }).from(concepts).where(eq(concepts.key, key)).get()?.id;
-          if (id) ids.set(key, id);
-          return id;
-        };
+        const wanted = [...new Set([...distilled.concepts.map((c) => c.key), ...distilled.edges.flatMap((e) => [e.fromKey, e.toKey])])];
+        for (const batch of batches(wanted)) {
+          for (const row of tx.select({ id: concepts.id, key: concepts.key }).from(concepts).where(inArray(concepts.key, batch)).all()) ids.set(row.key, row.id);
+        }
         let nodes = tx.get<{ n: number }>(sql`select count(*) as n from concepts`)?.n ?? 0;
         let savedConcepts = 0;
+        const newConcepts: (typeof concepts.$inferInsert)[] = [];
+        const sourceRows: (typeof conceptSources.$inferInsert)[] = [];
         for (const concept of distilled.concepts) {
           const sources = concept.noteIds.filter((id) => current.has(id));
           if (sources.length === 0) continue;
-          let id = conceptId(concept.key);
+          let id = ids.get(concept.key);
           if (!id) {
             if (nodes >= MAX_CONCEPT_NODES) continue;
             id = randomUUID();
-            tx.insert(concepts).values({ id, key: concept.key, name: concept.name, createdAt: now }).run();
+            newConcepts.push({ id, key: concept.key, name: concept.name, createdAt: now });
             ids.set(concept.key, id);
             nodes++;
           }
-          for (const noteId of sources) tx.insert(conceptSources).values({ conceptId: id, noteId }).onConflictDoNothing().run();
+          for (const noteId of sources) sourceRows.push({ conceptId: id, noteId });
           savedConcepts++;
         }
+        for (const batch of batches(newConcepts)) tx.insert(concepts).values(batch).run();
+        for (const batch of batches(sourceRows)) tx.insert(conceptSources).values(batch).onConflictDoNothing().run();
         let savedEdges = 0;
         for (const edge of distilled.edges) {
           if (!current.has(edge.noteId)) continue;
-          let from = conceptId(edge.fromKey);
-          let to = conceptId(edge.toKey);
+          let from = ids.get(edge.fromKey);
+          let to = ids.get(edge.toKey);
           if (!from || !to || from === to) continue;
           if (edge.kind === "related" && from > to) [from, to] = [to, from];
           // A prerequisite both ways is a contradiction; the first one stated stands.
           if (edge.kind === "prerequisite" && tx.select().from(conceptEdges).where(and(eq(conceptEdges.fromId, to), eq(conceptEdges.toId, from), eq(conceptEdges.kind, "prerequisite"))).get()) continue;
           savedEdges += tx.insert(conceptEdges).values({ fromId: from, toId: to, kind: edge.kind, noteId: edge.noteId }).onConflictDoNothing().run().changes;
         }
-        let savedMemories = 0;
+        // Repeats are skipped: of what the learner said, or of what this import's notes already gave. Another import
+        // may say the same and keeps its own copy, so deleting one import doesn't take the other's. The memories to
+        // compare with are read once per kind and import, not once per memory: an import of a thousand notes has
+        // about as many memories, and every group would otherwise re-read and re-key them all.
+        const alikeSets = new Map<string, { texts: Set<string>; conceptKeys: Set<string> }>();
+        const alikeFor = (kind: string, importId: string) => {
+          const cacheKey = `${kind}\u0000${importId}`;
+          let found = alikeSets.get(cacheKey);
+          if (!found) {
+            const rows = tx.all<{ text: string; concept: string | null }>(sql`
+              select m.text, m.concept from memories m left join notes n on n.id = m.note_id
+              where m.kind = ${kind} and m.status = 'active' and (m.basis != 'import' or n.import_id = ${importId})`);
+            found = { texts: new Set(rows.map((m) => normalText(m.text))), conceptKeys: new Set(rows.flatMap((m) => (m.concept ? [conceptKey(m.concept)] : []))) };
+            alikeSets.set(cacheKey, found);
+          }
+          return found;
+        };
+        const memoryRows: (typeof memories.$inferInsert)[] = [];
         for (const memory of distilled.memories) {
           if (!current.has(memory.noteId)) continue;
-          // Repeats are skipped: of what the learner said, or of what this import's notes already gave. Another import
-          // may say the same and keeps its own copy, so deleting one import doesn't take the other's.
-          const importId = tx.select({ importId: notes.importId }).from(notes).where(eq(notes.id, memory.noteId)).get()?.importId ?? "";
-          const alike = tx.all<{ text: string; concept: string | null }>(sql`
-            select m.text, m.concept from memories m left join notes n on n.id = m.note_id
-            where m.kind = ${memory.kind} and m.status = 'active' and (m.basis != 'import' or n.import_id = ${importId})`);
-          if (alike.some((m) => sameText(m.text, memory.text))) continue;
+          const alike = alikeFor(memory.kind, importOf.get(memory.noteId)!);
+          if (alike.texts.has(normalText(memory.text))) continue;
           // One `known` memory per concept per import: many notes covering it don't need saying many times.
-          if (memory.kind === "known" && memory.conceptKey && alike.some((m) => m.concept && conceptKey(m.concept) === memory.conceptKey)) continue;
-          tx.insert(memories)
-            .values({ id: randomUUID(), kind: memory.kind, text: memory.text, concept: memory.concept, basis: "import", noteId: memory.noteId, status: "active", createdAt: now })
-            .run();
-          savedMemories++;
+          if (memory.kind === "known" && memory.conceptKey && alike.conceptKeys.has(memory.conceptKey)) continue;
+          memoryRows.push({ id: randomUUID(), kind: memory.kind, text: memory.text, concept: memory.concept, basis: "import", noteId: memory.noteId, status: "active", createdAt: now });
+          alike.texts.add(normalText(memory.text));
+          if (memory.concept) alike.conceptKeys.add(conceptKey(memory.concept));
         }
-        return { concepts: savedConcepts, edges: savedEdges, memories: savedMemories };
+        for (const batch of batches(memoryRows)) tx.insert(memories).values(batch).run();
+        return { concepts: savedConcepts, edges: savedEdges, memories: memoryRows.length };
       });
     },
 
     /** Marks notes distilled at the text they were read with; one that has changed since stays waiting. */
     markDistilled(read: Map<string, string>) {
-      db.transaction((tx) => {
-        for (const [noteId, hash] of read) tx.update(notes).set({ distilledHash: hash }).where(and(eq(notes.id, noteId), eq(notes.hash, hash))).run();
+      db.transaction(() => {
+        for (const [id, hash] of read) markOne.run({ id, hash });
       });
     },
 

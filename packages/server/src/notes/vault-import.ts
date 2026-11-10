@@ -34,7 +34,7 @@ export type AfterImport = (importId: string) => DistillationView;
 
 /** How long parsing runs before letting other requests (such as a streaming reply) through. */
 const YIELD_EVERY_MS = 20;
-const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
+export const yieldToEventLoop = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 /**
  * Sorts the files into notes to write, notes unchanged since the last import, and skipped paths. Parsing a large

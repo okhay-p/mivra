@@ -124,6 +124,27 @@ function distance(a: string, b: string, max: number): number {
   return prev[b.length]!;
 }
 
+/**
+ * `distance(a, b, 1) <= 1` for two different words, in one pass and without allocating: matching names runs this
+ * for every word of every concept node.
+ */
+function oneEdit(a: string, b: string): boolean {
+  if (a.length < b.length) [a, b] = [b, a];
+  if (a.length - b.length > 1) return false;
+  let i = 0;
+  while (i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) {
+    // A substitution at i, or a transposition of i and i + 1.
+    let rest = i + 1;
+    if (i + 1 < a.length && a[i] === b[i + 1] && a[i + 1] === b[i]) rest = i + 2;
+    for (let k = rest; k < a.length; k++) if (a[k] !== b[k]) return false;
+    return true;
+  }
+  // An insertion at i.
+  for (let k = i; k < b.length; k++) if (a[k + 1] !== b[k]) return false;
+  return true;
+}
+
 /** A word and what it could be without a plural ending: `searches` gives `searche` and `search`. */
 const forms = (word: string) => {
   if (word.length <= 3 || !word.endsWith("s") || word.endsWith("ss")) return [word];
@@ -133,18 +154,52 @@ const forms = (word: string) => {
 /** Whether two words are one spelt slightly differently: a plural, or a typo or two in a longer word. */
 export function closeWord(a: string, b: string): boolean {
   if (a === b) return true;
+  // Neither a plural ending (at most two letters) nor two typos can bridge a bigger difference in length.
+  if (Math.abs(a.length - b.length) > 2) return false;
   const other = forms(b);
   if (forms(a).some((form) => other.includes(form))) return true;
   const length = Math.min(a.length, b.length);
   const allowed = length >= 9 ? 2 : length >= 5 ? 1 : 0;
+  if (allowed === 1) return oneEdit(a, b);
   return allowed > 0 && distance(a, b, allowed) <= allowed;
 }
 
 /** Whether two names are close spellings of each other, word for word (so `#binary-search` and "Binary searches"). */
 export function closeSpelling(a: string, b: string): boolean {
-  const x = looseWords(a);
-  const y = looseWords(b);
+  return closeWords(looseWords(a), looseWords(b));
+}
+
+/** `closeSpelling` on names already split by `looseWords`. */
+function closeWords(x: string[], y: string[]): boolean {
   return x.length > 0 && x.length === y.length && x.every((word, i) => closeWord(word, y[i]!));
+}
+
+type Named = { key: string; name: string };
+type Indexed = Named & { words: string[] };
+
+/**
+ * Names to match against, each split into words once. Matching runs for every name a proposal gives, against every
+ * concept node (up to MAX_CONCEPT_NODES), so nothing is recomputed per comparison.
+ */
+function nameIndex(list: Named[]) {
+  const entries: Indexed[] = [];
+  const byKey = new Map<string, Indexed>();
+  const add = (named: Named) => {
+    const entry = { ...named, words: looseWords(named.name) };
+    entries.push(entry);
+    if (!byKey.has(entry.key)) byKey.set(entry.key, entry);
+  };
+  list.forEach(add);
+  return {
+    add,
+    /** An exact match by key first, then the first close spelling. */
+    find(name: string, key = conceptKey(name)): Named | undefined {
+      const exact = byKey.get(key);
+      if (exact) return exact;
+      const words = looseWords(name);
+      return entries.find((e) => closeWords(e.words, words));
+    },
+  };
 }
 
 /** Whether a name, or a close spelling of it, appears in a text as consecutive words. */
@@ -200,13 +255,17 @@ export function validateProposal(input: RecordFromNotesInput, refs: Map<string, 
 
   /** Concepts accepted in this call, by key, so edges and memories can name them. */
   const accepted = new Map<string, { key: string; name: string; noteIds: string[] }>();
+  const acceptedNames = nameIndex([]);
   const nodeKeys = new Set(context.nodes.map((n) => n.key));
-  const other = context.other.map((name) => ({ name, key: conceptKey(name) }));
-  const tags = context.tags.map((tag) => ({ name: tag, key: conceptKey(tag) }));
-  const find = (list: { key: string; name: string }[], name: string) => list.find((c) => c.key === conceptKey(name)) ?? list.find((c) => closeSpelling(c.name, name));
+  const nodes = nameIndex(context.nodes);
+  const other = nameIndex(context.other.map((name) => ({ name, key: conceptKey(name) })));
+  const tags = nameIndex(context.tags.map((tag) => ({ name: tag, key: conceptKey(tag) })));
 
   /** The concept a name means, in order: one accepted in this call, a graph node, then a name from checks or memories. */
-  const known = (name: string): { key: string; name: string } | undefined => find([...accepted.values()], name) ?? find(context.nodes, name) ?? find(other, name);
+  const known = (name: string): { key: string; name: string } | undefined => {
+    const key = conceptKey(name);
+    return acceptedNames.find(name, key) ?? nodes.find(name, key) ?? other.find(name, key);
+  };
   const isNode = (key: string) => accepted.has(key) || nodeKeys.has(key);
 
   for (const concept of input.concepts) {
@@ -219,7 +278,7 @@ export function validateProposal(input: RecordFromNotesInput, refs: Map<string, 
     let settled = known(concept.name);
     if (!settled) {
       // A tag (lower-cased, hyphenated) is in the notes by definition, but the model's spelling of it reads better.
-      const fromNotes = find(tags, concept.name) || appearsIn(concept.name, notes.map((n) => `${n!.title}\n${n!.tags.join(" ")}\n${promptText(n!)}`).join("\n"));
+      const fromNotes = tags.find(concept.name) || appearsIn(concept.name, notes.map((n) => `${n!.title}\n${n!.tags.join(" ")}\n${promptText(n!)}`).join("\n"));
       if (!fromNotes) {
         reject(concept.name, "a new concept's name must appear in the notes it cites; use a name from <existing_concepts> or <vault_tags>, or the notes' own wording");
         continue;
@@ -228,7 +287,10 @@ export function validateProposal(input: RecordFromNotesInput, refs: Map<string, 
     }
     const previous = accepted.get(settled.key);
     if (previous) previous.noteIds = [...new Set([...previous.noteIds, ...noteIds])];
-    else accepted.set(settled.key, { key: settled.key, name: settled.name, noteIds });
+    else {
+      accepted.set(settled.key, { key: settled.key, name: settled.name, noteIds });
+      acceptedNames.add(settled);
+    }
   }
 
   const edges: Distilled["edges"] = [];

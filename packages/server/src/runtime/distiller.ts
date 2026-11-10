@@ -4,7 +4,7 @@ import { stepCountIs, streamText, tool, wrapLanguageModel, type LanguageModel } 
 import { callOptionsFor, type ModelSelection } from "../model.js";
 import type { ModelSettings } from "../models/selection.js";
 import { DISTIL_INSTRUCTIONS, distilPrompt, groupNotes, validateProposal, type NoteGroup } from "../notes/distil.js";
-import { resolveGraph } from "../notes/vault-import.js";
+import { resolveGraph, yieldToEventLoop } from "../notes/vault-import.js";
 import type { KnowledgeStore } from "../store/knowledge-store.js";
 import type { NoteStore } from "../store/note-store.js";
 import type { UsageTracker } from "../usage/tracker.js";
@@ -38,10 +38,11 @@ export function createDistiller({ notes, knowledge, model, models, usage }: Dist
   const queue: string[] = [];
   let pumping: Promise<void> | undefined;
 
-  async function distilGroup(importId: string, group: NoteGroup, signal: AbortSignal) {
-    const tags = knowledge.importTags(importId, 1_000);
+  /** What every group of a run is matched against besides the graph, read once per run: a run doesn't change it. */
+  type RunContext = { tags: { tag: string; notes: number }[]; other: string[] };
+
+  async function distilGroup(group: NoteGroup, { tags, other }: RunContext, signal: AbortSignal) {
     const nodes = knowledge.conceptNodes();
-    const other = knowledge.otherConceptNames(100);
     const existing = [...new Set([...nodes.map((n) => n.name), ...other])];
     const { text, refs } = distilPrompt(group, { existing, tags });
     const read = new Map(group.notes.map((n) => [n.id, n.hash]));
@@ -60,8 +61,15 @@ export function createDistiller({ notes, knowledge, model, models, usage }: Dist
           description: "Record the concepts, edges between them, and memories these notes show. Every item cites the notes it comes from.",
           inputSchema: RecordFromNotesInput,
           execute: async (input) => {
+            // Validating and saving is the call's largest synchronous step; let waiting requests through first, since a
+            // fast model's stream may have arrived without the event loop turning since the prompt was built.
+            await yieldToEventLoop();
             if (signal.aborted) return { status: "cancelled" };
             const valid = validateProposal(input, refs, { nodes: knowledge.conceptNodes(), other, tags: tags.map((t) => t.tag) });
+            // Validating and saving take about as long each; a turn of the event loop between them keeps each block
+            // short. Saving rechecks every note's text and every concept, so nothing changed meanwhile is saved wrongly.
+            await yieldToEventLoop();
+            if (signal.aborted) return { status: "cancelled" };
             // Notes are marked distilled once the whole call has finished, not here, so a failure leaves them waiting.
             const saved = knowledge.saveDistilled(read, valid);
             return { status: "saved", saved, rejected: valid.rejected.slice(0, MAX_REJECTIONS_LISTED), rejectedCount: valid.rejected.length };
@@ -87,15 +95,23 @@ export function createDistiller({ notes, knowledge, model, models, usage }: Dist
     const controller = new AbortController();
     Object.assign(job, { status: "running", groups: 0, groupsDone: 0, error: null, controller, again: false });
     try {
+      // Reading a large import's notes and links takes a while; each step lets other requests through after it.
       const pending = knowledge.pendingNotes(importId);
       if (pending.length === 0) return;
+      await yieldToEventLoop();
       const graph = resolveGraph(notes.importGraph(importId));
       const links = graph.links.flatMap((l) => (l.to ? [{ from: l.from, to: l.to }] : []));
+      await yieldToEventLoop();
+      if (controller.signal.aborted) return;
       const groups = groupNotes(pending, links);
       job.groups = groups.length;
+      const context = { tags: knowledge.importTags(importId, 1_000), other: knowledge.otherConceptNames(100) };
       for (const group of groups) {
+        // Between groups, let other requests (a streaming reply, say) through: a model that answers at once would
+        // otherwise run every group without the event loop turning (issue #63's 1,000-note import held it ~48 s).
+        await yieldToEventLoop();
         if (controller.signal.aborted) return;
-        await distilGroup(importId, group, controller.signal);
+        await distilGroup(group, context, controller.signal);
         if (!controller.signal.aborted) job.groupsDone++;
       }
     } catch (error) {

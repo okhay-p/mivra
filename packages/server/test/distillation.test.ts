@@ -1,6 +1,6 @@
 import { ConceptGraph, DistillationView, MemoryView, RecordFromNotesInput, VaultImportResult, VaultImportView, type VaultFile } from "@mivra/protocol";
 import { eq } from "drizzle-orm";
-import { simulateReadableStream } from "ai";
+import { simulateReadableStream as simulate } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
@@ -31,7 +31,10 @@ function notesIn(prompt: unknown): NoteRow[] {
  * A mock model that answers each distillation call with what `propose` makes of its notes, and a stream that never
  * ends (until aborted) for a call whose notes include "HANG".
  */
-function setup(propose: (notes: NoteRow[]) => Proposal | "fail", db: Db = openDb(":memory:")) {
+function setup(propose: (notes: NoteRow[]) => Proposal | "fail", db: Db = openDb(":memory:"), { instant = false } = {}) {
+  // `instant` answers without a timer in between (as the e2e harness's scripted model does): only microtasks, so the
+  // event loop turns only where Mivra yields.
+  const simulateReadableStream = <T,>(options: { chunks: T[] }) => simulate({ ...options, ...(instant ? { initialDelayInMs: null, chunkDelayInMs: null } : {}) });
   const model = new MockLanguageModelV4({
     doStream: async ({ prompt, abortSignal }) => {
       const tail = prompt.at(-1);
@@ -330,6 +333,29 @@ describe("distilling an import", () => {
     expect(view.byKind).toEqual([expect.objectContaining({ kind: "distillation", calls: 2 })]);
     const run = expect.objectContaining({ kind: "distillation", session: null, calls: 1 });
     expect(view.runs).toEqual([run, run]);
+  });
+
+  it("lets other requests through between and within groups, even with a model that answers at once", async () => {
+    // One tick per turn of the event loop: an immediate queued during a turn runs in the next one.
+    let turns = 0;
+    let counting = true;
+    const tick = () => {
+      turns++;
+      if (counting) setImmediate(tick);
+    };
+    setImmediate(tick);
+    const atCall: number[] = [];
+    const t = setup((notes) => (atCall.push(turns), byTitle(notes)), undefined, { instant: true });
+    // 12 tags of 10 notes: one group each.
+    const files = Array.from({ length: 120 }, (_, i) => ({ path: `N${i}.md`, text: `#t${i % 12} Note ${i} on topic ${i}.` }));
+    const { view } = await t.importVault("Vault", files);
+    counting = false;
+    expect(view.groupsDone).toBe(12);
+    expect(atCall).toHaveLength(12);
+    // Before the distiller yielded, every group ran without the event loop turning once (issue #63: a 1,000-note
+    // import held the server ~48 s). Now it turns twice in each group's tool call and once before the next group.
+    const between = atCall.slice(1).map((n, i) => n - atCall[i]!);
+    expect(Math.min(...between)).toBeGreaterThanOrEqual(3);
   });
 
   it("bulk-deletes memories drawn from notes, leaving the others", async () => {
