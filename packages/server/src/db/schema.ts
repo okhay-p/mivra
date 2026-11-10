@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { index, integer, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
@@ -396,4 +396,53 @@ export const noteTags = sqliteTable(
     tag: text("tag").notNull(),
   },
   (t) => [primaryKey({ columns: [t.noteId, t.tag] }), index("note_tags_tag_idx").on(t.tag)],
+);
+
+export const usageKinds = ["chat", "continuation", "lesson", "test"] as const;
+export const usageStatuses = ["completed", "failed", "cancelled"] as const;
+export const usageBillings = ["api", "subscription"] as const;
+
+/**
+ * One model call's accounting (issue #70): a provider call, so a tutor run with several tool-call steps has one row
+ * per step. Content-free by design: no prompt, reply, error text or credential, only what the Usage page needs.
+ * `session_id` and `run_id` are plain ids with no foreign key, so deleting a chat keeps its rows and totals; labels
+ * are snapshots, so a renamed or removed provider stays readable. A null token count was not reported (unknown),
+ * never zero. `price` is the per-million-token price known when the call ended, kept so later price changes never
+ * rewrite history; `estimated_cost` was computed from it then. For a subscription call that estimate is only an
+ * API-price comparison, never a charge.
+ */
+export const usageRecords = sqliteTable(
+  "usage_records",
+  {
+    id: text("id").primaryKey(),
+    kind: text("kind", { enum: usageKinds }).notNull(),
+    status: text("status", { enum: usageStatuses }).notNull(),
+    sessionId: text("session_id"),
+    runId: text("run_id"),
+    /** The call's position within its run (or test), from 0. Each tool-call step, and each retry, is its own call. */
+    seq: integer("seq").notNull(),
+    /** "openrouter", "anthropic", "openai", "chatgpt" or "custom:<provider id>". */
+    provider: text("provider").notNull(),
+    providerLabel: text("provider_label").notNull(),
+    model: text("model").notNull(),
+    modelLabel: text("model_label"),
+    effort: text("effort"),
+    billing: text("billing", { enum: usageBillings }).notNull(),
+    /** All input tokens, cached ones included. */
+    inputTokens: integer("input_tokens"),
+    inputNoCacheTokens: integer("input_no_cache_tokens"),
+    inputCacheReadTokens: integer("input_cache_read_tokens"),
+    inputCacheWriteTokens: integer("input_cache_write_tokens"),
+    /** All output tokens, reasoning included. */
+    outputTokens: integer("output_tokens"),
+    outputReasoningTokens: integer("output_reasoning_tokens"),
+    /** US dollars the provider reported for this call (OpenRouter does). */
+    reportedCost: real("reported_cost"),
+    price: text("price", { mode: "json" }),
+    /** US dollars at `price`, or null when the price or a needed token count is unknown. */
+    estimatedCost: real("estimated_cost"),
+    startedAt: integer("started_at", { mode: "timestamp_ms" }).notNull(),
+    endedAt: integer("ended_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [index("usage_records_started_idx").on(t.startedAt), index("usage_records_run_idx").on(t.runId)],
 );

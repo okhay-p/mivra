@@ -416,8 +416,9 @@ describe("the ChatGPT model list", () => {
       { id: "openrouter:openai/gpt-6.1-sol", name: "OpenAI: GPT-6.1 Sol", contextLength: 400_000, price: { input: 1, output: 8 }, reasoning: { efforts: ["low", "high"], defaultEffort: "low" } },
     ];
     expect(describeChatGptModels(models, openrouter)).toEqual([
-      { id: "chatgpt:gpt-6.1-sol", name: "GPT-6.1 Sol", contextLength: 400_000, price: null, reasoning: { efforts: ["low", "high"], defaultEffort: "low" } },
-      { id: "chatgpt:brand-new", name: "Brand New", contextLength: null, price: null, reasoning: null },
+      // The counterpart's API price is kept apart, only for the Usage page's comparison (issue #70).
+      { id: "chatgpt:gpt-6.1-sol", name: "GPT-6.1 Sol", contextLength: 400_000, price: null, apiPrice: { input: 1, output: 8 }, reasoning: { efforts: ["low", "high"], defaultEffort: "low" } },
+      { id: "chatgpt:brand-new", name: "Brand New", contextLength: null, price: null, apiPrice: null, reasoning: null },
     ]);
   });
 });
