@@ -8,7 +8,8 @@ export type VaultImportRow = typeof vaultImports.$inferSelect & { noteCount: num
 export type NoteRow = typeof notes.$inferSelect;
 export type NoteLinkRow = typeof noteLinks.$inferSelect;
 /** A chunk of a note matched by search, with what's needed to cite it. */
-export type NoteExcerpt = { noteId: string; importId: string; path: string; title: string; heading: string | null; seq: number; text: string };
+/** A matching chunk. `rank` is its FTS5 bm25 score for the query: negative, and lower is a better match. */
+export type NoteExcerpt = { chunkId: number; noteId: string; importId: string; path: string; title: string; heading: string | null; seq: number; text: string; rank: number };
 
 /** A note ready to store: its vault path, the hash of its text, and what parsing found. */
 export interface PreparedNote {
@@ -150,13 +151,20 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
     /** Chunks of every imported note matching an FTS5 query, best first. The query must already be safe: see ftsQuery. */
     searchNoteChunks(query: string, limit: number): NoteExcerpt[] {
       return db.all<NoteExcerpt>(sql`
-        select n.id as noteId, n.import_id as importId, n.path, n.title, c.heading, c.seq, c.text
+        select c.id as chunkId, n.id as noteId, n.import_id as importId, n.path, n.title, c.heading, c.seq, c.text, f.rank
         from note_chunks_fts f
         join note_chunks c on c.id = f.rowid
         join notes n on n.id = c.note_id
         where note_chunks_fts match ${query}
         order by f.rank
         limit ${limit}`);
+    },
+
+    /** Which of the chunks `chunkIds` match an FTS5 query. The query must already be safe: see ftsQuery. */
+    chunksMatching(query: string, chunkIds: number[]): Set<number> {
+      if (chunkIds.length === 0) return new Set();
+      const ids = sql.join(chunkIds.map((id) => sql`${id}`), sql`, `);
+      return new Set(db.all<{ id: number }>(sql`select rowid as id from note_chunks_fts where note_chunks_fts match ${query} and rowid in (${ids})`).map((r) => r.id));
     },
 
     /** How many notes every import holds together. */
