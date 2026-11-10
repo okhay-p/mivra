@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ArtifactPart } from "../src/artifacts/ArtifactPart.js";
@@ -101,6 +101,26 @@ describe("AlgorithmTrace", () => {
     expect(region.getAttribute("aria-label")).toBeNull();
     const [title] = region.getAttribute("aria-labelledby")!.split(" ");
     expect(document.getElementById(title!)!.querySelector(".katex")).toBeTruthy();
+  });
+
+  // Titles and explanations are artifact text: only formulas render, never Markdown, and currency stays as written.
+  it("keeps a title's and explanation's text literal, rendering only their formulas", () => {
+    renderTrace({
+      ...trace,
+      spec: {
+        ...trace.spec,
+        title: "Swap *demo* in $O(n^2)$",
+        steps: [{ explanation: "Multiply 2*3*4 and compare with $x_1 + \\frac{a}{b}$, for $5 or $10." }],
+      },
+    });
+    const region = screen.getByRole("region", { name: /Algorithm trace$/ });
+    const heading = within(region).getByRole("heading");
+    expect(heading.textContent).toContain("Swap *demo* in");
+    expect(heading.querySelectorAll(".katex")).toHaveLength(1);
+    expect(region.querySelector("em")).toBeNull();
+    expect(region.textContent).toContain("Multiply 2*3*4 and compare");
+    expect(region.textContent).toContain("for $5 or $10.");
+    expect(region.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(2);
   });
 
   it("scrolls a long title or explanation in its own box, which keeps its arrow keys", () => {
