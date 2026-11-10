@@ -1,0 +1,112 @@
+# Runs the full suites on every pull request and every push to main. The reviewer reads the code; this runs the tests,
+# and a PR merges only when it's green (see AGENTS.md). Nothing here needs a secret: the suites use scripted models and
+# fake providers, so pull requests from forks run it too.
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # One run per runner, so the cross-worktree queue in scripts/test-slot.mjs has nothing to wait for.
+  MIVRA_TEST_SLOTS: "0"
+
+jobs:
+  typecheck:
+    name: Typecheck and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  unit:
+    name: Unit (${{ matrix.package }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        package: ["@mivra/protocol", "@mivra/server", "@mivra/web", "@okhay-p/mivra"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter "${{ matrix.package }}" test
+
+  e2e:
+    name: E2E (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `pnpm test:e2e`, split across three runners.
+          - { name: "chromium 1/3", browsers: chromium, args: "--project=chromium --shard=1/3" }
+          - { name: "chromium 2/3", browsers: chromium, args: "--project=chromium --shard=2/3" }
+          - { name: "chromium 3/3", browsers: chromium, args: "--project=chromium --shard=3/3" }
+          # The rest of `pnpm test:e2e:all`: the graph spec in the other engines.
+          - { name: "firefox and webkit", browsers: "firefox webkit", args: "--project=firefox --project=webkit" }
+    env:
+      # The config's default (a third of the CPUs) is one worker on a 4-CPU runner.
+      MIVRA_E2E_WORKERS: "2"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install browsers
+        run: pnpm --filter @mivra/e2e exec playwright install --with-deps ${{ matrix.browsers }}
+      - name: Test
+        run: pnpm --filter @mivra/e2e exec playwright test ${{ matrix.args }}
+      - name: Upload traces
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-traces-${{ strategy.job-index }}
+          path: packages/e2e/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The one check branch protection requires, so the list of jobs above can change without touching the settings.
+  passed:
+    name: Tests passed
+    if: always()
+    needs: [typecheck, unit, e2e]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          for r in $RESULTS; do [ "$r" = success ] || exit 1; done

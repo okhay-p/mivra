@@ -1,6 +1,6 @@
 # Releasing Mivra
 
-`.github/workflows/release.yml` releases a version tag (ADR-013). It only builds and publishes; tests run in the review gate.
+`.github/workflows/release.yml` releases a version tag (ADR-013). It only builds and publishes; tests run on the pull request (`.github/workflows/test.yml`) before a change merges.
 
 1. Bump `version` in `packages/mivra/package.json` in a PR, through the review gate, and merge it.
 2. Tag the merge commit on `main` and push the tag: `git tag v<version> && git push origin v<version>`.

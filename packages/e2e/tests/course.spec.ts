@@ -87,13 +87,18 @@ test("a course starts from the first screen, runs the placement interview and wr
   await box.fill('Change "The idea": changelesson simpler please');
   await tutor.getByRole("button", { name: "Send" }).click();
   await expect(tutor.getByText("I simplified it.")).toBeVisible();
+  // The drawer slides shut slowly here, so the next Explain is pressed while it's still closing: the press
+  // must reopen it and send, not be taken as a click outside the closing drawer or skipped as a used prompt.
+  const slowClose = await page.addStyleTag({ content: '[data-slot="sheet-content"][data-state="closed"] { animation-duration: 3s !important; }' });
   await page.keyboard.press("Escape");
   await expect(lesson.getByRole("region", { name: "The idea", exact: true })).toContainText("Simpler: a limit is where f heads.");
   await expect(lesson.getByText("Version 3: Simpler")).toBeVisible();
 
   // Explain once more, so the last Explain was in this lesson when the learner moves on.
+  await expect(page.locator('[data-slot="sheet-content"][data-state="closed"]')).toBeAttached();
   await lesson.getByRole("button", { name: "Explain: The idea" }).click();
   await expect(tutor.getByText("Here is more on the idea.")).toHaveCount(2);
+  await slowClose.evaluate((style) => (style as Element).remove());
   await page.keyboard.press("Escape");
 
   // A wrong answer still finishes the lesson: scores never block moving on.
