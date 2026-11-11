@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { artifactMathInput, checkMathText } from "./artifact-math-input.js";
 import { AlgorithmTraceSpec } from "./algorithm-trace.js";
+import { CodeWalkthroughSpec } from "./code-walkthrough.js";
 import {
   InterviewContextAnswer,
   InterviewContextGrade,
@@ -19,6 +20,7 @@ import { WorkedStepsSpec } from "./worked-steps.js";
 export * from "./artifact-math-input.js";
 export * from "./math-text.js";
 export * from "./algorithm-trace.js";
+export * from "./code-walkthrough.js";
 export * from "./course.js";
 export * from "./lesson.js";
 export * from "./graph.js";
@@ -38,15 +40,23 @@ export const artifactKinds = {
     version: 1,
     toolName: "show_algorithm_trace",
     description:
-      "Show the learner an interactive step-by-step trace of an algorithm running over a sequence (e.g. sliding window, two pointers, binary search, a simple sort). The learner steps through it with play/pause/step controls. Use it when watching state change step by step will make the idea click. Keep traces short (roughly 5-20 steps) and make each step's explanation say what changed and why. A code pane is optional: add `code` and each step's `lines` only when the code itself is the point, such as how an implementation's lines move the state, and leave it out when the idea matters more than any code. Write that code in the programming language the learner has shown proficiency in according to <learner_memories>; if they show none, use Python or pseudocode. Keep the code short, and highlight the lines each step is running.",
+      "Show the learner an interactive step-by-step trace of an algorithm running over a sequence (e.g. sliding window, two pointers, binary search, a simple sort). The learner steps through it with play/pause/step controls. Use it when watching state change step by step will make the idea click. Keep traces short (roughly 5-20 steps) and make each step's explanation say what changed and why. A code pane is optional: add `code` and each step's `lines` only when the code itself is the point, such as how an implementation's lines move the state, and leave it out when the idea matters more than any code. Write that code in the programming language the learner has shown proficiency in according to <learner_memories>; if they show none, use Python or pseudocode. Keep the code short, and highlight the lines each step is running. For code that doesn't move over a sequence, such as a plain function or a React render, use show_code_walkthrough instead of inventing an array.",
     spec: AlgorithmTraceSpec,
     input: artifactMathInput(AlgorithmTraceSpec, ["title", "steps.*.explanation"]),
+  },
+  code_walkthrough: {
+    version: 1,
+    toolName: "show_code_walkthrough",
+    description:
+      "Show the learner a step-by-step walkthrough of a short piece of code that isn't about a sequence: a plain function's parameters, locals and return value, or a React component's renders, handlers and state updates. Each step highlights the source lines it is at and gives a complete snapshot of the visible state (`variables`) and the visible output (`output`, plain text such as printed lines or what the page shows, e.g. \"Count: 0\"); nothing carries over between steps, so repeat whatever still applies and use [] or \"\" for none. The source stays the same on every step. Use show_algorithm_trace instead for an algorithm moving over an array or other sequence, and show_graph for a component hierarchy. Keep the code short (a few to about 20 lines) and the walkthrough short (roughly 3-12 steps). Write the code in the language the concept belongs to (JSX for React); for a language-neutral idea, use the language the learner knows from <learner_memories>, else Python or pseudocode. The snapshots are your illustration, not a real run, so get them right. For React, keep the state a render or handler sees apart from updates it queues: inside a handler, state still has the value from the render it belongs to (name it, e.g. \"handler.count\" = 0, with \"queued update\" = \"count + 1\"), and the new value and its output appear only at the next render's step.",
+    spec: CodeWalkthroughSpec,
+    input: artifactMathInput(CodeWalkthroughSpec, ["title", "steps.*.explanation"]),
   },
   graph: {
     version: 1,
     toolName: "show_graph",
     description:
-      "Show the learner a graph or tree, drawn for you, optionally with steps they can walk through. Use it for graphs, trees, BFS, DFS, shortest paths, spanning trees and tree traversals, whenever seeing the structure or watching an algorithm move over it will help. Never give coordinates: the layout is automatic. For a binary search tree or binary tree traversal, set kind to tree and give every edge a side, so a lone left child and a lone right child are drawn differently. The automatic layout may draw crossing edges that mean nothing, even when the graph is planar, so don't use this to show whether a graph is planar. Keep it small enough to read (roughly 4-15 nodes, 5-20 steps) and make each step's explanation say what changed and why.",
+      "Show the learner a graph or tree, drawn for you, optionally with steps they can walk through. Use it for graphs, trees, BFS, DFS, shortest paths, spanning trees and tree traversals, whenever seeing the structure or watching an algorithm move over it will help. Never give coordinates: the layout is automatic. For a binary search tree or binary tree traversal, set kind to tree and give every edge a side, so a lone left child and a lone right child are drawn differently. The automatic layout may draw crossing edges that mean nothing, even when the graph is planar, so don't use this to show whether a graph is planar. Keep it small enough to read (roughly 4-15 nodes, 5-20 steps) and make each step's explanation say what changed and why. For a component hierarchy (such as React components), set kind to tree and directed to true, with one node per component instance (distinct ids for two instances of the same component, labelled with the short component name) and one edge from each parent to each child it renders, labelled with the props it passes (e.g. \"count\" or \"onClick\"). Use steps to highlight where state is owned and the nodes and edges its value flows through, with variables for simple state such as count = 1. The nodes and edges stay the same on every step: don't add callback edges back up the tree, and don't suggest that a component's output changes just because it re-renders.",
     spec: GraphSpec,
     input: artifactMathInput(GraphSpec, ["title", "nodes.*.label", "edges.*.label", "steps.*.explanation"], (spec, ctx) => {
       spec.nodes.forEach((node, i) => {
@@ -66,7 +76,7 @@ export const artifactKinds = {
     version: 1,
     toolName: "ask_multiple_choice",
     description:
-      "Ask the learner one multiple-choice question to check understanding of a concept you just taught. Exactly one option is correct. Write plausible wrong options that reflect real misconceptions, and give per-option feedback where useful. The learner answers in the UI; the result is reported back to you on the next turn, so do not reveal the answer in your reply.",
+      "Ask the learner one multiple-choice question to check understanding of a concept you just taught. Exactly one option is correct. Write plausible wrong options that reflect real misconceptions, and give per-option feedback where useful. The learner answers in the UI; the result is reported back to you on the next turn, so do not reveal the answer in your reply. For a code prediction, put the short snippet in a fenced code block in your reply text before this call and ask what it returns, prints or displays; the question and options render maths and plain text only, so never put code fences in them.",
     spec: MultipleChoiceSpec,
     input: artifactMathInput(MultipleChoiceSpec, ["question", "options.*.text", "options.*.feedback", "explanation"]),
   },
@@ -134,6 +144,9 @@ export type PlacementAttempt = z.infer<typeof PlacementAttempt>;
 export const ArtifactView = z.discriminatedUnion("kind", [
   z
     .object({ ...ArtifactBase, kind: z.literal("algorithm_trace"), version: z.literal(1), spec: AlgorithmTraceSpec })
+    .strict(),
+  z
+    .object({ ...ArtifactBase, kind: z.literal("code_walkthrough"), version: z.literal(1), spec: CodeWalkthroughSpec })
     .strict(),
   z.object({ ...ArtifactBase, kind: z.literal("graph"), version: z.literal(1), spec: GraphSpec }).strict(),
   z

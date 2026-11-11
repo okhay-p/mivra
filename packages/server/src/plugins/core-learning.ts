@@ -1,5 +1,6 @@
 import {
   AlgorithmTraceSpec,
+  CodeWalkthroughSpec,
   GraphSpec,
   MultipleChoiceAnswer,
   MultipleChoiceSpec,
@@ -34,6 +35,23 @@ export const coreLearning: Plugin = {
         kind: "algorithm_trace",
         version: 1,
         spec: AlgorithmTraceSpec.parse(spec),
+      }),
+    });
+
+    // Explanatory only: no check, so stepping through it records no attempt or evidence.
+    const walkthrough = artifactKinds.code_walkthrough;
+    api.registerArtifactKind({
+      kind: "code_walkthrough",
+      version: walkthrough.version,
+      toolName: walkthrough.toolName,
+      description: walkthrough.description,
+      spec: walkthrough.input,
+      toView: ({ id, createdAt, spec }) => ({
+        id,
+        createdAt: createdAt.toISOString(),
+        kind: "code_walkthrough",
+        version: 1,
+        spec: CodeWalkthroughSpec.parse(spec),
       }),
     });
 

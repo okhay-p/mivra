@@ -130,6 +130,33 @@ describe("lessons", () => {
     expect(done.lesson.canFinish).toBe(false);
   });
 
+  it("writes a code walkthrough section with show_code_walkthrough and tells the model how prediction checks work in a lesson", async () => {
+    const walkthrough = {
+      title: "Calling double(2)",
+      code: { language: "Python", source: "def double(n):\n    return n * 2" },
+      steps: [
+        { explanation: "n is 2.", lines: [1], variables: [{ name: "n", value: 2 }], output: "" },
+        { explanation: "It returns 4.", lines: [2], variables: [], output: "4" },
+      ],
+    };
+    const { app, course, topics, prompts } = await setup([
+      outline([{ title: "Walk", kind: "code_walkthrough" }, { title: "Check", kind: "multiple_choice" }]),
+      { toolCall: { name: "show_code_walkthrough", input: walkthrough } },
+      check,
+      { text: "" },
+    ]);
+    const { lesson } = (await (await start(app, course.id, topics[0]!.id)).json()) as LessonJson;
+    const done = await until(app, lesson.id, "ready");
+    expect(done.lesson.sections.map((s) => [s.title, s.kind])).toEqual([["Walk", "artifact"], ["Check", "artifact"]]);
+    expect(done.lesson.sections[0]!.artifact).toMatchObject({ kind: "code_walkthrough", version: 1, spec: walkthrough });
+    expect(prompts[1]).toContain("with show_code_walkthrough");
+    // Every section shows at once, so the prompt says a prediction's answer must not appear elsewhere in the lesson.
+    expect(prompts[0]).toContain("nothing waits for the learner's answer");
+    expect(prompts[0]).toContain("use a different example to illustrate");
+    // A walkthrough is no check: only the multiple-choice section counts.
+    expect(done.lesson.checks).toEqual({ total: 1, answered: 0 });
+  });
+
   it("is written just in time: the next topic waits until the earlier lesson is finished", async () => {
     const { app, course, topics } = await setup([...basic, ...basic]);
     expect((await start(app, course.id, topics[1]!.id)).status).toBe(409);
