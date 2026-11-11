@@ -30,7 +30,7 @@ export const artifactKinds = {
     version: 1,
     toolName: "show_algorithm_trace",
     description:
-      "Show the learner an interactive step-by-step trace of an algorithm running over a sequence (e.g. sliding window, two pointers, binary search, a simple sort). The learner steps through it with play/pause/step controls. Use it when watching state change step by step will make the idea click. Keep traces short (roughly 5-20 steps) and make each step's explanation say what changed and why.",
+      "Show the learner an interactive step-by-step trace of an algorithm running over a sequence (e.g. sliding window, two pointers, binary search, a simple sort). The learner steps through it with play/pause/step controls. Use it when watching state change step by step will make the idea click. Keep traces short (roughly 5-20 steps) and make each step's explanation say what changed and why. A code pane is optional: add `code` and each step's `lines` only when the code itself is the point, such as how an implementation's lines move the state, and leave it out when the idea matters more than any code. Write that code in the programming language the learner has shown proficiency in according to <learner_memories>; if they show none, use Python or pseudocode. Keep the code short, and highlight the lines each step is running.",
     spec: AlgorithmTraceSpec,
     input: artifactMathInput(AlgorithmTraceSpec, ["title", "steps.*.explanation"]),
   },

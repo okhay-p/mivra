@@ -173,4 +173,108 @@ describe("AlgorithmTrace", () => {
     expect(screen.getByText("Step 3 of 3")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Play" })).toBeTruthy();
   });
+
+  describe("code pane", () => {
+    const source = ["def find(a, x):", "    for i, v in enumerate(a):", "", "        if v == x: return i", "\treturn -1"].join("\n");
+    const withCode = {
+      ...trace,
+      spec: {
+        title: "Find",
+        values: [3, 1, 2],
+        code: { language: "Python", source },
+        steps: [
+          { explanation: "Start.", lines: [1] },
+          { explanation: "Loop and compare.", lines: [2, 4] },
+          { explanation: "No line here." },
+          { explanation: "Give up.", lines: [5] },
+        ],
+      },
+    } satisfies ComponentProps<typeof ArtifactPart>["data"];
+    const codeLines = () => screen.getAllByTestId("code-line");
+    const highlighted = () => codeLines().flatMap((line, i) => (line.getAttribute("aria-current") === "true" ? [i + 1] : []));
+    const counter = () => screen.getByText(/^Step \d+ of 4$/).textContent;
+
+    it("isn't there for a trace without code, so that trace is unchanged", () => {
+      renderTrace();
+      expect(screen.queryByTestId("code-pane")).toBeNull();
+      expect(screen.getAllByRole("region")).toHaveLength(1);
+    });
+
+    it("shows every line as literal text, numbered from 1, in a labelled region", () => {
+      renderTrace({ ...withCode, spec: { ...withCode.spec, code: { language: "HTML", source: '<b onclick="x()">hi</b>\n<script>alert(1)</script>' }, steps: [{ explanation: "x", lines: [2] }] } });
+      const pane = screen.getByRole("region", { name: "Code, HTML" });
+      expect(pane.querySelector("b, script")).toBeNull();
+      expect(codeLines().map((line) => line.textContent)).toEqual(['1<b onclick="x()">hi</b>', "2<script>alert(1)</script> (current line)"]);
+      expect(pane.querySelector("pre")).toBeTruthy();
+    });
+
+    it("keeps indentation, tabs and blank lines, numbering them like the schema", () => {
+      renderTrace(withCode);
+      expect(codeLines()).toHaveLength(5);
+      expect(codeLines()[1]!.textContent).toBe("2    for i, v in enumerate(a):");
+      expect(codeLines()[4]!.textContent).toBe("5\treturn -1");
+      // A blank line keeps its height.
+      expect(codeLines()[2]!.textContent).toBe("3 ");
+    });
+
+    it("highlights the current step's lines, in sync with prev, next and the arrow keys", () => {
+      renderTrace(withCode);
+      expect(highlighted()).toEqual([1]);
+      next();
+      expect(highlighted()).toEqual([2, 4]);
+      expect(codeLines()[1]!.textContent).toContain("(current line)");
+      expect(codeLines()[0]!.textContent).not.toContain("(current line)");
+      next();
+      // A step with no lines highlights nothing, and the code stays on show.
+      expect(highlighted()).toEqual([]);
+      expect(codeLines()).toHaveLength(5);
+      const card = screen.getByRole("region", { name: /Algorithm trace$/ });
+      fireEvent.keyDown(card, { key: "ArrowRight" });
+      expect(counter()).toBe("Step 4 of 4");
+      expect(highlighted()).toEqual([5]);
+      fireEvent.keyDown(card, { key: "ArrowLeft" });
+      fireEvent.keyDown(card, { key: "ArrowLeft" });
+      expect(highlighted()).toEqual([2, 4]);
+      prev();
+      expect(highlighted()).toEqual([1]);
+    });
+
+    it("follows Play", () => {
+      vi.useFakeTimers();
+      renderTrace(withCode);
+      fireEvent.click(screen.getByRole("button", { name: "Play" }));
+      act(() => void vi.advanceTimersByTime(1600));
+      expect(counter()).toBe("Step 2 of 4");
+      expect(highlighted()).toEqual([2, 4]);
+      for (let i = 0; i < 4; i++) act(() => void vi.advanceTimersByTime(2000));
+      expect(counter()).toBe("Step 4 of 4");
+      expect(highlighted()).toEqual([5]);
+      vi.useRealTimers();
+    });
+
+    it("announces the highlighted lines with the step", () => {
+      renderTrace(withCode);
+      const status = () => screen.getByTestId("trace-status").textContent;
+      expect(status()).toContain("Code line 1: def find(a, x):.");
+      next();
+      expect(status()).toContain("Code line 2: for i, v in enumerate(a):. Code line 4: if v == x: return i.");
+      next();
+      expect(status()).not.toContain("Code line");
+    });
+
+    it("refuses a view whose lines fall outside the code, or that has lines but no code", () => {
+      const { unmount } = renderTrace({ ...withCode, spec: { ...withCode.spec, steps: [{ explanation: "x", lines: [2, 9] }] } });
+      expect(screen.getByText("Can't display this item.")).toBeTruthy();
+      unmount();
+      renderTrace({ ...trace, spec: { ...trace.spec, steps: [{ explanation: "x", lines: [1] }] } });
+      expect(screen.getByText("Can't display this item.")).toBeTruthy();
+    });
+
+    it("marks the current line with neutral tokens, not amber", () => {
+      renderTrace(withCode);
+      const line = codeLines()[0]!;
+      expect(line.className).toContain("border-foreground");
+      expect(line.className).not.toMatch(/accent|primary|amber/);
+    });
+  });
 });

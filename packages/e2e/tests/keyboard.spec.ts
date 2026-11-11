@@ -22,7 +22,7 @@ async function boxesMeasured(card: Locator, listed: string[] = [], formulas: str
   await expect
     .poll(() =>
       card.evaluate((root) => {
-        const boxes = [...root.querySelectorAll<HTMLElement>('[data-testid="step-scroll"], [data-testid="graph-scroll"], [data-testid="table-scroll"]')];
+        const boxes = [...root.querySelectorAll<HTMLElement>('[data-testid="step-scroll"], [data-testid="graph-scroll"], [data-testid="table-scroll"], [data-testid="code-scroll"]')];
         const overflowing = boxes.filter((box) => box.scrollWidth > box.clientWidth);
         return overflowing.length > 0 && boxes.every((box) => (box.getAttribute("tabindex") === "0") === overflowing.includes(box));
       }),
@@ -62,6 +62,7 @@ test.describe("keyboard stops at 320px", () => {
     ["tabset", "Tab through the diagram.", /Set diagram/],
     ["tabgraph", "Tab through the graph.", /graph$/i],
     ["tabtrace", "Tab through the trace.", /Algorithm trace/],
+    ["tabcodetrace", "Tab through the code.", /Code that scrolls/],
     ["tabtable", "Tab through the table.", /Long cells/],
   ] as const) {
     test(`${script}: Tab never lands in something hidden, and every box is named and scrolls instead of stepping`, async ({ page }) => {
@@ -84,7 +85,7 @@ test.describe("keyboard stops at 320px", () => {
           return [...root.querySelectorAll('[data-testid="set-key"] > *, [data-testid="set-variables"] > *')].every((item) => item.getBoundingClientRect().right <= right);
         });
         expect(inCard).toBe(true);
-      } else if (script === "tabgraph" || script === "tabtrace") {
+      } else if (script === "tabgraph" || script === "tabtrace" || script === "tabcodetrace") {
         const inCard = await card.evaluate((root) => {
           const { right } = root.getBoundingClientRect();
           return [...root.querySelectorAll("dl > *")].every((chip) => chip.getBoundingClientRect().right <= right);
@@ -97,6 +98,7 @@ test.describe("keyboard stops at 320px", () => {
 
       const boxes = stops.flatMap((stop, at) => (stop.button ? [] : [{ ...stop, at }]));
       expect(boxes.length).toBeGreaterThan(0);
+      if (script === "tabcodetrace") expect(boxes.map((box) => box.name)).toContain("Code, Python, scrolls sideways");
       for (const { at, name, scrolls } of boxes) {
         expect(name).toBeTruthy();
         expect(scrolls).toBe(true);
