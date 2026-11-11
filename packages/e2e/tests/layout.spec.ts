@@ -79,6 +79,20 @@ test.describe("a long session with several kinds of artifact", () => {
   });
 });
 
+test("many step pips fit a 320px footer", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New session" }).first().click();
+  await send(page, `longtrace ${Date.now()}`, "Step through all of it.");
+  await page.setViewportSize({ width: 320, height: 800 });
+  const card = page.getByRole("region", { name: /Many steps/ });
+  await expect(card.getByTestId("step-pips").locator("i")).toHaveCount(24);
+  await expect(card.getByTestId("step-counter")).toHaveText("Step 1 of 24");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+  // The footer stays inside the card, counter included.
+  const [cardBox, counterBox] = [await card.boundingBox(), await card.getByTestId("step-counter").boundingBox()];
+  expect(counterBox!.x + counterBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width);
+});
+
 test.describe("long formulas in a graph and a set diagram", () => {
   for (const { script, region, reply, explanation } of [
     { script: "widegraph", region: /graph$/i, reply: "Scroll the long graph.", explanation: "graph-explanation" },

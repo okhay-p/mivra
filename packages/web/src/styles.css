@@ -4,65 +4,75 @@
 @custom-variant dark (&:is(.dark *));
 
 /* Paper & Amber (ADR-008). Amber is for the brand only: grading uses --success and --destructive. */
+/*
+ * Paper & Amber (ADR-008). Amber is for the brand only: grading uses --success and --destructive.
+ * Surfaces follow the landing page's paper (#93): paper background, a sunken inset (--sunken), a near-white card and warm rules.
+ */
 :root {
   color-scheme: light;
   --radius: 0.75rem;
-  --background: oklch(0.99 0.004 85);
+  --background: oklch(0.972 0.009 85);
   --foreground: oklch(0.22 0.01 60);
-  --card: oklch(1 0 0);
+  --card: oklch(0.992 0.004 85);
   --card-foreground: oklch(0.22 0.01 60);
-  --popover: oklch(1 0 0);
+  --popover: oklch(0.992 0.004 85);
   --popover-foreground: oklch(0.22 0.01 60);
   --primary: oklch(0.55 0.15 50);
   --primary-foreground: oklch(0.99 0.01 80);
-  --secondary: oklch(0.965 0.007 80);
+  --secondary: oklch(0.955 0.009 80);
   --secondary-foreground: oklch(0.27 0.01 60);
-  --muted: oklch(0.965 0.007 80);
-  --muted-foreground: oklch(0.5 0.015 60);
+  --muted: oklch(0.95 0.012 82);
+  --muted-foreground: oklch(0.48 0.014 62);
   --accent: oklch(0.95 0.04 70);
   --accent-foreground: oklch(0.42 0.12 50);
   --destructive: oklch(0.56 0.2 27);
   --success: oklch(0.5 0.13 150);
-  --border: oklch(0.915 0.01 75);
-  --input: oklch(0.86 0.012 75);
+  --sunken: oklch(0.95 0.012 82);
+  --border: oklch(0.9 0.012 78);
+  --border-strong: oklch(0.82 0.015 75);
+  --input: oklch(0.82 0.015 75);
   --ring: oklch(0.62 0.16 52);
-  --sidebar: oklch(0.975 0.007 82);
+  --paper-shadow: 0 1px 2px oklch(0.3 0.04 60 / 0.06), 0 6px 18px -8px oklch(0.3 0.04 60 / 0.14);
+  --sidebar: oklch(0.955 0.011 83);
   --sidebar-foreground: oklch(0.22 0.01 60);
   --sidebar-primary: oklch(0.55 0.15 50);
   --sidebar-primary-foreground: oklch(0.99 0.01 80);
-  --sidebar-accent: oklch(0.935 0.012 78);
+  --sidebar-accent: oklch(0.92 0.014 80);
   --sidebar-accent-foreground: oklch(0.22 0.01 60);
-  --sidebar-border: oklch(0.915 0.01 75);
+  --sidebar-border: oklch(0.9 0.012 78);
   --sidebar-ring: oklch(0.62 0.16 52);
 }
 
 .dark {
   color-scheme: dark;
-  --background: oklch(0.18 0.008 60);
-  --foreground: oklch(0.96 0.008 80);
-  --card: oklch(0.22 0.01 60);
-  --card-foreground: oklch(0.96 0.008 80);
-  --popover: oklch(0.22 0.01 60);
-  --popover-foreground: oklch(0.96 0.008 80);
+  --background: oklch(0.165 0.008 60);
+  --foreground: oklch(0.955 0.008 80);
+  --card: oklch(0.205 0.009 60);
+  --card-foreground: oklch(0.955 0.008 80);
+  --popover: oklch(0.205 0.009 60);
+  --popover-foreground: oklch(0.955 0.008 80);
   --primary: oklch(0.75 0.15 62);
   --primary-foreground: oklch(0.22 0.05 55);
   --secondary: oklch(0.27 0.01 60);
-  --secondary-foreground: oklch(0.96 0.008 80);
-  --muted: oklch(0.27 0.01 60);
-  --muted-foreground: oklch(0.71 0.015 70);
+  --secondary-foreground: oklch(0.955 0.008 80);
+  --muted: oklch(0.255 0.01 60);
+  --muted-foreground: oklch(0.71 0.013 72);
   --accent: oklch(0.32 0.07 58);
   --accent-foreground: oklch(0.86 0.1 70);
   --destructive: oklch(0.7 0.18 25);
   --success: oklch(0.72 0.14 150);
+  --sunken: oklch(0.14 0.008 60);
   --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  --border-strong: oklch(1 0 0 / 19%);
+  --input: oklch(1 0 0 / 17%);
   --ring: oklch(0.75 0.15 62);
-  --sidebar: oklch(0.2 0.009 60);
-  --sidebar-foreground: oklch(0.96 0.008 80);
+  --paper-shadow: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 20px -10px oklch(0 0 0 / 0.5);
+  --sidebar: oklch(0.145 0.008 60);
+  --sidebar-foreground: oklch(0.955 0.008 80);
   --sidebar-primary: oklch(0.75 0.15 62);
   --sidebar-primary-foreground: oklch(0.22 0.05 55);
-  --sidebar-accent: oklch(0.27 0.01 60);
-  --sidebar-accent-foreground: oklch(0.96 0.008 80);
+  --sidebar-accent: oklch(0.24 0.01 60);
+  --sidebar-accent-foreground: oklch(0.955 0.008 80);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.75 0.15 62);
 }
@@ -92,6 +102,9 @@
   --color-destructive: var(--destructive);
   --color-success: var(--success);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-sunken: var(--sunken);
+  --shadow-paper: var(--paper-shadow);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-sidebar: var(--sidebar);

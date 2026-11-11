@@ -956,7 +956,7 @@ function Chat({
     <div className="flex min-h-0 flex-1 flex-col">
       <Conversation aria-busy={busy} instance={conversation} initial="instant" resize="instant" className="min-h-0 min-w-0">
         {/* Positioned, so sr-only artifact text cannot stretch or scroll the outer interface. */}
-        <ConversationContent className="relative mx-auto max-w-3xl gap-4 p-4"
+        <ConversationContent className="relative mx-auto max-w-3xl gap-5 px-4 py-6 leading-relaxed"
           scrollClassName="overflow-y-auto overscroll-contain [scrollbar-gutter:auto]!"
           onPointerDownCapture={(e) => {
             if ((e.target as HTMLElement).closest("button, input, [role=button]")) conversation.stopScroll();
@@ -977,8 +977,8 @@ function Chat({
               data-message-id={m.id}
               data-message-role={m.role}
               className={cn(
-                "flex min-w-0 flex-col gap-2",
-                m.role === "user" && "bg-primary text-primary-foreground max-w-[80%] self-end rounded-lg rounded-br-sm px-3 py-2 whitespace-pre-wrap wrap-anywhere",
+                "flex min-w-0 flex-col gap-3",
+                m.role === "user" && "bg-sunken text-foreground max-w-[min(80%,34rem)] self-end rounded-2xl rounded-br-sm px-4 py-2.5 leading-relaxed whitespace-pre-wrap wrap-anywhere",
               )}
             >
               {m.role === "user" && <DocumentChips documents={documents} messageId={m.id} />}
@@ -1106,10 +1106,10 @@ function Composer({
   disabled?: boolean;
 }) {
   return (
-    <form onSubmit={onSubmit} className="border-t">
+    <form onSubmit={onSubmit} className="bg-background border-t">
       <DocumentChips documents={documents} />
       <div className="mx-auto w-full max-w-3xl p-3">
-        <InputGroup className="h-auto min-h-11" aria-label="Message composer">
+        <InputGroup className="bg-card dark:bg-card border-border-strong shadow-paper h-auto min-h-11 rounded-xl" aria-label="Message composer">
           <InputGroupAddon align="inline-start">
             <AttachButton documents={documents} />
           </InputGroupAddon>

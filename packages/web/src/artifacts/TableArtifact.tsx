@@ -1,9 +1,9 @@
 import type { TableSpec, TableStep } from "@mivra/protocol";
 import { useId, type KeyboardEvent } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
+import { ArtifactBody, ArtifactCard, ArtifactHeader, ArtifactTitle } from "./artifact-card.js";
 import { ScrollableText, STEP_TONES, StepperControls, useStepper, type StepTone } from "./stepper.js";
 
 type Highlight = NonNullable<TableStep["highlight"]>[number];
@@ -48,26 +48,15 @@ export function TableArtifact({ view }: ArtifactProps<"table">) {
   const kindId = useId();
 
   return (
-    <Card
+    <ArtifactCard
       role="region"
       aria-labelledby={`${titleId} ${kindId}`}
-      className="whitespace-normal"
       {...(stepped ? { tabIndex: 0, onKeyDown: stepper.onKeyDown } : {})}
     >
-      <CardHeader>
-        <CardTitle className="min-w-0 font-heading text-base">
-          <h3>
-            <ScrollableText>
-              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
-              <span id={titleId}>
-                <MathText text={spec.title} mode="math" />
-              </span>
-            </ScrollableText>
-          </h3>
-        </CardTitle>
-        <CardDescription id={kindId}>Table</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <ArtifactHeader kind={"Table"} kindId={kindId}>
+        <ArtifactTitle id={titleId} text={spec.title} />
+      </ArtifactHeader>
+      <ArtifactBody>
         {/* Focusable so a keyboard can scroll a wide table; its arrow keys scroll rather than step. */}
         <div
           className="overflow-x-auto"
@@ -139,8 +128,8 @@ export function TableArtifact({ view }: ArtifactProps<"table">) {
             </span>
           </div>
         )}
-        <StepperControls stepper={stepper} play />
-      </CardContent>
-    </Card>
+      </ArtifactBody>
+      <StepperControls stepper={stepper} play />
+    </ArtifactCard>
   );
 }

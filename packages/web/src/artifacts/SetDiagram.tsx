@@ -1,9 +1,9 @@
 import type { SetDiagramHighlight, SetDiagramSpec } from "@mivra/protocol";
 import { Fragment, useId, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { flushSync } from "react-dom";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
+import { ArtifactBody, ArtifactCard, ArtifactHeader, ArtifactTitle } from "./artifact-card.js";
 import { FRAME_INSET, ROW_HEIGHT, VENN_LAYOUTS, chooseRegionFit, regionMasks, regionPath, slotBox, type RegionFit, type RegionSlot, type Size, type VennLayout } from "./set-diagram-geometry.js";
 import { ScrollableText, SeenOnly, StepperControls, useStepper } from "./stepper.js";
 
@@ -293,21 +293,11 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
   const overflowing = masks.filter((mask) => (fits.get(mask) ?? "contents") !== "contents");
 
   return (
-    <Card role="region" aria-labelledby={`${titleId} ${kindId}`} {...(stepCount > 0 ? { tabIndex: 0, onKeyDown: stepper.onKeyDown } : {})} className="whitespace-normal">
-      <CardHeader>
-        <CardTitle className="min-w-0 font-heading text-base">
-          <h3>
-            <ScrollableText>
-              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
-              <span id={titleId}>
-                <MathText text={spec.title} mode="math" />
-              </span>
-            </ScrollableText>
-          </h3>
-        </CardTitle>
-        <CardDescription id={kindId}>Set diagram</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+    <ArtifactCard role="region" aria-labelledby={`${titleId} ${kindId}`} {...(stepCount > 0 ? { tabIndex: 0, onKeyDown: stepper.onKeyDown } : {})}>
+      <ArtifactHeader kind={"Set diagram"} kindId={kindId}>
+        <ArtifactTitle id={titleId} text={spec.title} />
+      </ArtifactHeader>
+      <ArtifactBody>
         {/* The drawing relates elements to sets only by position, so screen readers get this instead. */}
         <ul className="sr-only" data-testid="set-description">
           {spec.sets.map((set) => (
@@ -375,7 +365,7 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
         {state.variables.length > 0 && (
           <div className="flex flex-wrap gap-2" data-testid="set-variables">
             {state.variables.map((v, i) => (
-              <div key={i} className="bg-muted max-w-full min-w-0 rounded-sm px-2 py-0.5 font-mono text-xs">
+              <div key={i} className="border-border-strong bg-card max-w-full min-w-0 rounded-md border px-2 py-0.5 font-mono text-xs">
                 <SeenOnly>
                   <Inline text={v.name} /> = <Inline text={String(v.value)} />
                 </SeenOnly>
@@ -409,10 +399,10 @@ export function SetDiagram({ view }: ArtifactProps<"set_diagram">) {
                 ))}
               </span>
             </div>
-            <StepperControls stepper={stepper} play />
           </>
         )}
-      </CardContent>
-    </Card>
+      </ArtifactBody>
+      {stepCount > 0 && <StepperControls stepper={stepper} play />}
+    </ArtifactCard>
   );
 }
