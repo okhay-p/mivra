@@ -433,6 +433,33 @@ const tabTrace = {
   values: [longValue, longValue, longValue],
   steps: [{ explanation: "Look at this one.", variables: [{ name: "x", value: longValue.repeat(3) }] }, { explanation: "Then stop." }],
 };
+// A trace with its code (issue #95): one line is too long for a 320px card, so the pane scrolls on its own.
+const binarySearchCode = [
+  "def binary_search(a, target):",
+  "    lo, hi = 0, len(a) - 1",
+  "    while lo <= hi:",
+  "        mid = (lo + hi) // 2  # the middle of what's left; everything on the wrong side is ruled out",
+  "        if a[mid] == target:",
+  "            return mid",
+  "        elif a[mid] < target:",
+  "            lo = mid + 1",
+  "        else:",
+  "            hi = mid - 1",
+  "    return -1",
+].join("\n");
+const codeTrace = {
+  title: "Binary search for 46",
+  values: [4, 9, 15, 21, 27, 33, 40, 46, 52],
+  code: { language: "Python", source: binarySearchCode },
+  steps: [
+    { explanation: "Every position is still in play.", lines: [2], pointers: [{ name: "lo", index: 0 }, { name: "hi", index: 8 }], variables: [{ name: "lo", value: 0 }, { name: "hi", value: 8 }] },
+    { explanation: "Look at the middle: a[4] is 27.", lines: [4], pointers: [{ name: "lo", index: 0 }, { name: "mid", index: 4 }, { name: "hi", index: 8 }], variables: [{ name: "mid", value: 4 }] },
+    { explanation: "27 is less than 46, so move lo past the middle.", lines: [7, 8], ranges: [{ start: 0, end: 4, tone: "muted" }], pointers: [{ name: "lo", index: 5 }, { name: "hi", index: 8 }] },
+    { explanation: "Nothing new in the code here: the loop goes round again." },
+    { explanation: "a[7] is 46: found it.", lines: [5, 6], ranges: [{ start: 7, end: 7, tone: "done" }], pointers: [{ name: "mid", index: 7 }] },
+  ],
+};
+const tabCodeTrace = { ...codeTrace, title: "Code that scrolls", steps: [codeTrace.steps[1]!, codeTrace.steps[2]!] };
 const tabTable = {
   title: "Long cells",
   columns: [unbroken("W")],
@@ -458,6 +485,8 @@ const SCRIPTS: Record<string, Step[]> = {
   tabset: [{ tool: "show_set_diagram", input: tabSet }, { text: "Tab through the diagram." }],
   tabgraph: [{ tool: "show_graph", input: tabGraph }, { text: "Tab through the graph." }],
   tabtrace: [{ tool: "show_algorithm_trace", input: tabTrace }, { text: "Tab through the trace." }],
+  tabcodetrace: [{ tool: "show_algorithm_trace", input: tabCodeTrace }, { text: "Tab through the code." }],
+  codetrace: [{ tool: "show_algorithm_trace", input: codeTrace }, { text: "Follow the code." }],
   tabtable: [{ tool: "show_table", input: tabTable }, { text: "Tab through the table." }],
   widegraph: [{ tool: "show_graph", input: graphWide }, { text: "Scroll the long graph." }],
   wideset: [{ tool: "show_set_diagram", input: vennWide }, { text: "Scroll the long diagram." }],

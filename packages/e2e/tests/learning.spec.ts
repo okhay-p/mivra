@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "../fixtures.js";
+import { expect, test, type Locator, type Page } from "../fixtures.js";
 
 async function startSession(page: Page) {
   await page.goto("/");
@@ -548,6 +548,103 @@ test.describe("learning flow", () => {
         expect(look.shadow).toContain(look.foreground);
       }
     }
+  });
+
+  test.describe("a trace with code", () => {
+    const pane = (page: Page) => trace(page).getByRole("region", { name: /^Code, Python/ });
+    const highlighted = (page: Page) =>
+      expect.poll(() => pane(page).getByTestId("code-line").evaluateAll((all) => all.flatMap((line, i) => (line.getAttribute("aria-current") === "true" ? [i + 1] : []))));
+    const counter = (page: Page) => trace(page).getByTestId("step-counter");
+    const box = (locator: Locator) => locator.evaluate((e) => e.getBoundingClientRect().toJSON() as DOMRect);
+
+    test("highlights each step's lines by button, Play and keyboard, beside the values on a wide screen", async ({ page }) => {
+      await startSession(page);
+      await send(page, `codetrace ${Date.now()}`);
+      await expect(page.getByText("Follow the code.")).toBeVisible();
+      await expect(pane(page).getByTestId("code-line")).toHaveCount(11);
+      await expect(pane(page).getByTestId("code-line").first()).toHaveText("1def binary_search(a, target):");
+      await highlighted(page).toEqual([2]);
+
+      // Beside the values: the pane on the left, the cells to its right, starting at the same height.
+      const [code, cell] = [await box(trace(page).getByTestId("code-pane")), await box(cells(page).first())];
+      expect(code.right).toBeLessThan(cell.left);
+      expect(cell.top).toBeLessThan(code.bottom);
+
+      await trace(page).getByRole("button", { name: "Next" }).click();
+      await highlighted(page).toEqual([4]);
+      await expect(trace(page).getByTestId("trace-status")).toContainText("Code line 4: mid = (lo + hi) // 2");
+
+      await trace(page).focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(counter(page)).toHaveText("Step 3 of 5");
+      await highlighted(page).toEqual([7, 8]);
+      await page.keyboard.press("ArrowRight");
+      // A step without lines keeps the code on show with nothing highlighted.
+      await highlighted(page).toEqual([]);
+      await expect(pane(page).getByTestId("code-line")).toHaveCount(11);
+      await page.keyboard.press("ArrowLeft");
+      await highlighted(page).toEqual([7, 8]);
+
+      await trace(page).getByRole("button", { name: "Prev" }).click();
+      await trace(page).getByRole("button", { name: "Prev" }).click();
+      await highlighted(page).toEqual([2]);
+      await trace(page).getByRole("button", { name: "Play" }).click();
+      await expect(counter(page)).toHaveText("Step 2 of 5");
+      await highlighted(page).toEqual([4]);
+      await expect(counter(page)).toHaveText("Step 5 of 5", { timeout: 10_000 });
+      await highlighted(page).toEqual([5, 6]);
+      await expect(trace(page).getByRole("button", { name: "Play" })).toBeVisible();
+    });
+
+    test("stacks above the values at 320px, with long lines scrolling inside the pane", async ({ page }) => {
+      await startSession(page);
+      await send(page, `codetrace ${Date.now()}`);
+      await expect(page.getByText("Follow the code.")).toBeVisible();
+      await page.setViewportSize({ width: 320, height: 800 });
+
+      const scroller = trace(page).getByTestId("code-scroll");
+      await expect(scroller).toHaveAttribute("tabindex", "0");
+      await expect(scroller).toHaveAccessibleName("Code, Python, scrolls sideways");
+      const [code, cell, card] = [await box(trace(page).getByTestId("code-pane")), await box(cells(page).first()), await box(trace(page))];
+      expect(code.bottom).toBeLessThanOrEqual(cell.top);
+      expect(code.right).toBeLessThanOrEqual(card.right);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+
+      // The pane's arrow keys scroll it; the card's still step.
+      await scroller.focus();
+      await page.keyboard.press("ArrowRight");
+      await expect.poll(() => scroller.evaluate((e) => e.scrollLeft)).toBeGreaterThan(0);
+      await expect(counter(page)).toHaveText("Step 1 of 5");
+      await trace(page).focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(counter(page)).toHaveText("Step 2 of 5");
+      await highlighted(page).toEqual([4]);
+    });
+
+    test("marks the current line with neutral tokens, not amber, in both themes", async ({ page }) => {
+      await startSession(page);
+      await send(page, `codetrace ${Date.now()}`);
+      await expect(page.getByText("Follow the code.")).toBeVisible();
+      const line = pane(page).locator('[aria-current="true"]');
+      for (const dark of [false, true]) {
+        await page.evaluate((on) => document.documentElement.classList.toggle("dark", on), dark);
+        const look = await line.evaluate((e) => {
+          const probe = document.createElement("div");
+          document.body.append(probe);
+          const resolve = (token: string) => {
+            probe.style.color = `var(--${token})`;
+            return getComputedStyle(probe).color;
+          };
+          const tokens = { foreground: resolve("foreground"), primary: resolve("primary"), accent: resolve("accent") };
+          probe.remove();
+          const style = getComputedStyle(e);
+          return { ...tokens, background: style.backgroundColor, border: style.borderLeftColor };
+        });
+        expect(look.background).not.toBe(look.accent);
+        expect(look.background).not.toBe(look.primary);
+        expect(look.border).toBe(look.foreground);
+      }
+    });
   });
 
   test("shows a safe error when the model fails, and the session still works", async ({ page }) => {

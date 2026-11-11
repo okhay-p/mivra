@@ -3,6 +3,10 @@ import { z } from "zod";
 import {
   AlgorithmTraceSpec,
   ArtifactView,
+  MAX_CODE_CHARS,
+  MAX_CODE_LINES,
+  MAX_CODE_LINE_LENGTH,
+  codeLines,
   GraphSpec,
   MultipleChoiceSpec,
   SetDiagramSpec,
@@ -137,6 +141,87 @@ describe("algorithm_trace", () => {
 
   it("rejects unknown fields", () => {
     expect(AlgorithmTraceSpec.safeParse({ ...slidingWindow, html: "<script>" }).success).toBe(false);
+  });
+});
+
+describe("algorithm_trace code pane", () => {
+  const source = ["def search(a, target):", "    lo, hi = 0, len(a) - 1", "    while lo <= hi:", "        return lo"].join("\n");
+  const withCode = {
+    title: "Binary search",
+    values: [1, 3, 5],
+    code: { language: "Python", source },
+    steps: [{ explanation: "Start.", lines: [2] }, { explanation: "Loop.", lines: [3, 4] }, { explanation: "No line." }],
+  };
+  const issuePaths = (spec: unknown) => AlgorithmTraceSpec.safeParse(spec).error?.issues.map((i) => i.path) ?? [];
+
+  it("accepts code with step lines, and stays optional for traces without it", () => {
+    expect(AlgorithmTraceSpec.parse(withCode)).toEqual(withCode);
+    expect(AlgorithmTraceSpec.safeParse(slidingWindow).success).toBe(true);
+    // A stored trace from before code existed is still a valid view.
+    const view = { id: "a1", createdAt: "2026-11-01T00:00:00.000Z", kind: "algorithm_trace", version: 1, spec: slidingWindow };
+    expect(ArtifactView.safeParse(view).success).toBe(true);
+    expect(ArtifactView.safeParse({ ...view, spec: withCode }).success).toBe(true);
+  });
+
+  it("allows an empty line list, which highlights nothing", () => {
+    expect(AlgorithmTraceSpec.safeParse({ ...withCode, steps: [{ explanation: "x", lines: [] }] }).success).toBe(true);
+  });
+
+  it("rejects a step line outside the source, or below 1", () => {
+    const past = structuredClone(withCode);
+    past.steps[1]!.lines = [3, 5];
+    expect(issuePaths(past)).toEqual([["steps", 1, "lines", 1]]);
+    const zero = structuredClone(withCode);
+    zero.steps[0]!.lines = [0];
+    expect(AlgorithmTraceSpec.safeParse(zero).success).toBe(false);
+    expect(AlgorithmTraceSpec.safeParse({ ...withCode, steps: [{ explanation: "x", lines: [1.5] }] }).success).toBe(false);
+  });
+
+  it("rejects step lines when the trace has no code, even an empty list", () => {
+    const { code: _code, ...noCode } = withCode;
+    expect(issuePaths(noCode)).toEqual([["steps", 0, "lines"], ["steps", 1, "lines"]]);
+    expect(issuePaths({ ...slidingWindow, steps: [{ explanation: "x", lines: [] }] })).toEqual([["steps", 0, "lines"]]);
+  });
+
+  it("counts lines the way the pane numbers them: CRLF is one break and a trailing newline adds no line", () => {
+    expect(codeLines("a\r\nb\rc\n")).toEqual(["a", "b", "c"]);
+    expect(codeLines("a\n\n")).toEqual(["a", ""]);
+    const crlf = { ...withCode, code: { language: "Python", source: "a\r\nb\n" }, steps: [{ explanation: "x", lines: [2] }] };
+    expect(AlgorithmTraceSpec.safeParse(crlf).success).toBe(true);
+    expect(AlgorithmTraceSpec.safeParse({ ...crlf, steps: [{ explanation: "x", lines: [3] }] }).success).toBe(false);
+  });
+
+  it("bounds the source's size, line count and line length, and requires some code and a language", () => {
+    const code = (src: string, language = "Python") => ({ ...withCode, code: { language, source: src }, steps: [{ explanation: "x" }] });
+    const ok = (src: string) => AlgorithmTraceSpec.safeParse(code(src)).success;
+    expect(ok(Array.from({ length: MAX_CODE_LINES }, () => "x").join("\n"))).toBe(true);
+    expect(ok(Array.from({ length: MAX_CODE_LINES + 1 }, () => "x").join("\n"))).toBe(false);
+    expect(ok("x".repeat(MAX_CODE_LINE_LENGTH))).toBe(true);
+    expect(ok(`ok\n${"x".repeat(MAX_CODE_LINE_LENGTH + 1)}`)).toBe(false);
+    expect(ok(Array.from({ length: 34 }, () => "x".repeat(MAX_CODE_LINE_LENGTH)).join("\n"))).toBe(false); // over MAX_CODE_CHARS
+    expect(34 * (MAX_CODE_LINE_LENGTH + 1)).toBeGreaterThan(MAX_CODE_CHARS);
+    expect(ok("")).toBe(false);
+    expect(ok("  \n\t\n")).toBe(false);
+    expect(AlgorithmTraceSpec.safeParse(code("x", "  ")).success).toBe(false);
+    expect(AlgorithmTraceSpec.safeParse({ ...withCode, code: { ...withCode.code, html: "<b>" } }).success).toBe(false);
+    expect(AlgorithmTraceSpec.safeParse({ ...withCode, code: {} }).success).toBe(false);
+  });
+
+  it("keeps code text literal for the model: backslashes in code are not rejected as maths", () => {
+    const spec = { ...withCode, code: { language: "C", source: 'printf("\\n");\nputs("C:\\Users");' }, steps: [{ explanation: "x", lines: [2] }] };
+    expect(artifactKinds.algorithm_trace.input.safeParse(spec).success).toBe(true);
+  });
+
+  it("tells the tutor the pane is optional and which language to write it in", () => {
+    const { description } = artifactKinds.algorithm_trace;
+    expect(description).toMatch(/optional/);
+    expect(description).toMatch(/<learner_memories>/);
+    expect(description).toMatch(/Python or pseudocode/);
+    type Node = { properties?: Record<string, Node>; items?: Node; description?: string; required?: string[] };
+    const schema = z.toJSONSchema(artifactKinds.algorithm_trace.input) as Node;
+    expect(schema.required).not.toContain("code");
+    expect(schema.properties!.code!.required).toEqual(["language", "source"]);
+    expect(schema.properties!.steps!.items!.properties!.lines!.description).toMatch(/1-based/);
   });
 });
 
