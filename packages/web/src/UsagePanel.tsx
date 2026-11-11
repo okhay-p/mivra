@@ -10,6 +10,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { clearUsage, getUsage, setUsagePrice, type ModelPriceInput, type UsageTotals, type UsageView } from "./api.js";
 import { ManageUsageLink } from "./ChatGpt.js";
+import { EYEBROW, PAPER_SHEET, PAPER_SHEET_HEADER, PAPER_SHEET_TITLE, SEGMENTED, segment } from "./paper.js";
 
 /*
  * The Usage page (issue #70): tokens first, then money kept in separate buckets that are never added together:
@@ -50,15 +51,15 @@ export function UsagePanel({ open, onOpenChange }: { open: boolean; onOpenChange
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        className="w-full overflow-y-auto sm:max-w-2xl"
+        className={cn("w-full overflow-y-auto sm:max-w-2xl", PAPER_SHEET)}
         onCloseAutoFocus={(e) => {
           e.preventDefault();
           const target = document.querySelector<HTMLElement>("[data-usage-trigger]") ?? document.querySelector<HTMLElement>('[data-sidebar="trigger"]');
           target?.focus();
         }}
       >
-        <SheetHeader>
-          <SheetTitle className="font-heading">Usage</SheetTitle>
+        <SheetHeader className={PAPER_SHEET_HEADER}>
+          <SheetTitle className={PAPER_SHEET_TITLE}>Usage</SheetTitle>
           <SheetDescription>
             Tokens and costs from the model calls Mivra makes, counted from when usage tracking started on this computer. It isn't your whole account's usage
             and doesn't show any remaining allowance.
@@ -94,10 +95,10 @@ function UsageContent() {
   }, [range, version]);
 
   return (
-    <div className="flex flex-col gap-6 px-4 pb-6">
-      <div role="radiogroup" aria-label="Date range" className="flex flex-wrap gap-1">
+    <div className="flex flex-col gap-6 px-5 py-5">
+      <div role="radiogroup" aria-label="Date range" className={SEGMENTED}>
         {RANGES.map((r) => (
-          <Button key={r.id} type="button" size="sm" role="radio" aria-checked={range === r.id} variant={range === r.id ? "secondary" : "ghost"} onClick={() => setRange(r.id)}>
+          <Button key={r.id} type="button" size="sm" role="radio" aria-checked={range === r.id} variant="ghost" className={segment(range === r.id)} onClick={() => setRange(r.id)}>
             {r.label}
           </Button>
         ))}
@@ -123,7 +124,7 @@ function UsageReport({ view, onChanged }: { view: UsageView; onChanged: () => vo
       </p>
       {!empty && (
         <>
-          <section aria-label="Totals" className="grid gap-3 sm:grid-cols-3">
+          <section aria-label="Totals" className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
             <Stat label="Tokens" value={compact(totals.total)}>
               <span>{tokens(totals.input)} in · {tokens(totals.output)} out</span>
               {totals.cacheRead !== null && <span>of input, {tokens(totals.cacheRead)} cached</span>}
@@ -190,10 +191,10 @@ function apiHeadline(t: UsageTotals): string {
 
 function Stat({ label, value, children }: { label: string; value: string; children?: ReactNode }) {
   return (
-    <div role="group" aria-label={label} className="flex flex-col gap-1 rounded-md border p-3">
-      <span className="text-muted-foreground text-xs font-medium">{label}</span>
-      <span className="font-heading text-2xl font-semibold tabular-nums">{value}</span>
-      <div className="text-muted-foreground flex flex-col text-xs">{children}</div>
+    <div role="group" aria-label={label} className="flex min-w-0 flex-col gap-1">
+      <span className={EYEBROW}>{label}</span>
+      <span className="font-heading text-[1.85rem] leading-tight font-normal tracking-[-0.02em] tabular-nums wrap-anywhere">{value}</span>
+      <div className="text-muted-foreground flex flex-col text-[0.8125rem] leading-snug">{children}</div>
     </div>
   );
 }
@@ -202,7 +203,7 @@ function Stat({ label, value, children }: { label: string; value: string; childr
 function ApiEquivalent({ totals }: { totals: UsageTotals }) {
   const [open, setOpen] = useState(false);
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="rounded-md border">
+    <Collapsible open={open} onOpenChange={setOpen} className="border-border-strong rounded-lg border">
       <CollapsibleTrigger asChild>
         <Button type="button" variant="ghost" className="w-full justify-between">
           Estimated API equivalent
@@ -231,22 +232,22 @@ function DailyChart({ days }: { days: UsageView["days"] }) {
   const max = Math.max(1, ...days.map(totalOf));
   return (
     <section aria-labelledby="usage-daily" className="flex flex-col gap-2">
-      <h3 id="usage-daily" className="font-heading text-base font-medium">Tokens per day</h3>
-      <div className="flex h-28 items-end gap-0.5 border-b" role="list" aria-label="Tokens per day">
+      <h3 id="usage-daily" className={EYEBROW}>Tokens per day</h3>
+      <div className="border-border-strong flex h-28 items-end gap-0.5 border-b" role="list" aria-label="Tokens per day">
         {days.map((d) => {
           const label = `${new Date(`${d.day}T00:00:00`).toLocaleDateString()}: ${tokenFormat.format(totalOf(d))} tokens in ${plural(d.calls, "call")}`;
           return (
             // The hit target is the full column, taller than the bar.
             <div key={d.day} role="listitem" aria-label={label} title={label} className="group flex h-full min-w-1 flex-1 items-end">
               <div
-                className="bg-muted-foreground/70 group-hover:bg-foreground w-full rounded-t-[4px]"
+                className="bg-muted-foreground/60 group-hover:bg-foreground w-full rounded-t-[3px]"
                 style={{ height: `${Math.max(2, (totalOf(d) / max) * 100)}%` }}
               />
             </div>
           );
         })}
       </div>
-      <div className="text-muted-foreground flex justify-between text-xs tabular-nums">
+      <div className="text-muted-foreground flex justify-between gap-2 font-mono text-[0.72rem] tabular-nums">
         <span>{new Date(`${days[0]!.day}T00:00:00`).toLocaleDateString()}</span>
         <span>Peak {compact(max)}</span>
         <span>{new Date(`${days.at(-1)!.day}T00:00:00`).toLocaleDateString()}</span>
@@ -279,31 +280,31 @@ function Breakdown({ title, note, rows }: { title: string; note?: string; rows: 
   const id = `usage-${title.toLowerCase().replace(/\s+/g, "-")}`;
   return (
     <section aria-labelledby={id} className="flex flex-col gap-2">
-      <h3 id={id} className="font-heading text-base font-medium">{title}</h3>
+      <h3 id={id} className="font-heading text-[1.05rem] font-medium">{title}</h3>
       {note && <p className="text-muted-foreground text-xs">{note}</p>}
       <div className="overflow-x-auto">
         <table className="w-full text-sm" aria-labelledby={id}>
-          <thead className="text-muted-foreground text-left text-xs">
+          <thead className="text-muted-foreground text-left font-mono text-[0.6875rem] tracking-[0.09em] uppercase">
             <tr>
-              <th scope="col" className="py-1 pr-2 font-medium">Name</th>
-              <th scope="col" className="py-1 pr-2 text-right font-medium">Tokens</th>
-              <th scope="col" className="py-1 pr-2 text-right font-medium">Calls</th>
-              <th scope="col" className="py-1 text-right font-medium">Cost</th>
+              <th scope="col" className="pb-2 pr-2 font-medium">Name</th>
+              <th scope="col" className="pb-2 pr-2 text-right font-medium">Tokens</th>
+              <th scope="col" className="pb-2 pr-2 text-right font-medium">Calls</th>
+              <th scope="col" className="pb-2 text-right font-medium">Cost</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.key} className="border-t align-top">
-                <th scope="row" className="py-1.5 pr-2 text-left font-normal">
+                <th scope="row" className="py-2.5 pr-2 text-left font-semibold">
                   <span className="block break-words">{row.name}</span>
-                  {row.detail && <span className="text-muted-foreground block text-xs">{row.detail}</span>}
+                  {row.detail && <span className="text-muted-foreground block text-xs font-normal">{row.detail}</span>}
                 </th>
-                <td className="py-1.5 pr-2 text-right tabular-nums">
+                <td className="py-2.5 pr-2 text-right font-mono text-[0.8125rem] tabular-nums">
                   {tokens(row.totals.total)}
                   {row.totals.unreported > 0 && <span className="text-muted-foreground block text-xs">+{row.totals.unreported} unknown</span>}
                 </td>
-                <td className="py-1.5 pr-2 text-right tabular-nums">{row.totals.calls}</td>
-                <td className="py-1.5 text-right text-xs">{costCell(row)}</td>
+                <td className="py-2.5 pr-2 text-right font-mono text-[0.8125rem] tabular-nums">{row.totals.calls}</td>
+                <td className="py-2.5 text-right text-xs">{costCell(row)}</td>
               </tr>
             ))}
           </tbody>
@@ -323,7 +324,7 @@ const RATE_FIELDS = [
 function Advanced({ prices, onChanged }: { prices: UsageView["prices"]; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="rounded-md border">
+    <Collapsible open={open} onOpenChange={setOpen} className="border-border-strong rounded-lg border">
       <CollapsibleTrigger asChild>
         <Button type="button" variant="ghost" className="w-full justify-between">
           Advanced: custom prices
