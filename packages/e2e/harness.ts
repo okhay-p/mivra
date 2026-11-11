@@ -220,6 +220,8 @@ function held() {
 
 const longFormula = Array.from({ length: 40 }, (_, i) => `a_{${i}}`).join("");
 
+// The most steps that still show step pips (stepper.tsx), to check they fit a narrow footer.
+const longTrace = { title: "Many steps", values: [1, 2, 3], steps: Array.from({ length: 24 }, (_, i) => ({ explanation: `Step ${i + 1}.` })) };
 const literalTrace = { ...trace, title: "Swap *demo* in $O(n^2)$", steps: [{ explanation: "Multiply 2*3*4 and compare with $x_1 + \\frac{a}{b}$, for $5 or $10." }] };
 const literalCheck = {
   concept: "literal answers",
@@ -487,6 +489,7 @@ const SCRIPTS: Record<string, Step[]> = {
   tabtrace: [{ tool: "show_algorithm_trace", input: tabTrace }, { text: "Tab through the trace." }],
   tabcodetrace: [{ tool: "show_algorithm_trace", input: tabCodeTrace }, { text: "Tab through the code." }],
   codetrace: [{ tool: "show_algorithm_trace", input: codeTrace }, { text: "Follow the code." }],
+  longtrace: [{ tool: "show_algorithm_trace", input: longTrace }, { text: "Step through all of it." }],
   tabtable: [{ tool: "show_table", input: tabTable }, { text: "Tab through the table." }],
   widegraph: [{ tool: "show_graph", input: graphWide }, { text: "Scroll the long graph." }],
   wideset: [{ tool: "show_set_diagram", input: vennWide }, { text: "Scroll the long diagram." }],

@@ -141,12 +141,13 @@ export function StepperControls({
         </Button>
         {children}
       </div>
-      <div className="ml-auto flex items-center gap-3">
+      {/* min-w-0 lets the pips shrink: many steps on a narrow card would otherwise push the footer past the card. */}
+      <div className="ml-auto flex min-w-0 max-w-full items-center gap-3">
         {/* Past, current and later steps differ by shade, not by hue: amber is for the brand. */}
-        <span className="flex gap-[3px]" aria-hidden="true" data-testid="step-pips">
+        <span className="flex min-w-0 gap-[3px]" aria-hidden="true" data-testid="step-pips">
           {last < 24 &&
             Array.from({ length: last + 1 }, (_, i) => (
-              <i key={i} className={cn("h-[3px] w-3 rounded-full", i < index ? "bg-muted-foreground" : i === index ? "bg-foreground" : "bg-border-strong")} />
+              <i key={i} className={cn("h-[3px] w-3 min-w-[2px] shrink rounded-full", i < index ? "bg-muted-foreground" : i === index ? "bg-foreground" : "bg-border-strong")} />
             ))}
         </span>
         <span className="text-muted-foreground font-mono text-xs whitespace-nowrap" aria-hidden="true" data-testid="step-counter">
