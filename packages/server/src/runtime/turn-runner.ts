@@ -23,7 +23,7 @@ import { Conflict, type ReplyMetadata, type RunStatus, type SessionStore } from 
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 import { createContinuationStream } from "./continuation-stream.js";
-import { courseContext } from "./course-context.js";
+import { MAX_PLACEMENT_QUESTIONS, courseContext } from "./course-context.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_IMPORTED_MEMORIES, MAX_MEMORIES, learnerContext } from "./learner-context.js";
@@ -42,6 +42,11 @@ export const INSTRUCTIONS = [
 
 /** Upper bound on model steps per turn (a step ends at each round of tool calls). */
 const MAX_STEPS = 5;
+/**
+ * A placement interview may ask every question in its own step, then the optional free-text one (#75) and
+ * its text, so it gets room for all of them.
+ */
+const INTERVIEW_MAX_STEPS = MAX_PLACEMENT_QUESTIONS + 3;
 
 // Stored JSON can carry private metadata on a step boundary. Client presentation rebuilds
 // step-start from its type alone; the live stream never receives these durable-only fields.
@@ -396,7 +401,7 @@ export function createTurnRunner({ store, registry, model, models, lessons, note
         messages: assembled.messages,
         tools: turnTools.tools,
         ...callOptionsFor(selection),
-        stopWhen: stepCountIs(MAX_STEPS),
+        stopWhen: stepCountIs(course?.status === "interviewing" ? INTERVIEW_MAX_STEPS : MAX_STEPS),
         abortSignal: signal,
         onStepEnd: ({ providerMetadata }) => { stepMetadata.push(providerMetadata); },
         onChunk: ({ chunk }) => {

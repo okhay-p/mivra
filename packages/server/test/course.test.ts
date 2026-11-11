@@ -235,6 +235,15 @@ describe("courses", () => {
     }
   });
 
+  it("has room for every placement question in its own step, then the free-text one", async () => {
+    const concepts = ["a", "b", "c", "d", "e", "f"];
+    const { app, db } = setup([...concepts.map((c) => question(c)), contextQuestion, { text: "Answer below." }]);
+    const { session } = await startCourse(app);
+    const sse = await turn(app, db, session.id, "Learn calculus");
+    expect(artifactIds(sse)).toHaveLength(concepts.length + 1);
+    expect(sse).toContain("Answer below.");
+  });
+
   it("rejects free-text context over the length cap and offers it only while interviewing", async () => {
     const { app, db, calls } = setup([contextQuestion, { text: "Answer below." }, syllabus, { text: "Ready." }, { text: "Sure." }]);
     const { session } = await startCourse(app);
