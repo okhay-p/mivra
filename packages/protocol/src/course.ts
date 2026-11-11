@@ -87,6 +87,42 @@ export function gradePlacementQuestion(spec: PlacementQuestionSpec, answer: Plac
 }
 
 // ---------------------------------------------------------------------------------------------
+// interview_context v1: the interview's one optional free-text question (#75), asked last, so the
+// learner can say in their own words what they already know or want to explore. Not graded and
+// never evidence: the answer only tailors the syllabus.
+// ---------------------------------------------------------------------------------------------
+
+/** Most characters the learner can write in the interview's free-text answer. */
+export const MAX_INTERVIEW_CONTEXT_CHARS = 2000;
+
+export const InterviewContextSpec = z
+  .object({
+    question: z
+      .string()
+      .trim()
+      .min(1)
+      .max(300)
+      .describe('The question, e.g. "Anything else you\'d like us to know about what you already understand or what you want to explore?"'),
+  })
+  .strict();
+export type InterviewContextSpec = z.infer<typeof InterviewContextSpec>;
+
+/** The learner's words, or a skip. Blank text counts as a skip. */
+export const InterviewContextAnswer = z.union([
+  z.object({ text: z.string().trim().max(MAX_INTERVIEW_CONTEXT_CHARS) }).strict(),
+  z.object({ skipped: z.literal(true) }).strict(),
+]);
+export type InterviewContextAnswer = z.infer<typeof InterviewContextAnswer>;
+
+export const InterviewContextGrade = z.object({ result: z.enum(["answered", "skipped"]) }).strict();
+export type InterviewContextGrade = z.infer<typeof InterviewContextGrade>;
+
+/** Not a grade so much as a label: whether the learner wrote anything. */
+export const gradeInterviewContext = (answer: InterviewContextAnswer): InterviewContextGrade => ({
+  result: "text" in answer && answer.text.length > 0 ? "answered" : "skipped",
+});
+
+// ---------------------------------------------------------------------------------------------
 // Syllabus
 // ---------------------------------------------------------------------------------------------
 

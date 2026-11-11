@@ -2,6 +2,7 @@ import { ArtifactView, type ArtifactKind } from "@mivra/protocol";
 import type { ComponentType } from "react";
 import { AlgorithmTrace } from "./AlgorithmTrace.js";
 import { Graph } from "./Graph.js";
+import { InterviewContext } from "./InterviewContext.js";
 import { MultipleChoice } from "./MultipleChoice.js";
 import { PlacementQuestion } from "./PlacementQuestion.js";
 import { SetDiagram } from "./SetDiagram.js";
@@ -22,6 +23,7 @@ export interface ArtifactProps<K extends ArtifactKind> {
 const renderers: { [K in ArtifactKind]: ComponentType<ArtifactProps<K>> } = {
   algorithm_trace: AlgorithmTrace,
   graph: Graph,
+  interview_context: InterviewContext,
   multiple_choice: MultipleChoice,
   placement_question: PlacementQuestion,
   set_diagram: SetDiagram,

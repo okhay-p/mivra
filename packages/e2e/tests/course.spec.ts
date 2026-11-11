@@ -26,6 +26,16 @@ test("a course starts from the first screen, runs the placement interview and wr
   await limit.getByRole("button", { name: "Not sure" }).click();
   await expect(limit.getByText("Marked as not sure.")).toBeVisible();
 
+  // The last question is optional free text; the interview waits for it, then continues.
+  const extra = page.getByRole("region", { name: "Anything else to add" });
+  await expect(extra.getByText("Optional", { exact: true })).toBeVisible();
+  await expect(extra.getByRole("button", { name: "Send" })).toBeDisabled();
+  await expect(page.getByText("Your syllabus is ready.")).toHaveCount(0);
+  await extra.getByRole("textbox").fill("I know the basics, but I want to dive into backprop.");
+  await extra.getByRole("button", { name: "Send" }).click();
+  await expect(extra.getByText("I know the basics, but I want to dive into backprop.")).toBeVisible();
+  await expect(extra.getByRole("textbox")).toHaveCount(0);
+
   // Answering the last question continues automatically; the syllabus is written without approval.
   await expect(page.getByText("Your syllabus is ready.")).toBeVisible();
   await expect(course.getByText("In progress")).toBeVisible();

@@ -1,7 +1,15 @@
 import { z } from "zod";
 import { artifactMathInput, checkMathText } from "./artifact-math-input.js";
 import { AlgorithmTraceSpec } from "./algorithm-trace.js";
-import { PlacementAnswer, PlacementGrade, PlacementQuestionPublic, PlacementQuestionSpec } from "./course.js";
+import {
+  InterviewContextAnswer,
+  InterviewContextGrade,
+  InterviewContextSpec,
+  PlacementAnswer,
+  PlacementGrade,
+  PlacementQuestionPublic,
+  PlacementQuestionSpec,
+} from "./course.js";
 import { GraphSpec } from "./graph.js";
 import { MultipleChoiceAnswer, MultipleChoiceGrade, MultipleChoicePublic, MultipleChoiceSpec } from "./multiple-choice.js";
 import { SetDiagramSpec } from "./set-diagram.js";
@@ -45,6 +53,14 @@ export const artifactKinds = {
         if (node.label === undefined) checkMathText(node.id, ["nodes", i, "id"], ctx);
       });
     }),
+  },
+  interview_context: {
+    version: 1,
+    toolName: "ask_interview_context",
+    description:
+      "Course placement interview only: ask the learner once, as the last question of the interview and in the same reply as the placement questions, whether there is anything else they want you to know about what they already understand or want to explore. They answer in their own words in the UI, or leave it blank; the answer is reported back to you with the placement results. Not graded.",
+    spec: InterviewContextSpec,
+    input: artifactMathInput(InterviewContextSpec, ["question"]),
   },
   multiple_choice: {
     version: 1,
@@ -103,6 +119,11 @@ export const MultipleChoiceAttempt = z
   .strict();
 export type MultipleChoiceAttempt = z.infer<typeof MultipleChoiceAttempt>;
 
+export const InterviewContextAttempt = z
+  .object({ answer: InterviewContextAnswer, grade: InterviewContextGrade, createdAt: z.string().datetime() })
+  .strict();
+export type InterviewContextAttempt = z.infer<typeof InterviewContextAttempt>;
+
 export const PlacementAttempt = z.object({ answer: PlacementAnswer, grade: PlacementGrade, createdAt: z.string().datetime() }).strict();
 export type PlacementAttempt = z.infer<typeof PlacementAttempt>;
 
@@ -115,6 +136,15 @@ export const ArtifactView = z.discriminatedUnion("kind", [
     .object({ ...ArtifactBase, kind: z.literal("algorithm_trace"), version: z.literal(1), spec: AlgorithmTraceSpec })
     .strict(),
   z.object({ ...ArtifactBase, kind: z.literal("graph"), version: z.literal(1), spec: GraphSpec }).strict(),
+  z
+    .object({
+      ...ArtifactBase,
+      kind: z.literal("interview_context"),
+      version: z.literal(1),
+      spec: InterviewContextSpec,
+      latestAttempt: InterviewContextAttempt.optional(),
+    })
+    .strict(),
   z
     .object({
       ...ArtifactBase,

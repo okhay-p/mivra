@@ -7,6 +7,7 @@ async function startFirstLesson(page: Page, word: string) {
   await page.getByRole("button", { name: "Start" }).click();
   await page.getByRole("region", { name: "Placement question: derivative" }).getByRole("button", { name: "True" }).click();
   await page.getByRole("region", { name: "Placement question: limit" }).getByRole("button", { name: "Not sure" }).click();
+  await page.getByRole("region", { name: "Anything else to add" }).getByRole("button", { name: "Skip" }).click();
   await expect(page.getByText("Your syllabus is ready.")).toBeVisible();
   await page.getByRole("region", { name: "Course" }).getByRole("button", { name: "Start lesson 1" }).click();
   // The model holds the lesson, so the sidebar sees it being written.

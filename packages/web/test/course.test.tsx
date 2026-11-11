@@ -54,6 +54,49 @@ describe("PlacementQuestion", () => {
   });
 });
 
+const context = {
+  id: "art-context",
+  createdAt: "2026-11-03T00:00:00.000Z",
+  kind: "interview_context",
+  version: 1,
+  spec: { question: "Anything else you'd like us to know?" },
+} satisfies ArtifactView;
+
+const contextAnswered = (answer: object, result: string): ArtifactView =>
+  ({ ...context, latestAttempt: { answer, grade: { result }, createdAt: context.createdAt } }) as ArtifactView;
+
+describe("InterviewContext", () => {
+  it("is a clearly optional multiline field that can't be sent blank", () => {
+    render(<Harness data={context} />);
+    const field = screen.getByLabelText("Anything else you'd like us to know?");
+    expect(field.tagName).toBe("TEXTAREA");
+    expect(screen.getByText("Optional")).toBeTruthy();
+    expect(screen.getByText(/Fine to leave blank/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(field, { target: { value: "   " } });
+    expect((screen.getByRole("button", { name: "Send" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("sends the learner's words and shows them", async () => {
+    const words = "I know the basics,\nbut want to dive into backprop.";
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(json(contextAnswered({ text: words }, "answered"), 201));
+    render(<Harness data={context} />);
+    fireEvent.change(screen.getByLabelText("Anything else you'd like us to know?"), { target: { value: `  ${words} ` } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ answer: { text: words } });
+    expect(screen.getByText(/dive into backprop/)).toBeTruthy();
+  });
+
+  it("can be skipped", async () => {
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue(json(contextAnswered({ skipped: true }, "skipped"), 201));
+    render(<Harness data={context} />);
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    await screen.findByText("Skipped.");
+    expect(JSON.parse(String(fetch.mock.calls[0]![1]?.body))).toEqual({ answer: { skipped: true } });
+  });
+});
+
 describe("StartCourseForm", () => {
   const pickerView = {
     current: { model: "chatgpt:gpt-6.1-sol", effort: null },
