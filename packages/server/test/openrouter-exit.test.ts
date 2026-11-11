@@ -103,8 +103,14 @@ it("survives an OpenRouter socket failure after client disconnect and completes 
       held!.socket!.destroy();
       await reader.cancel().catch(() => {});
       await closed;
-      // The next HTTP round trip also lets Node report any unhandled cancellation rejection.
-      const recovered = await send();
+      // The next HTTP round trip also lets Node report any unhandled cancellation rejection. The aborted turn may still
+      // be winding down, and until it has the server answers 409 ("a reply is already in progress"), so retry briefly.
+      let recovered = await send();
+      for (let tries = 0; recovered.status === 409 && tries < 50; tries++) {
+        await recovered.body?.cancel();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        recovered = await send();
+      }
       expect(recovered.status).toBe(200);
       const sse = await recovered.text();
       expect(sse).toContain("Recovered reply");
