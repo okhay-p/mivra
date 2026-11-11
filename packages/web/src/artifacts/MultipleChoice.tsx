@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { submitMultipleChoice } from "../api.js";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
+import { ArtifactBody, ArtifactCard, ArtifactHeader, OptionKey } from "./artifact-card.js";
 
 export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: ArtifactProps<"multiple_choice">) {
   const { spec, latestAttempt } = view;
@@ -51,14 +51,14 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
   };
 
   return (
-    <Card role="region" aria-label={`Check: ${spec.concept}`} className="whitespace-normal">
-      <CardHeader>
-        <CardDescription>Check · {spec.concept}</CardDescription>
-        <CardTitle className="font-heading text-base">
+    <ArtifactCard role="region" aria-label={`Check: ${spec.concept}`}>
+      <ArtifactHeader kind="Check" aside="Graded against an answer key">
+        <span className="text-muted-foreground min-w-0 text-sm font-semibold wrap-anywhere">{spec.concept}</span>
+      </ArtifactHeader>
+      <ArtifactBody className="gap-4">
+        <div data-slot="check-question" className="font-heading text-[1.2rem] leading-snug font-medium text-pretty">
           <MathText text={spec.question} mode="math" />
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+        </div>
         <div className="flex flex-col gap-2" role="group" aria-label="Options">
           {spec.options.map((option, i) => {
             const result = optionResult(i);
@@ -69,7 +69,7 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 variant="outline"
                 data-result={result}
                 className={cn(
-                  "h-auto flex-wrap justify-between gap-x-3 gap-y-1 py-2 text-left font-normal whitespace-normal",
+                  "border-border-strong dark:border-border-strong bg-card dark:bg-card hover:bg-sunken dark:hover:bg-sunken h-auto flex-wrap justify-start gap-x-3 gap-y-1 rounded-[10px] px-3.5 py-2.5 text-left font-medium whitespace-normal",
                   answered && "disabled:opacity-100",
                   submitting === i && "border-foreground dark:border-foreground",
                   // The dark: variants beat the outline button's own dark border and background.
@@ -79,11 +79,12 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
                 disabled={disabled}
                 onClick={() => void answer(i)}
               >
-                <span className="min-w-0 flex-[1_1_12rem] wrap-anywhere">
+                <OptionKey index={i} />
+                <span className="min-w-0 flex-[1_1_10rem] wrap-anywhere">
                   <MathText text={option.text} mode="math" />
                 </span>
                 {optionMark(i) && (
-                  <span className={cn("shrink-0 text-xs font-medium", result === "incorrect" ? "text-destructive" : "text-success")}>
+                  <span className={cn("shrink-0 pl-9 text-sm font-semibold sm:pl-0", result === "incorrect" ? "text-destructive" : "text-success")}>
                     {optionMark(i)}
                   </span>
                 )}
@@ -95,8 +96,8 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
           {!answered && replyInProgress && <p className="text-muted-foreground text-sm">Answer once the reply finishes.</p>}
           {error && <p className="text-destructive text-sm">{error}</p>}
           {grade && (
-            <Alert className="bg-muted">
-              <AlertTitle className={grade.correct ? "text-success" : "text-destructive"}>
+            <Alert className="bg-sunken border-0 px-4 py-3">
+              <AlertTitle className={cn("font-heading text-[1.15rem] font-medium", grade.correct ? "text-success" : "text-destructive")}>
                 {grade.correct ? "Correct!" : "Not quite."}
               </AlertTitle>
               <AlertDescription className="text-foreground">
@@ -112,7 +113,7 @@ export function MultipleChoice({ view, replyInProgress, onUpdate, onRefresh }: A
             </Alert>
           )}
         </div>
-      </CardContent>
-    </Card>
+      </ArtifactBody>
+    </ArtifactCard>
   );
 }

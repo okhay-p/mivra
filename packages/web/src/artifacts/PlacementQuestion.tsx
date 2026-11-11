@@ -1,11 +1,11 @@
 import type { PlacementAnswer } from "@mivra/protocol";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { submitPlacement } from "../api.js";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
+import { ArtifactBody, ArtifactCard, ArtifactHeader } from "./artifact-card.js";
 
 type Choice = number | "unsure" | "skipped";
 const toAnswer = (choice: Choice): PlacementAnswer =>
@@ -55,14 +55,14 @@ export function PlacementQuestion({ view, replyInProgress, onUpdate, onRefresh }
     grade?.result === "correct" ? "Correct." : grade?.result === "incorrect" ? "Not quite." : grade?.result === "unsure" ? "Marked as not sure." : "Skipped.";
 
   return (
-    <Card role="region" aria-label={`Placement question: ${spec.concept}`} className="whitespace-normal">
-      <CardHeader>
-        <CardDescription>Placement · {spec.concept}</CardDescription>
-        <CardTitle className="font-heading text-base">
+    <ArtifactCard role="region" aria-label={`Placement question: ${spec.concept}`}>
+      <ArtifactHeader kind="Placement">
+        <span className="text-muted-foreground min-w-0 text-sm font-semibold wrap-anywhere">{spec.concept}</span>
+      </ArtifactHeader>
+      <ArtifactBody className="gap-4">
+        <div className="font-heading text-[1.2rem] leading-snug font-medium text-pretty">
           <MathText text={spec.question} mode="math" />
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+        </div>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Answers">
           {spec.options.map((option, i) => {
             const result = optionResult(i);
@@ -75,7 +75,7 @@ export function PlacementQuestion({ view, replyInProgress, onUpdate, onRefresh }
                 data-result={result}
                 aria-pressed={chosen === i}
                 className={cn(
-                  "h-auto max-w-full py-1.5 text-left font-normal whitespace-normal wrap-anywhere",
+                  "border-border-strong dark:border-border-strong bg-card dark:bg-card hover:bg-sunken dark:hover:bg-sunken h-auto max-w-full rounded-[10px] px-3.5 py-2 text-left font-medium whitespace-normal wrap-anywhere",
                   answered && "disabled:opacity-100",
                   submitting === i && "border-foreground dark:border-foreground",
                   result === "correct" && "border-success bg-success/10 dark:border-success dark:bg-success/15",
@@ -132,7 +132,7 @@ export function PlacementQuestion({ view, replyInProgress, onUpdate, onRefresh }
             </>
           )}
         </div>
-      </CardContent>
-    </Card>
+      </ArtifactBody>
+    </ArtifactCard>
   );
 }

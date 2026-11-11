@@ -1,9 +1,9 @@
 import { codeLines, type AlgorithmTraceSpec } from "@mivra/protocol";
 import { useId, useRef } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
+import { ArtifactBody, ArtifactCard, ArtifactHeader, ArtifactTitle } from "./artifact-card.js";
 import { CodePane } from "./CodePane.js";
 import { ScrollableText, STEP_TONES, StepperControls, useStepper, type StepTone } from "./stepper.js";
 
@@ -83,7 +83,7 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
               <span
                 key={`cell-${i}`}
                 className={cn(
-                  "bg-background relative grid h-10 place-items-center rounded-sm border px-2 font-mono text-sm",
+                  "bg-card border-border-strong relative grid h-11 place-items-center rounded-md border px-2 font-mono text-[0.95rem]",
                   tone && STEP_TONES[tone],
                 )}
                 style={{ gridColumn: i + 1, gridRow: ranges.length + 1 }}
@@ -112,7 +112,7 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
       {state.variables.length > 0 && (
         <dl className="flex flex-wrap gap-2" aria-hidden="true">
           {state.variables.map((v, i) => (
-            <div key={i} className="bg-muted flex max-w-full min-w-0 gap-1 rounded-sm px-2 py-0.5 font-mono text-xs wrap-anywhere">
+            <div key={i} className="border-border-strong bg-card flex max-w-full min-w-0 gap-1.5 rounded-md border px-2 py-0.5 font-mono text-xs wrap-anywhere">
               <dt className="min-w-0">{v.name}</dt>
               <dd className="min-w-0">= {String(v.value)}</dd>
             </div>
@@ -142,21 +142,11 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
   );
 
   return (
-    <Card role="region" aria-labelledby={`${titleId} ${kindId}`} tabIndex={0} onKeyDown={stepper.onKeyDown} className="whitespace-normal">
-      <CardHeader>
-        <CardTitle className="min-w-0 font-heading text-base">
-          <h3>
-            <ScrollableText>
-              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
-              <span id={titleId}>
-                <MathText text={spec.title} mode="math" />
-              </span>
-            </ScrollableText>
-          </h3>
-        </CardTitle>
-        <CardDescription id={kindId}>Algorithm trace</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+    <ArtifactCard role="region" aria-labelledby={`${titleId} ${kindId}`} tabIndex={0} onKeyDown={stepper.onKeyDown}>
+      <ArtifactHeader kind="Algorithm trace" kindId={kindId}>
+        <ArtifactTitle id={titleId} text={spec.title} />
+      </ArtifactHeader>
+      <ArtifactBody>
         {spec.code ? (
           // Beside the values when the card is wide enough, above them when it isn't.
           <div className="@container">
@@ -168,8 +158,8 @@ export function AlgorithmTrace({ view }: ArtifactProps<"algorithm_trace">) {
         ) : (
           body
         )}
-        <StepperControls stepper={stepper} play />
-      </CardContent>
-    </Card>
+      </ArtifactBody>
+      <StepperControls stepper={stepper} play />
+    </ArtifactCard>
   );
 }

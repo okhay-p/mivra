@@ -34,11 +34,16 @@ describe("MultipleChoice", () => {
   it("keeps answers that markdown would make identical distinct and literal", () => {
     render(<Harness data={{ ...question, spec: { ...question.spec, question: "Which is *it*, $x^2$?", options: [{ text: "2*3*4" }, { text: "234" }, { text: "$2*3*4$" }] } }} />);
     const [starred, plain, formula] = options();
-    expect(starred!.textContent).toBe("2*3*4");
-    expect(plain!.textContent).toBe("234");
+    // The letter badge is decoration: hidden from screen readers and outside the answer's own text.
+    const answerText = (button: HTMLElement) => button.querySelector('[data-testid="option-key"] + span')!.textContent;
+    expect(starred!.querySelector('[data-testid="option-key"]')!.getAttribute("aria-hidden")).toBe("true");
+    expect(answerText(starred!)).toBe("2*3*4");
+    expect(answerText(plain!)).toBe("234");
+    expect(screen.getByRole("button", { name: "2*3*4" })).toBe(starred);
+    expect(screen.getByRole("button", { name: "234" })).toBe(plain);
     expect(starred!.querySelector("em, strong")).toBeNull();
     expect(formula!.querySelector("annotation")?.textContent).toBe("2*3*4");
-    const title = screen.getByRole("region").querySelector('[data-slot="card-title"]')!;
+    const title = screen.getByRole("region").querySelector('[data-slot="check-question"]')!;
     expect(title.querySelector("em")).toBeNull();
     expect(title.textContent).toContain("Which is *it*,");
     expect(title.querySelector("annotation")?.textContent).toBe("x^2");

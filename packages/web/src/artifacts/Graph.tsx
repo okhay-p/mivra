@@ -1,10 +1,10 @@
 import { graphEdgeLookup, type GraphSpec, type GraphTone } from "@mivra/protocol";
 import { Check } from "lucide-react";
 import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
+import { ArtifactBody, ArtifactCard, ArtifactHeader, ArtifactTitle } from "./artifact-card.js";
 import { edgeText, LABEL_FONT_PX, layoutGraph } from "./graph-layout.js";
 import { ScrollableText, SeenOnly, StepperControls, useStepper } from "./stepper.js";
 
@@ -154,27 +154,16 @@ export function Graph({ view }: ArtifactProps<"graph">) {
   const kindId = useId();
 
   return (
-    <Card
+    <ArtifactCard
       role="region"
       aria-labelledby={`${titleId} ${kindId}`}
       tabIndex={hasSteps ? 0 : undefined}
       onKeyDown={hasSteps ? onKeyDown : undefined}
-      className="whitespace-normal"
     >
-      <CardHeader>
-        <CardTitle className="min-w-0 font-heading text-base">
-          <h3>
-            <ScrollableText>
-              {/* The name comes from inside the box, which is itself named "Formula" when it scrolls. */}
-              <span id={titleId}>
-                <MathText text={spec.title} mode="math" />
-              </span>
-            </ScrollableText>
-          </h3>
-        </CardTitle>
-        <CardDescription id={kindId}>{spec.directed ? "Directed graph" : "Graph"}</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
+      <ArtifactHeader kind={spec.directed ? "Directed graph" : "Graph"} kindId={kindId}>
+        <ArtifactTitle id={titleId} text={spec.title} />
+      </ArtifactHeader>
+      <ArtifactBody>
         <GraphDescription spec={spec} />
         <div
           ref={scroller}
@@ -260,7 +249,7 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         {state.variables.length > 0 && (
           <dl className="flex flex-wrap gap-2" aria-hidden={hasSteps ? true : undefined}>
             {state.variables.map((v, i) => (
-              <div key={i} className="bg-muted flex max-w-full min-w-0 gap-1 rounded-sm px-2 py-0.5 font-mono text-xs wrap-anywhere">
+              <div key={i} className="border-border-strong bg-card flex max-w-full min-w-0 gap-1.5 rounded-md border px-2 py-0.5 font-mono text-xs wrap-anywhere">
                 <dt className="min-w-0">{v.name}</dt>
                 <dd className="min-w-0">= {String(v.value)}</dd>
               </div>
@@ -270,11 +259,11 @@ export function Graph({ view }: ArtifactProps<"graph">) {
         {hasSteps && (
           <>
             <GraphStatus spec={spec} state={state} step={stepper.index + 1} of={steps.length} />
-            <StepperControls stepper={stepper} play />
           </>
         )}
-      </CardContent>
-    </Card>
+      </ArtifactBody>
+      {hasSteps && <StepperControls stepper={stepper} play />}
+    </ArtifactCard>
   );
 }
 

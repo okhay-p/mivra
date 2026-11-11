@@ -1,6 +1,5 @@
 import { ChevronLeft, ChevronRight, Pause, Play } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -17,8 +16,8 @@ export const STEP_TONES: Record<StepTone, string> = {
   done: "bg-success/15 ring-1 ring-inset ring-success",
   muted: "bg-muted text-muted-foreground",
 };
-/** The rule beside a step in a list: thicker and darker for the current one, with the text staying in line. */
-export const STEP_RULES = { current: "border-l-4 border-foreground pl-2.5", other: "border-l-2 border-border pl-3" };
+/** The number beside a step in a list: solid foreground for the current one, a quiet inset disc for the others. */
+export const STEP_NUMBERS = { current: "bg-foreground text-background", other: "bg-sunken text-muted-foreground ring-1 ring-inset ring-border-strong" };
 
 /** Where a stepped artifact is: prev/next within bounds, play/pause, and the arrow keys for its container. */
 export function useStepper(count: number) {
@@ -120,27 +119,40 @@ export function StepperControls({
 }) {
   const { index, last, playing, go, togglePlay } = stepper;
   if (last <= 0) return null;
-  const inactive = "aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+  const inactive =
+    "bg-card dark:bg-card border-border-strong dark:border-border-strong hover:bg-sunken dark:hover:bg-sunken hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-45";
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button type="button" variant="outline" size="sm" className={inactive} onClick={() => go(index - 1)} aria-disabled={index === 0}>
-        <ChevronLeft />
-        Prev
-      </Button>
-      {play && (
-        <Button type="button" size="sm" onClick={togglePlay}>
-          {playing ? <Pause /> : <Play />}
-          {playing ? "Pause" : "Play"}
+    // The inset footer of an artifact card (artifact-card.tsx), so it's drawn edge to edge under the body.
+    <div data-slot="artifact-footer" className="bg-sunken/55 flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-b-xl border-t px-3.5 py-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Button type="button" variant="outline" size="sm" className={inactive} onClick={() => go(index - 1)} aria-disabled={index === 0}>
+          <ChevronLeft />
+          Prev
         </Button>
-      )}
-      <Button type="button" variant="outline" size="sm" className={inactive} onClick={() => go(index + 1)} aria-disabled={index === last}>
-        Next
-        <ChevronRight />
-      </Button>
-      {children}
-      <Badge variant="outline" className="ml-auto" aria-hidden="true" data-testid="step-counter">
-        Step {index + 1} of {last + 1}
-      </Badge>
+        {play && (
+          <Button type="button" size="sm" className="min-w-20" onClick={togglePlay}>
+            {playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
+            {playing ? "Pause" : "Play"}
+          </Button>
+        )}
+        <Button type="button" variant="outline" size="sm" className={inactive} onClick={() => go(index + 1)} aria-disabled={index === last}>
+          Next
+          <ChevronRight />
+        </Button>
+        {children}
+      </div>
+      <div className="ml-auto flex items-center gap-3">
+        {/* Past, current and later steps differ by shade, not by hue: amber is for the brand. */}
+        <span className="flex gap-[3px]" aria-hidden="true" data-testid="step-pips">
+          {last < 24 &&
+            Array.from({ length: last + 1 }, (_, i) => (
+              <i key={i} className={cn("h-[3px] w-3 rounded-full", i < index ? "bg-muted-foreground" : i === index ? "bg-foreground" : "bg-border-strong")} />
+            ))}
+        </span>
+        <span className="text-muted-foreground font-mono text-xs whitespace-nowrap" aria-hidden="true" data-testid="step-counter">
+          Step {index + 1} of {last + 1}
+        </span>
+      </div>
     </div>
   );
 }

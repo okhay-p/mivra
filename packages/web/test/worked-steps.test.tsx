@@ -9,15 +9,18 @@ const next = () => fireEvent.click(screen.getByRole("button", { name: /next/i })
 
 describe("WorkedSteps", () => {
 
-  it("marks the current step with neutral tokens, not amber, and a thicker rule", () => {
+  it("marks the current step's number with neutral tokens, not amber, and keeps the number out of what's read", () => {
     renderSteps();
     next();
     const [earlier, current] = steps();
-    expect(current!.className).toContain("border-foreground");
-    expect(current!.className).toContain("border-l-4");
-    expect(earlier!.className).toContain("border-border");
-    expect(earlier!.className).toContain("border-l-2");
-    expect(current!.className).not.toMatch(/accent|primary|amber/);
+    const number = (step: HTMLElement) => step.querySelector('[data-testid="worked-step-number"]')!;
+    expect(current!.getAttribute("aria-current")).toBe("step");
+    expect(earlier!.getAttribute("aria-current")).toBeNull();
+    expect(number(current!).className).toContain("bg-foreground");
+    expect(number(earlier!).className).not.toContain("bg-foreground");
+    expect(number(current!).className).not.toMatch(/accent|primary|amber/);
+    expect(number(current!).getAttribute("aria-hidden")).toBe("true");
+    expect(number(current!).textContent).toBe("2");
   });
 
   it("leaves a formula box's arrow keys to scrolling", () => {
