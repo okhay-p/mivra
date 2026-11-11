@@ -535,6 +535,7 @@ const SCRIPTS: Record<string, Step[]> = {
   placementcourse: [
     { tool: "ask_placement_question", input: { concept: "derivative", question: "Is the derivative of $x^2$ equal to $2x$?", options: [{ text: "True" }, { text: "False" }], correctOptionIndex: 0, explanation: "Power rule." } },
     { tool: "ask_placement_question", input: { concept: "limit", question: "What is the limit of $1/x$ as $x \\to \\infty$?", options: [{ text: "0" }, { text: "1" }, { text: "Infinity" }], correctOptionIndex: 0, explanation: "It shrinks towards 0." } },
+    { tool: "ask_interview_context", input: { question: "Anything else you'd like us to know about what you already understand or what you want to explore?" } },
     { text: "Two quick questions first." },
   ],
   teach: [

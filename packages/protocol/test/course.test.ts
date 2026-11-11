@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CourseView, PlacementAnswer, PlacementQuestionSpec, StartCourse, SyllabusInput, gradePlacementQuestion, toPlacementQuestionPublic } from "../src/index.js";
+import { CourseView, InterviewContextAnswer, InterviewContextSpec, MAX_INTERVIEW_CONTEXT_CHARS, gradeInterviewContext, PlacementAnswer, PlacementQuestionSpec, StartCourse, SyllabusInput, gradePlacementQuestion, toPlacementQuestionPublic } from "../src/index.js";
 
 const question = {
   concept: "derivative of a constant",
@@ -53,6 +53,29 @@ describe("placement_question", () => {
   });
 });
 
+describe("interview_context", () => {
+  it("accepts a question and rejects {}", () => {
+    expect(InterviewContextSpec.safeParse({ question: "Anything else?" }).success).toBe(true);
+    expect(InterviewContextSpec.safeParse({}).success).toBe(false);
+    expect(InterviewContextSpec.safeParse({ question: "  " }).success).toBe(false);
+  });
+
+  it("takes the learner's words, trimmed and capped, or a skip", () => {
+    expect(InterviewContextAnswer.parse({ text: "  I know limits.\n" })).toEqual({ text: "I know limits." });
+    expect(InterviewContextAnswer.safeParse({ text: "x".repeat(MAX_INTERVIEW_CONTEXT_CHARS) }).success).toBe(true);
+    expect(InterviewContextAnswer.safeParse({ text: "x".repeat(MAX_INTERVIEW_CONTEXT_CHARS + 1) }).success).toBe(false);
+    expect(InterviewContextAnswer.safeParse({}).success).toBe(false);
+    expect(InterviewContextAnswer.safeParse({ skipped: false }).success).toBe(false);
+    expect(InterviewContextAnswer.safeParse({ text: "hi", skipped: true }).success).toBe(false);
+  });
+
+  it("labels blank text as skipped", () => {
+    expect(gradeInterviewContext(InterviewContextAnswer.parse({ text: "Go deep on backprop" })).result).toBe("answered");
+    expect(gradeInterviewContext(InterviewContextAnswer.parse({ text: "   " })).result).toBe("skipped");
+    expect(gradeInterviewContext({ skipped: true }).result).toBe("skipped");
+  });
+});
+
 describe("syllabus", () => {
   it("accepts a valid syllabus and rejects {}", () => {
     expect(SyllabusInput.safeParse(syllabus).success).toBe(true);
@@ -80,8 +103,8 @@ describe("syllabus", () => {
 describe("lesson schemas", async () => {
   const { LessonOutlineInput, LessonSectionKind, LessonTextInput, artifactKinds } = await import("../src/index.js");
 
-  it("plans every artifact kind except placement questions, plus prose", () => {
-    const expected = [...Object.keys(artifactKinds).filter((k) => k !== "placement_question"), "prose"].sort();
+  it("plans every artifact kind except the interview's, plus prose", () => {
+    const expected = [...Object.keys(artifactKinds).filter((k) => k !== "placement_question" && k !== "interview_context"), "prose"].sort();
     expect([...LessonSectionKind.options].sort()).toEqual(expected);
   });
 

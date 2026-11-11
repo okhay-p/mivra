@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type InterviewContextAnswer, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -29,6 +29,9 @@ export const submitMultipleChoice = (artifactId: string, optionIndex: number) =>
 
 /** Submits an answer to a placement question: an option, Not sure, or Skip. */
 export const submitPlacement = (artifactId: string, answer: PlacementAnswer) => submitAnswer(artifactId, answer);
+
+/** Submits the interview's free-text answer, or a skip. */
+export const submitInterviewContext = (artifactId: string, answer: InterviewContextAnswer) => submitAnswer(artifactId, answer);
 
 async function submitAnswer(artifactId: string, answer: unknown): Promise<AttemptResult> {
   try {
