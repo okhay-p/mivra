@@ -6,10 +6,12 @@ import { Field, FieldLabel, FieldDescription, FieldError } from "@/components/ui
 import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { deleteImportedMemories, deleteMemory, editMemory, listMemories } from "./api.js";
 import { ExportVault } from "./ExportVault.js";
+import { EYEBROW, PAPER_SHEET, PAPER_SHEET_HEADER, PAPER_SHEET_TITLE, SEGMENTED, segment } from "./paper.js";
 
 const SECTIONS: { kind: MemoryKind; title: string }[] = [
   { kind: "goal", title: "Goals" },
@@ -62,7 +64,7 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        className="w-full overflow-y-auto sm:max-w-md"
+        className={cn("w-full overflow-y-auto sm:max-w-md", PAPER_SHEET)}
         // The opening button isn't the Sheet's trigger, and on mobile it unmounts with the sidebar.
         onCloseAutoFocus={(e) => {
           e.preventDefault();
@@ -70,15 +72,15 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
           target?.focus();
         }}
       >
-        <SheetHeader>
-          <SheetTitle className="font-heading">Memory</SheetTitle>
+        <SheetHeader className={PAPER_SHEET_HEADER}>
+          <SheetTitle className={PAPER_SHEET_TITLE}>Memory</SheetTitle>
           <SheetDescription>What Mivra has noted about you across sessions. It can be wrong, so correct or delete anything here.</SheetDescription>
         </SheetHeader>
-        <div className="flex flex-col gap-5 px-4 pb-4" aria-live="polite">
+        <div className="flex flex-col gap-5 px-5 py-5" aria-live="polite">
           {error && <p className="text-destructive text-sm">{error}</p>}
           {!memories && !error && <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status"><Spinner aria-hidden="true" /> Loading memories…</p>}
           {memories?.length === 0 && (
-            <Empty className="border p-6 md:p-6">
+            <Empty className="bg-sunken/50 border border-dashed p-6 md:p-6">
               <EmptyHeader>
                 <EmptyMedia variant="icon"><Brain aria-hidden="true" /></EmptyMedia>
                 <EmptyTitle>No memories yet</EmptyTitle>
@@ -102,9 +104,9 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
             SECTIONS.map(({ kind, title }) => {
               const entries = shown.filter((m) => m.kind === kind);
               return entries.length > 0 ? (
-                <section key={kind} className="flex flex-col gap-2">
-                  <h2 className="text-sm font-semibold">{title}</h2>
-                  <ul className="flex flex-col gap-2">
+                <section key={kind} className="flex flex-col gap-1.5 [section+&]:border-t [section+&]:pt-4">
+                  <h2 className={EYEBROW}>{title}</h2>
+                  <ul className="flex flex-col gap-0.5">
                     {entries.map((memory) => (
                       <MemoryEntry
                         key={memory.id}
@@ -117,7 +119,11 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
                 </section>
               ) : null;
             })}
-          {memories && memories.length > 0 && <ExportVault />}
+          {memories && memories.length > 0 && (
+            <div className="border-t pt-4">
+              <ExportVault />
+            </div>
+          )}
         </div>
       </SheetContent>
     </Sheet>
@@ -140,9 +146,9 @@ function ImportedFilter({ filter, onFilter, count, onDeleted }: { filter: Filter
   };
   return (
     <div className="flex flex-col gap-2 text-sm">
-      <div className="flex flex-wrap gap-1" role="group" aria-label="Show memories">
+      <div className={SEGMENTED} role="group" aria-label="Show memories">
         {FILTERS.map(({ value, label }) => (
-          <Button key={value} type="button" size="sm" variant={filter === value ? "secondary" : "ghost"} aria-pressed={filter === value} onClick={() => onFilter(value)}>
+          <Button key={value} type="button" size="sm" variant="ghost" className={segment(filter === value)} aria-pressed={filter === value} onClick={() => onFilter(value)}>
             {label}
           </Button>
         ))}
@@ -208,7 +214,7 @@ function MemoryEntry({
   };
 
   return (
-    <li className="flex flex-col gap-2 rounded-lg border p-3 text-sm wrap-anywhere">
+    <li className="hover:bg-sunken focus-within:bg-sunken -mx-2.5 flex flex-col gap-1.5 rounded-lg px-2.5 py-2.5 text-[0.95rem] leading-snug wrap-anywhere transition-colors">
       {mode === "edit" ? (
         <form onSubmit={save} className="flex flex-col gap-2">
           <Field data-invalid={Boolean(error)}>
@@ -241,12 +247,12 @@ function MemoryEntry({
           {memory.held ? <p className="text-muted-foreground italic">Hidden until you answer the check in that session.</p> : <p>{memory.text}</p>}
           <div className="flex flex-wrap items-center gap-2">
             {!memory.held && (
-              <Badge variant="outline" className="max-w-full truncate" title={memory.source ? `${memory.source.importName}: ${memory.source.path}` : undefined}>
+              <span className="text-muted-foreground max-w-full truncate text-[0.8125rem]" title={memory.source ? `${memory.source.importName}: ${memory.source.path}` : undefined}>
                 {basisLabel(memory)}
-              </Badge>
+              </span>
             )}
             {memory.editedAt && <Badge variant="outline">Edited by you</Badge>}
-            <span className="text-muted-foreground text-xs">{new Date(memory.createdAt).toLocaleDateString()}</span>
+            <span className="text-muted-foreground font-mono text-[0.72rem]">{new Date(memory.createdAt).toLocaleDateString()}</span>
           </div>
           {mode === "confirm-delete" ? (
             <div className="flex flex-wrap items-center gap-2">
@@ -259,12 +265,13 @@ function MemoryEntry({
               </Button>
             </div>
           ) : (
-            <div className="flex gap-2">
+            <div className="flex gap-1.5">
               {!memory.held && (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
+                  className="h-7 bg-card dark:bg-card border-border-strong dark:border-border-strong hover:bg-sunken dark:hover:bg-sunken"
                   onClick={() => {
                     setDraft(memory.text ?? "");
                     setMode("edit");
@@ -273,7 +280,13 @@ function MemoryEntry({
                   Edit
                 </Button>
               )}
-              <Button type="button" variant="outline" size="sm" onClick={() => setMode("confirm-delete")}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 bg-card dark:bg-card border-border-strong dark:border-border-strong hover:bg-sunken dark:hover:bg-sunken"
+                onClick={() => setMode("confirm-delete")}
+              >
                 Delete
               </Button>
             </div>
