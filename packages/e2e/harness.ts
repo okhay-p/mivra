@@ -62,6 +62,19 @@ const syllabus = {
   known: [{ concept: "derivative", source: "test", note: "Answered correctly." }],
 };
 
+// Enough topics, with multi-line summaries and reasons, that the expanded syllabus has to scroll (#106).
+const longSyllabus = {
+  ...syllabus,
+  topics: Array.from({ length: 9 }, (_, i) => ({
+    title: `Long topic ${i + 1}: limits, derivatives and the machinery behind them`,
+    summary: "Distinguish the definition from the shortcut rules, then follow how each rule is derived from the limit, with short worked examples. ".repeat(2).trim(),
+    reason: "You answered the placement question correctly but said the reasoning behind it was still fuzzy, so this builds on that.",
+    requestedByLearner: i % 3 === 0,
+    concepts: [i === 0 ? "limit" : `long concept ${i}`],
+  })),
+  known: Array.from({ length: 4 }, (_, i) => ({ concept: `known concept ${i}`, source: "test" as const, note: "Answered correctly in the placement interview, quickly and confidently." })),
+};
+
 const longWord = "calculateMaximumSlidingWindowSumWithoutRecomputingEveryElement";
 // The longest value the trace schema allows.
 const longValue = "calculateMaximumWindowSu";
@@ -715,7 +728,7 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
     if (history.includes("placementcourse")) {
       return prompt.slice(lastUser).some((m) => m.role === "tool")
         ? { text: "Your syllabus is ready." }
-        : { tool: "write_syllabus", input: syllabus };
+        : { tool: "write_syllabus", input: history.includes("longsyllabus") ? longSyllabus : syllabus };
     }
     const result = /learnerResult\\*":\\*"([a-z ]+)/.exec(JSON.stringify(prompt))?.[1];
     return { text: `Lesson continued after ${result ?? "unknown"}.` };

@@ -186,3 +186,67 @@ test("a lesson can show a code walkthrough section, at 320px too and after a rel
   expect(code!.y + code!.height).toBeLessThanOrEqual(out!.y);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
 });
+
+test("a long expanded syllabus is its own scrolling panel, apart from the chat (#106)", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("textbox", { name: "Learning goal" }).fill(`Long plan placementcourse longsyllabus ${Date.now()}`);
+  await page.getByRole("button", { name: "Start" }).click();
+  await page.getByRole("region", { name: "Placement question: derivative" }).getByRole("button", { name: "True" }).click();
+  await page.getByRole("region", { name: "Placement question: limit" }).getByRole("button", { name: "Not sure" }).click();
+  await page.getByRole("region", { name: "Anything else to add" }).getByRole("button", { name: "Skip" }).click();
+  await expect(page.getByText("Your syllabus is ready.")).toBeVisible();
+
+  const course = page.getByRole("region", { name: "Course" });
+  const toggle = course.getByRole("button", { name: /Syllabus · 9 topics/ });
+  const panel = course.getByRole("region", { name: "Syllabus" });
+  const box = async (locator: ReturnType<typeof page.locator>) => (await locator.boundingBox())!;
+
+  /** The panel sits above `below` without overlapping it, scrolls, and every part of it can be scrolled to. */
+  const separate = async (below: ReturnType<typeof page.locator>) => {
+    await expect(panel).toBeVisible();
+    const [p, b] = [await box(panel), await box(below)];
+    expect(p.y + p.height).toBeLessThanOrEqual(b.y + 1);
+    expect(await panel.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    for (const last of [panel.getByRole("listitem").filter({ hasText: "Long topic 9" }), panel.getByText("known concept 3")]) {
+      await last.scrollIntoViewIfNeeded();
+      const l = await box(last);
+      const p2 = await box(panel);
+      expect(l.y).toBeGreaterThanOrEqual(p2.y - 1);
+      expect(l.y + l.height).toBeLessThanOrEqual(p2.y + p2.height + 1);
+    }
+    // The panel has a visible edge: its own border, not just the list's.
+    expect(await panel.evaluate((el) => getComputedStyle(el).borderBottomWidth)).not.toBe("0px");
+  };
+
+  // The interview: desktop, a short window (a laptop at about 120% zoom) and a phone.
+  for (const size of [{ width: 1280, height: 800 }, { width: 1067, height: 520 }, { width: 390, height: 700 }]) {
+    await page.setViewportSize(size);
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await separate(page.getByTestId("transcript"));
+    // The composer stays on screen below the conversation.
+    const composer = page.getByRole("textbox", { name: "Message" });
+    await expect(composer).toBeInViewport();
+    expect((await box(composer)).y).toBeGreaterThan((await box(panel)).y);
+  }
+
+  // The keyboard closes it, and the conversation gets its space back with its answers intact.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const before = (await box(page.getByTestId("transcript"))).height;
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(panel).toBeHidden();
+  expect((await box(page.getByTestId("transcript"))).height).toBeGreaterThan(before);
+  await expect(page.getByRole("region", { name: "Placement question: derivative" }).getByText("Correct.")).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+  // The lesson view keeps the same separation.
+  await course.getByRole("button", { name: "Start lesson 1" }).click();
+  await expect(page.getByRole("article", { name: "What a limit is" })).toBeVisible();
+  for (const size of [{ width: 1280, height: 800 }, { width: 1067, height: 520 }, { width: 390, height: 700 }]) {
+    await page.setViewportSize(size);
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+    await separate(page.getByTestId("lesson-scroll"));
+  }
+});
