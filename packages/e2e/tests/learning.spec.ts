@@ -647,6 +647,112 @@ test.describe("learning flow", () => {
     });
   });
 
+  test.describe("a code walkthrough", () => {
+    const card = (page: Page, name: RegExp = /A click on Counter/) => page.getByRole("region", { name });
+    const counter = (page: Page) => card(page).getByTestId("step-counter");
+    const highlighted = (page: Page) =>
+      expect.poll(() => card(page).getByTestId("code-line").evaluateAll((all) => all.flatMap((line, i) => (line.getAttribute("aria-current") === "true" ? [i + 1] : []))));
+    const variables = (page: Page) => expect.poll(() => card(page).getByTestId("walkthrough-variable").allTextContents());
+    const output = (page: Page) => card(page).getByTestId("walkthrough-output");
+    const box = (locator: Locator) => locator.evaluate((e) => e.getBoundingClientRect().toJSON() as DOMRect);
+
+    test("keeps code, state, output and explanation on one step, clears them, and survives a reload", async ({ page }) => {
+      await startSession(page);
+      const prompt = `counterwalk ${Date.now()}`;
+      await send(page, prompt);
+      await expect(page.getByText("Step through the renders.")).toBeVisible();
+      await expect(card(page)).toContainText("Illustrated walkthrough");
+      await expect(counter(page)).toHaveText("Step 1 of 4");
+      await highlighted(page).toEqual([2, 6]);
+      await variables(page).toEqual(["render.count= 0"]);
+      await expect(output(page)).toContainText("Count: 0");
+      // No rendered button: the output is text.
+      await expect(output(page).getByRole("button")).toHaveCount(0);
+      await expect(card(page).getByTestId("walkthrough-label")).toHaveText("Initial render.");
+
+      // Source on the left, state and output on the right.
+      const [code, state] = [await box(card(page).getByTestId("code-pane")), await box(card(page).getByTestId("walkthrough-variables"))];
+      expect(code.right).toBeLessThan(state.left);
+
+      await card(page).getByRole("button", { name: "Next" }).click();
+      await highlighted(page).toEqual([3, 4]);
+      await variables(page).toEqual(["handler.count= 0", "queued update= count + 1 = 1"]);
+      await expect(output(page)).toContainText("Count: 0");
+      await expect(card(page).getByTestId("walkthrough-status")).toContainText("It still sees count as 0");
+
+      await card(page).focus();
+      await page.keyboard.press("ArrowRight");
+      await expect(counter(page)).toHaveText("Step 3 of 4");
+      await highlighted(page).toEqual([]);
+      await expect(card(page).getByText("No variables at this step")).toBeVisible();
+      await expect(output(page)).toHaveText(/No output yet/);
+      await expect(card(page).getByTestId("walkthrough-label")).toHaveCount(0);
+      await page.keyboard.press("ArrowLeft");
+      await highlighted(page).toEqual([3, 4]);
+      await variables(page).toEqual(["handler.count= 0", "queued update= count + 1 = 1"]);
+      await expect(output(page)).toContainText("Count: 0");
+
+      await card(page).getByRole("button", { name: "Play" }).click();
+      await expect(counter(page)).toHaveText("Step 4 of 4", { timeout: 10_000 });
+      await variables(page).toEqual(["render.count= 1"]);
+      await expect(output(page)).toContainText("Count: 1");
+
+      await page.reload();
+      await page.getByRole("button", { name: prompt }).click();
+      await expect(counter(page)).toHaveText("Step 1 of 4");
+      await expect(output(page)).toContainText("Count: 0");
+    });
+
+    test("stacks at 320px, keeps long lines in their panes and shows markup and dollars as text", async ({ page }) => {
+      await startSession(page);
+      await send(page, `longwalk ${Date.now()}`);
+      await expect(page.getByText("Scroll the long line.")).toBeVisible();
+      await page.setViewportSize({ width: 320, height: 800 });
+      const long = card(page, /Printing a long line/);
+      const [code, state, out, whole] = [
+        await box(long.getByTestId("code-pane")),
+        await box(long.getByTestId("walkthrough-variables")),
+        await box(long.getByTestId("walkthrough-output")),
+        await box(long),
+      ];
+      expect(code.bottom).toBeLessThanOrEqual(state.top);
+      expect(state.bottom).toBeLessThanOrEqual(out.top);
+      for (const pane of [code, state, out]) expect(pane.right).toBeLessThanOrEqual(whole.right);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+
+      await expect(long.getByTestId("code-line").first()).toContainText('const price = "$5 and $10";');
+      await expect(long.getByTestId("output-text")).toContainText("<b>$5 and $10</b>");
+      await expect(long.locator("b, .katex")).toHaveCount(0);
+    });
+
+    test("a prediction comes first; the walkthrough follows the answer and both survive a reload", async ({ page }) => {
+      await startSession(page);
+      const prompt = `predictcounter ${Date.now()}`;
+      const messages = page.waitForResponse((r) => r.url().endsWith("/chat"));
+      await send(page, prompt);
+      const prediction = check(page);
+      await expect(prediction).toContainText("After one click, what does the button show?");
+      // The snippet is in the reply as a code block, before the check; nothing explains it yet.
+      await expect(page.locator('[data-message-role="assistant"] pre').first()).toContainText("setCount(count + 1);");
+      await expect(card(page)).toHaveCount(0);
+      const sse = await (await messages).text();
+      for (const secret of ["SECRET-FEEDBACK", "SECRET-EXPLANATION", "correctOptionIndex"]) expect(sse).not.toContain(secret);
+
+      await option(page, /^Count: 0/).click();
+      await expect(prediction.getByText("SECRET-FEEDBACK: the click asks for a new render.")).toBeVisible();
+      await expect(page.getByText("That was incorrect. Here's how it runs.")).toBeVisible();
+      await expect(card(page)).toBeVisible();
+      await expect(page.getByText("Step through it to see why.")).toBeVisible();
+      await expect(card(page).getByTestId("code-line").nth(3)).toContainText("setCount(count + 1);");
+
+      await page.reload();
+      await page.getByRole("button", { name: prompt }).click();
+      await expect(check(page).getByText("Not quite.")).toBeVisible();
+      await expect(card(page)).toHaveCount(1);
+      await expect(counter(page)).toHaveText("Step 1 of 4");
+    });
+  });
+
   test("shows a safe error when the model fails, and the session still works", async ({ page }) => {
     await startSession(page);
     await send(page, "fail now");

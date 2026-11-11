@@ -153,3 +153,29 @@ export const induction = {
     ],
   },
 } satisfies ArtifactView;
+
+export const walkthrough = {
+  id: "art-walkthrough",
+  createdAt: "2026-11-11T00:00:00.000Z",
+  kind: "code_walkthrough",
+  version: 1,
+  spec: {
+    title: "A click on Counter",
+    code: {
+      language: "JSX",
+      source: "function Counter() {\n  const [count, setCount] = useState(0);\n  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;\n}",
+    },
+    steps: [
+      { label: "Initial render", explanation: "count starts at 0.", lines: [2, 3], variables: [{ name: "render.count", value: 0 }], output: "Count: 0" },
+      {
+        label: "Click handler",
+        explanation: "The handler still sees 0 and queues 1.",
+        lines: [3],
+        variables: [{ name: "handler.count", value: 0 }, { name: "queued update", value: "count + 1" }],
+        output: "Count: 0",
+      },
+      { explanation: "Nothing is on screen between renders.", variables: [], output: "" },
+      { label: "Render 2", explanation: "The next render reads 1.", lines: [2, 3], variables: [{ name: "render.count", value: 1 }], output: "Count: 1" },
+    ],
+  },
+} satisfies ArtifactView;

@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
-import { lessonSections, runs } from "../src/db/schema.js";
+import { artifacts, lessonSections, runs } from "../src/db/schema.js";
 import { createSessionStore } from "../src/store/session-store.js";
 
 // Whole lessons generate through the app here, which is slow when the machine is busy.
@@ -236,6 +236,30 @@ describe("the tutor drawer", () => {
     steps.push({ toolCall: { name: "change_lesson", input: { reason: "x", operations: [{ op: "insert_artifact", afterSectionId: null, title: "Old", artifactId: earlier }] } } }, { text: "no" });
     await chat(app, db, session.id, "Add that card", lessonId);
     expect((await lesson(app, lessonId)).lesson.version).toBe(1);
+  });
+
+  it("inserts a code walkthrough made in the same reply as a lesson section", async () => {
+    const { app, db, session, lessonId, steps } = await setup();
+    const walkthrough = {
+      title: "Calling double(2)",
+      code: { language: "Python", source: "def double(n):\n    return n * 2" },
+      steps: [{ label: "Return", explanation: "It returns 4.", lines: [2], variables: [{ name: "n", value: 2 }], output: "4" }],
+    };
+    steps.push(
+      { toolCall: { name: "show_code_walkthrough", input: walkthrough } },
+      {
+        // Read when the model asks for it, once the walkthrough above has its id.
+        get toolCall() {
+          const id = db.select().from(artifacts).all().find((a) => a.kind === "code_walkthrough")!.id;
+          return { name: "change_lesson", input: { reason: "Add a walkthrough", operations: [{ op: "insert_artifact", afterSectionId: null, title: "Walk", artifactId: id }] } };
+        },
+      },
+      { text: "Added." },
+    );
+    await chat(app, db, session.id, "Add a walkthrough of double", lessonId);
+    const after = (await lesson(app, lessonId)).lesson;
+    expect(after.version).toBe(2);
+    expect(after.sections[0]).toMatchObject({ title: "Walk", kind: "artifact", artifact: { kind: "code_walkthrough", spec: walkthrough } });
   });
 
   it("can't change a finished lesson, and Add to lesson refuses too", async () => {

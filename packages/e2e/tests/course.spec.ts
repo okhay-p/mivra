@@ -156,3 +156,33 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(page.getByRole("article", { name: "The chain rule" })).toBeVisible();
   await expect(page.getByText("You're looking at an earlier lesson.")).toHaveCount(0);
 });
+
+test("a lesson can show a code walkthrough section, at 320px too and after a reload", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("textbox", { name: "Learning goal" }).fill(`React state placementcourse lessonwalkthrough ${Date.now()}`);
+  await page.getByRole("button", { name: "Start" }).click();
+  await page.getByRole("region", { name: "Placement question: derivative" }).getByRole("button", { name: "True" }).click();
+  await page.getByRole("region", { name: "Placement question: limit" }).getByRole("button", { name: "Not sure" }).click();
+  await page.getByRole("region", { name: "Anything else to add" }).getByRole("button", { name: "Skip" }).click();
+  await expect(page.getByText("Your syllabus is ready.")).toBeVisible();
+  await page.getByRole("region", { name: "Course" }).getByRole("button", { name: "Start lesson 1" }).click();
+
+  const lesson = page.getByRole("article", { name: "What a limit is" });
+  const walk = lesson.getByRole("region", { name: /A click on Counter/ });
+  await expect(walk).toContainText("Illustrated walkthrough");
+  await expect(walk.getByTestId("step-counter")).toHaveText("Step 1 of 4");
+  await expect(walk.getByTestId("walkthrough-output")).toContainText("Count: 0");
+  await walk.getByRole("button", { name: "Next" }).click();
+  await expect(walk.getByTestId("walkthrough-variable")).toHaveText(["handler.count= 0", "queued update= count + 1 = 1"]);
+  // Stepping isn't answering: the lesson still waits for its one check.
+  await expect(lesson.getByRole("button", { name: "Finish lesson" })).toBeDisabled();
+
+  await page.reload();
+  // Each worker has its own database, so the newest course is this one.
+  await page.locator("[data-session-id]").filter({ hasText: "Calculus for ML" }).first().click();
+  await expect(walk.getByTestId("step-counter")).toHaveText("Step 1 of 4");
+  await page.setViewportSize({ width: 320, height: 800 });
+  const [code, out] = [await walk.getByTestId("code-pane").boundingBox(), await walk.getByTestId("walkthrough-output").boundingBox()];
+  expect(code!.y + code!.height).toBeLessThanOrEqual(out!.y);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320);
+});

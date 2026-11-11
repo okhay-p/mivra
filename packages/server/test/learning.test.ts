@@ -569,6 +569,126 @@ describe("algorithm_trace through the agent", () => {
   });
 });
 
+const walkthrough = {
+  title: "A click on Counter",
+  code: {
+    language: "JSX",
+    source: "function Counter() {\n  const [count, setCount] = useState(0);\n  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;\n}",
+  },
+  steps: [
+    { label: "Initial render", explanation: "count starts at 0.", lines: [2, 3], variables: [{ name: "render.count", value: 0 }], output: "Count: 0" },
+    { label: "Click handler", explanation: "The handler still sees 0 and queues 1.", lines: [3], variables: [{ name: "handler.count", value: 0 }, { name: "queued update", value: "count + 1" }], output: "Count: 0" },
+    { label: "Render 2", explanation: "The next render reads 1.", lines: [2, 3], variables: [{ name: "render.count", value: 1 }], output: "Count: 1" },
+  ],
+};
+
+const artifactParts = (messagesText: string) =>
+  (JSON.parse(messagesText) as UIMessage[]).flatMap((m) => m.parts).flatMap((p) => (p.type === "data-artifact" ? [ArtifactView.parse((p as { data: unknown }).data)] : []));
+
+describe("code_walkthrough through the agent", () => {
+  it("streams, stores and reloads the full view, without the raw tool call", async () => {
+    const { app, db, model } = setup([{ toolCall: { name: "show_code_walkthrough", input: walkthrough } }, { text: "Step through it." }]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "how does a React counter update?");
+    expect(sse).toContain('"kind":"code_walkthrough"');
+    expect(sse).not.toContain("show_code_walkthrough");
+    expect(db.select().from(artifacts).get()).toMatchObject({ kind: "code_walkthrough", version: 1, spec: walkthrough });
+    expect(artifactParts(await messagesJson(app, sessionId))).toEqual([expect.objectContaining({ kind: "code_walkthrough", version: 1, spec: walkthrough })]);
+    const described = Object.fromEntries((model.doStreamCalls[0]!.tools ?? []).map((t) => [t.name, "description" in t ? t.description : ""]));
+    expect(described.show_code_walkthrough).toMatch(/isn't about a sequence/);
+  });
+
+  it("is explanatory only: it can't be answered and records no attempt or evidence", async () => {
+    const { app, db } = setup([{ toolCall: { name: "show_code_walkthrough", input: walkthrough } }, { text: "Step through it." }]);
+    const sessionId = await newSession(app);
+    await turn(app, db, sessionId, "show me");
+    const res = await answer(app, db.select().from(artifacts).get()!.id, { answer: { optionIndex: 0 } });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(db.select().from(attempts).all()).toEqual([]);
+    expect(db.select().from(runs).all()).toHaveLength(1); // No continuation either.
+  });
+
+  it("stores nothing for a step highlighting a line outside the code", async () => {
+    const bad = { ...walkthrough, steps: [{ ...walkthrough.steps[0]!, lines: [9] }] };
+    const { app, db } = setup([{ toolCall: { name: "show_code_walkthrough", input: bad } }, { text: "Let me fix that." }]);
+    const sse = await turn(app, db, await newSession(app), "show me");
+    expect(db.select().from(artifacts).all()).toEqual([]);
+    expect(sse).not.toContain("data-artifact");
+  });
+});
+
+describe("prediction before walkthrough (#99)", () => {
+  const snippet = "```jsx\nfunction Counter() {\n  const [count, setCount] = useState(0);\n  return <button onClick={() => setCount(count + 1)}>Count: {count}</button>;\n}\n```";
+  const prediction = {
+    concept: "React state updates",
+    question: "After one click, what does the button show?",
+    options: [{ text: "Count: 0", feedback: "SECRET-FEEDBACK: the click queues a re-render." }, { text: "Count: 1" }, { text: "Count: 2" }],
+    correctOptionIndex: 1,
+    explanation: "SECRET-EXPLANATION: the next render reads count as 1.",
+  };
+
+  it("asks first, then explains the same snippet with a walkthrough once the graded result comes back", async () => {
+    const { app, db, model } = setup([
+      {
+        raw: [
+          { type: "text-start", id: "t" },
+          { type: "text-delta", id: "t", delta: `Here's a counter:\n\n${snippet}\n\nWhat do you predict?` },
+          { type: "text-end", id: "t" },
+          { type: "tool-call", toolCallId: "predict", toolName: "ask_multiple_choice", input: JSON.stringify(prediction) },
+        ],
+      },
+      { text: "" },
+      {
+        raw: [
+          { type: "text-start", id: "u" },
+          { type: "text-delta", id: "u", delta: "Not quite: here's how it runs." },
+          { type: "text-end", id: "u" },
+          { type: "tool-call", toolCallId: "walk", toolName: "show_code_walkthrough", input: JSON.stringify(walkthrough) },
+        ],
+      },
+      { text: "Step through it." },
+    ]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "teach me useState");
+
+    // The instructions give the prediction exception to teach-then-check and say what follows the answer.
+    const system = JSON.stringify(model.doStreamCalls[0]!.prompt.filter((m) => m.role === "system"));
+    expect(system).toContain("Code prediction is the one exception to teaching before you check");
+    expect(system).toContain("explain the same snippet with show_code_walkthrough");
+
+    // The first completed reply: the snippet and an unanswered check, no walkthrough and no answer key.
+    expect(sse).toContain("const [count, setCount] = useState(0);");
+    for (const secret of SECRETS) expect(sse).not.toContain(secret);
+    let views = artifactParts(await messagesJson(app, sessionId));
+    expect(views.map((v) => v.kind)).toEqual(["multiple_choice"]);
+    expect(views[0]).not.toHaveProperty("latestAttempt");
+    for (const secret of SECRETS) expect(JSON.stringify(views)).not.toContain(secret);
+
+    const check = db.select().from(artifacts).get()!;
+    const res = await answer(app, check.id, { answer: { optionIndex: 0 } });
+    expect(res.status).toBe(201);
+    expect(JSON.stringify(await res.json())).toContain("SECRET-FEEDBACK");
+    await vi.waitFor(() => expect(db.select().from(runs).all().map((r) => r.status)).toEqual(["completed", "completed"]));
+
+    // The continuation sees the recorded result, then shows the walkthrough.
+    const continued = JSON.stringify(model.doStreamCalls[2]!.prompt);
+    expect(continued).toContain("all checks in the preceding reply have been answered");
+    expect(continued).toContain('"learnerResult":"incorrect","learnerChose":{"optionIndex":0,"text":"Count: 0"}');
+    expect(db.select().from(attempts).all()).toEqual([expect.objectContaining({ correct: false, concept: prediction.concept })]);
+
+    // Reload keeps the graded check and the walkthrough, in order.
+    views = artifactParts(await messagesJson(app, sessionId));
+    expect(views.map((v) => v.kind)).toEqual(["multiple_choice", "code_walkthrough"]);
+    expect(views[0]).toHaveProperty("latestAttempt.grade.correct", false);
+
+    // A second answer is refused, so no second follow-up runs.
+    expect((await answer(app, check.id, { answer: { optionIndex: 1 } })).status).toBe(409);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(db.select().from(runs).all()).toHaveLength(2);
+    expect(db.select().from(artifacts).all().filter((a) => a.kind === "code_walkthrough")).toHaveLength(1);
+  });
+});
+
 describe("set_diagram through the agent", () => {
   const diagram = {
     title: "Overlap",

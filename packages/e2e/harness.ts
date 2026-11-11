@@ -181,7 +181,8 @@ const twoSets = {
 
 type Step =
   | { controlled: "cancelstream" | "cancelthinking" | "liveThinking" | "continuationLive" | "continuationFailure" }
-  | { tool: string; input: unknown; hold?: boolean }
+  /** `text`, if any, is written before the call in the same model step, like a reply that leads into a check. */
+  | { tool: string; input: unknown; hold?: boolean; text?: string }
   | { text: string; hold?: boolean; stream?: boolean }
   | { error: string; hold?: boolean };
 
@@ -462,6 +463,53 @@ const codeTrace = {
   ],
 };
 const tabCodeTrace = { ...codeTrace, title: "Code that scrolls", steps: [codeTrace.steps[1]!, codeTrace.steps[2]!] };
+
+const counterSource = [
+  "function Counter() {",
+  "  const [count, setCount] = useState(0);",
+  "  function handleClick() {",
+  "    setCount(count + 1);",
+  "  }",
+  "  return <button onClick={handleClick}>Count: {count}</button>;",
+  "}",
+].join("\n");
+/** #98's React counter: the handler still sees its render's count, and the new count shows only at the next render. */
+const counterWalkthrough = {
+  title: "A click on Counter",
+  code: { language: "JSX", source: counterSource },
+  steps: [
+    { label: "Initial render", explanation: "The first render reads count as 0.", lines: [2, 6], variables: [{ name: "render.count", value: 0 }], output: "Count: 0" },
+    {
+      label: "Click handler",
+      explanation: "The click runs handleClick. It still sees count as 0 and queues an update to 1.",
+      lines: [3, 4],
+      variables: [{ name: "handler.count", value: 0 }, { name: "queued update", value: "count + 1 = 1" }],
+      output: "Count: 0",
+    },
+    { explanation: "Between renders nothing is drawn yet.", variables: [], output: "" },
+    { label: "Render 2", explanation: "React renders Counter again, and now count is 1.", lines: [2, 6], variables: [{ name: "render.count", value: 1 }], output: "Count: 1" },
+  ],
+};
+/** Long source and output lines, so both panes scroll sideways, and text that looks like markup or maths. */
+const wideWalkthrough = {
+  title: "Printing a long line",
+  code: {
+    language: "JavaScript",
+    source: `const price = "$5 and $10";\nconsole.log("<b>" + price + "</b> ${"=".repeat(70)}");`,
+  },
+  steps: [
+    { label: "Print", explanation: "It prints one long line.", lines: [1, 2], variables: [{ name: "price", value: "$5 and $10" }], output: `<b>$5 and $10</b> ${"=".repeat(100)}` },
+    { label: "Done", explanation: "The program ends; the output stays.", variables: [], output: `<b>$5 and $10</b> ${"=".repeat(100)}` },
+  ],
+};
+/** #99's prediction: a snippet in the reply, then a check on what it displays. */
+const counterPrediction = {
+  concept: "React state updates",
+  question: "After one click, what does the button show?",
+  options: [{ text: "Count: 0", feedback: "SECRET-FEEDBACK: the click asks for a new render." }, { text: "Count: 1" }, { text: "Count: 2" }],
+  correctOptionIndex: 1,
+  explanation: "SECRET-EXPLANATION: the next render reads count as 1.",
+};
 const tabTable = {
   title: "Long cells",
   columns: [unbroken("W")],
@@ -489,6 +537,12 @@ const SCRIPTS: Record<string, Step[]> = {
   tabtrace: [{ tool: "show_algorithm_trace", input: tabTrace }, { text: "Tab through the trace." }],
   tabcodetrace: [{ tool: "show_algorithm_trace", input: tabCodeTrace }, { text: "Tab through the code." }],
   codetrace: [{ tool: "show_algorithm_trace", input: codeTrace }, { text: "Follow the code." }],
+  counterwalk: [{ tool: "show_code_walkthrough", input: counterWalkthrough }, { text: "Step through the renders." }],
+  longwalk: [{ tool: "show_code_walkthrough", input: wideWalkthrough }, { text: "Scroll the long line." }],
+  predictcounter: [
+    { text: `Here's a counter:\n\n\`\`\`jsx\n${counterSource}\n\`\`\`\n\nPredict first.`, tool: "ask_multiple_choice", input: counterPrediction },
+    { text: "" },
+  ],
   longtrace: [{ tool: "show_algorithm_trace", input: longTrace }, { text: "Step through all of it." }],
   tabtable: [{ tool: "show_table", input: tabTable }, { text: "Tab through the table." }],
   widegraph: [{ tool: "show_graph", input: graphWide }, { text: "Scroll the long graph." }],
@@ -591,6 +645,23 @@ const LESSON_STEPS: Step[] = [
   { text: "" },
 ];
 
+/** A first lesson with a code walkthrough section, for a course whose goal says lessonwalkthrough. */
+const LESSON_WALKTHROUGH_STEPS: Step[] = [
+  {
+    tool: "outline_lesson",
+    input: {
+      title: "What a limit is",
+      sections: [
+        { title: "A counter", kind: "code_walkthrough", purpose: "Show state across renders." },
+        { title: "Quick check", kind: "multiple_choice", purpose: "Check the idea." },
+      ],
+    },
+  },
+  { tool: "show_code_walkthrough", input: counterWalkthrough },
+  LESSON_STEPS[2]!,
+  { text: "" },
+];
+
 function nextStep(prompt: PromptMessage[], effort?: string): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
   // Distilling imported notes (ADR-014): a concept and a known memory per note, named by its title. A note saying
@@ -617,6 +688,7 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
     // being written; "lessonbroken" then fails it instead of writing it.
     if (done === 0 && system.includes("lessonbroken")) return { error: "PROVIDER-LESSON-FAILURE", hold: true };
     if (done === 0 && system.includes("lessonhold")) return { ...LESSON_STEPS[0]!, hold: true };
+    if (!system.includes("previous_lesson") && system.includes("lessonwalkthrough")) return LESSON_WALKTHROUGH_STEPS[done] ?? { text: "" };
     if (!system.includes("previous_lesson")) return LESSON_STEPS[done] ?? { text: "" };
     // The next lesson revisits the missed idea and, since the learner struggled, adapts the plan once.
     const revisited = /"sectionId":"([^"]+)","title":"The idea"/.exec(system)?.[1] ?? "missing";
@@ -634,6 +706,12 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
     if (history.includes("continuationstop")) return { controlled: "cancelstream" };
     if (history.includes("continuationbroken")) return { controlled: "continuationFailure" };
     if (history.includes("continuationlive")) return { controlled: "continuationLive" };
+    if (history.includes("predictcounter")) {
+      const result = /learnerResult\\*":\\*"([a-z ]+)/.exec(JSON.stringify(prompt))?.[1];
+      return prompt.slice(lastUser).some((m) => m.role === "tool")
+        ? { text: "Step through it to see why." }
+        : { text: `That was ${result ?? "unknown"}. Here's how it runs.`, tool: "show_code_walkthrough", input: counterWalkthrough };
+    }
     if (history.includes("placementcourse")) {
       return prompt.slice(lastUser).some((m) => m.role === "tool")
         ? { text: "Your syllabus is ready." }
@@ -761,6 +839,9 @@ const model = new MockLanguageModelV4({
     const chunks: object[] =
       "tool" in step
         ? [
+            ...(step.text
+              ? [{ type: "text-start" as const, id: "t" }, { type: "text-delta" as const, id: "t", delta: step.text }, { type: "text-end" as const, id: "t" }]
+              : []),
             { type: "tool-call" as const, toolCallId: crypto.randomUUID(), toolName: step.tool, input: JSON.stringify(step.input) },
             { type: "finish" as const, finishReason: { unified: "tool-calls" as const, raw: "tool_calls" }, usage },
           ]
