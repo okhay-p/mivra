@@ -342,7 +342,7 @@ function SessionSidebar({
           </SidebarGroup>
         ))}
       </SidebarContent>
-      <SidebarFooter>
+      <SidebarFooter className="border-t border-sidebar-border">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -682,15 +682,26 @@ function CourseSession(props: SessionProps) {
 }
 
 function SessionLoader({ sessionId, onReply, ...props }: SessionProps) {
-  const [initial, setInitial] = useState<UIMessage[]>();
+  // A session this tab has just created (from a draft or a course) has nothing to load yet, so its chat opens
+  // at once and sends the first message, rather than leaving a blank page for a round trip on a slow connection.
+  const [initial, setInitial] = useState<UIMessage[] | undefined>(() => (props.start ? [] : undefined));
   const [error, setError] = useState<string>();
 
   useEffect(() => {
+    if (initial) return;
     void loadMessages(sessionId).then((result) => (result.ok ? setInitial(result.messages) : setError(result.error)));
+    // Loads once per session; `initial` is only read to skip a session that started empty.
   }, [sessionId]);
 
   if (error) return <Notice error>Couldn't load this session: {error}</Notice>;
-  return initial ? <Chat sessionId={sessionId} initialMessages={initial} onReply={onReply} {...props} /> : null;
+  if (!initial) {
+    return (
+      <div className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm" role="status">
+        <Spinner aria-hidden="true" /> Loading the session…
+      </div>
+    );
+  }
+  return <Chat sessionId={sessionId} initialMessages={initial} onReply={onReply} {...props} />;
 }
 
 function Chat({

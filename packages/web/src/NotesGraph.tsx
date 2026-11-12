@@ -188,6 +188,13 @@ export function NotesGraph({ importId: initialImport }: { importId: string }) {
         <NoteFinder importId={importId} onPick={(note) => centreOn(note.id)} />
       </div>
       <GraphStatus view={view} loading={state.loading || laidOut.pending} error={state.error} importName={importName} />
+      {!laidOut.drawn && !state.error && (state.loading || laidOut.pending) && (
+        // A large vault takes a few seconds to lay out, so the empty canvas says so (the status line announces it).
+        <div aria-hidden className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
+          <Spinner />
+          Drawing the graph…
+        </div>
+      )}
       {laidOut.drawn && (
         <NotesGraphDrawing view={laidOut.drawn.view} layout={laidOut.drawn.layout} selected={selected} onSelect={setSelected} onActivate={onActivate} />
       )}

@@ -425,8 +425,8 @@ function SidebarGroupAction({
       data-sidebar="group-action"
       className={cn(
         "absolute top-3.5 right-3 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-transform hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
-        // Increases the hit area of the button on mobile.
-        "after:absolute after:-inset-2 md:after:hidden",
+        // Increases the hit area of the button on mobile and on touch screens.
+        "after:absolute after:-inset-2 md:pointer-fine:after:hidden",
         "group-data-[collapsible=icon]:hidden",
         className
       )}
@@ -530,13 +530,18 @@ function SidebarMenuButton({
     }
   }
 
+  // The tooltip only shows on the collapsed desktop rail. Elsewhere it's kept closed, not just hidden: an open but
+  // hidden tooltip is still a layer, so focusing a button (as opening the mobile sheet does) would make the first
+  // Escape close that invisible tooltip instead of the sheet.
+  const hidden = state !== "collapsed" || isMobile
+
   return (
-    <Tooltip>
+    <Tooltip open={hidden ? false : undefined}>
       <TooltipTrigger asChild>{button}</TooltipTrigger>
       <TooltipContent
         side="right"
         align="center"
-        hidden={state !== "collapsed" || isMobile}
+        hidden={hidden}
         {...tooltip}
       />
     </Tooltip>
@@ -560,14 +565,14 @@ function SidebarMenuAction({
       data-sidebar="menu-action"
       className={cn(
         "absolute top-1.5 right-1 flex aspect-square w-5 items-center justify-center rounded-md p-0 text-sidebar-foreground ring-sidebar-ring outline-hidden transition-transform peer-hover/menu-button:text-sidebar-accent-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0",
-        // Increases the hit area of the button on mobile.
-        "after:absolute after:-inset-2 md:after:hidden",
+        // Increases the hit area of the button on mobile and on touch screens.
+        "after:absolute after:-inset-2 md:pointer-fine:after:hidden",
         "peer-data-[size=sm]/menu-button:top-1",
         "peer-data-[size=default]/menu-button:top-1.5",
         "peer-data-[size=lg]/menu-button:top-2.5",
         "group-data-[collapsible=icon]:hidden",
         showOnHover &&
-          "group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 peer-data-[active=true]/menu-button:text-sidebar-accent-foreground data-[state=open]:opacity-100 md:opacity-0",
+          "group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 peer-data-[active=true]/menu-button:text-sidebar-accent-foreground data-[state=open]:opacity-100 md:pointer-fine:opacity-0",
         className
       )}
       {...props}

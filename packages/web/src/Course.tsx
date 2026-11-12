@@ -50,7 +50,7 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
         <FieldLabel htmlFor={goalId} className={EYEBROW}>
           Learning goal
         </FieldLabel>
-        <div className="flex gap-2 max-[360px]:flex-col">
+        <div className="flex gap-2 max-[480px]:flex-col">
           <Input
             id={goalId}
             aria-describedby={`${goalId}-description${error ? ` ${goalId}-error` : ""}`}
