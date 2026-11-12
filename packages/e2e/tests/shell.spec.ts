@@ -125,6 +125,37 @@ test.describe("sidebar", () => {
     await expect(sheet).toHaveCount(0);
     await expect(page.getByText(/The server says/)).toBeVisible();
   });
+
+  test("closes with one Escape on mobile", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    const sheet = page.locator('[data-mobile="true"]');
+    await page.getByRole("main").getByRole("button", { name: "Toggle Sidebar" }).click();
+    await expect(sheet).toBeVisible();
+    // Opening it focuses its first button, whose tooltip (shown only on the collapsed desktop rail) once took this Escape.
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+  });
+});
+
+test.describe("on a touch screen", () => {
+  test.use({ hasTouch: true, viewport: { width: 768, height: 1024 } });
+
+  test("a session's actions are always shown, with room to tap them", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "New session" }).first().click();
+    const prompt = `touch ${Date.now()}`;
+    await page.getByRole("textbox", { name: "Message" }).fill(prompt);
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByText(/The server says/)).toBeVisible();
+    await page.getByRole("button", { name: "New session" }).first().click();
+
+    // There's no hover to reveal them, so they show on every session, not just the open one.
+    const actions = page.getByRole("listitem").filter({ has: page.getByRole("button", { name: prompt }) }).getByRole("button", { name: "Session actions" });
+    await expect(actions).toHaveCSS("opacity", "1");
+    const hitArea = await actions.evaluate((e) => getComputedStyle(e, "::after").display);
+    expect(hitArea).not.toBe("none");
+  });
 });
 
 test.describe("narrow screens", () => {

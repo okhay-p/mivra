@@ -17,7 +17,12 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- Shown until the app's script arrives, which takes a while on a slow connection; React replaces it. -->
+      <p role="status" style="display: grid; place-items: center; min-height: 100dvh; margin: 0; font-family: system-ui, sans-serif; color: var(--muted-foreground)">
+        Loading Mivra…
+      </p>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
