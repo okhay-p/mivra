@@ -22,6 +22,10 @@ Files use four digits (`0010-*.md`); the code cites them as `ADR-010`. The next 
 - [ADR-014](0014-knowledge-graph-and-obsidian-import.md): knowledge graph (notes, links, tags, concept edges) in SQLite, and Obsidian vault import into the global memory
 - [ADR-015](0015-sign-in-with-chatgpt.md): sign in with ChatGPT through OpenAI's open-source route, as a provider beside the API keys
 
+## Proposed
+
+- [ADR-016](0016-code-exercises-and-project-courses.md): code exercises in the browser (JavaScript in QuickJS, Python in Pyodide), and project courses checked in the learner's own repo with `mivra check`
+
 ## Project scope
 
 - Name: Mivra.
