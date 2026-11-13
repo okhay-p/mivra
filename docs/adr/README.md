@@ -33,9 +33,9 @@ Files use four digits (`0010-*.md`); the code cites them as `ADR-010`. The next 
 
 ## Still open
 
-- **Supporting libraries:** pnpm, Tailwind and Vitest are in use. TanStack Router/Query and visualization libraries remain proposals on [Foundation — Tech Stack & Deployment](https://app.notion.com/p/408fb102b9b6811b9f1ffc20fb46c928) (Notion).
-- **SQLite operations:** backups beyond the automatic copy made before migrations (ADR-013), and schema versioning. See [Foundation — Local-First Storage & Cloud Sync](https://app.notion.com/p/408fb102b9b681c5b636d60cdfd891d7) (Notion).
-- **Plugin system:** isolation and permissions beyond ADR-007's in-process trusted plugins. See [Foundation — Extension & Plugin API Research](https://app.notion.com/p/408fb102b9b681138484e219ea70934d) (Notion).
+- **Supporting libraries:** pnpm, Tailwind and Vitest are in use. TanStack Router/Query and visualization libraries remain proposals.
+- **SQLite operations:** backups beyond the automatic copy made before migrations (ADR-013), and schema versioning.
+- **Plugin system:** isolation and permissions beyond ADR-007's in-process trusted plugins.
 - **Agent runtime:** single agent + tools vs specialized roles.
 
 ## Exploratory (not commitments)

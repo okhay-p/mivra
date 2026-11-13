@@ -13,4 +13,4 @@ date: 29 October 2026
 
 **SQLite driver (added 29 October 2026):** better-sqlite3 under Drizzle — mature and fast; needs a native rebuild for Electron (@electron/rebuild). node:sqlite can replace it later through Drizzle once stable, without changing queries.
 
-**Still open:** supporting libraries (pnpm workspaces, TanStack Router/Query, Tailwind, visualization libraries, Vitest) remain proposals on [Foundation — Tech Stack & Deployment](https://app.notion.com/p/408fb102b9b6811b9f1ffc20fb46c928) (Notion).
+**Still open:** supporting libraries (pnpm workspaces, TanStack Router/Query, Tailwind, visualization libraries, Vitest) remain proposals.

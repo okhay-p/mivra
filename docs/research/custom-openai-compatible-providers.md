@@ -88,4 +88,4 @@ Revisit only after a real supported service has a valuable separate catalog that
 - Decide initial metadata overrides and handling of changed endpoints under the same provider ID, including replay/provenance implications. Provider IDs distinguish services, but an edited destination may have different model behavior under the same model ID.
 - Confirm Go's suitability for learning traffic and required headers. No paid inference, authenticated DeepSeek call, entitlement check, or end-to-end Mivra integration test was performed.
 - Compared current official docs and pinned source, not installed-release behavior for every platform. Continue has multiple request paths; Cline's inspected paths are the VS Code UI/controller and SDK transport. Local discovery adapters and provider-specific rich metadata should not be generalized to all compatible services.
-- Only this Markdown note was added. No tests were run for this docs-only research; no implementation, issue changes, PR, or Notion updates were made.
+- Only this Markdown note was added. No tests were run for this docs-only research; no implementation, issue changes or PR were made.
