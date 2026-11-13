@@ -114,12 +114,12 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     },
 
     /** Starts a course in a new session of its own, titled after the goal. */
-    createCourse(goal: string): { course: CourseRow; session: SessionRow } {
+    createCourse(goal: string, kind: CourseRow["kind"] = "lessons"): { course: CourseRow; session: SessionRow } {
       return db.transaction((tx) => {
         const now = clock();
         const session = { id: randomUUID(), title: goal.trim().slice(0, 60), titleSetByLearner: false, createdAt: now, updatedAt: now };
         tx.insert(sessions).values(session).run();
-        const course = { id: randomUUID(), sessionId: session.id, goal: goal.trim(), status: "interviewing" as const, icon: null, createdAt: now, updatedAt: now };
+        const course = { id: randomUUID(), sessionId: session.id, goal: goal.trim(), kind, status: "interviewing" as const, icon: null, createdAt: now, updatedAt: now };
         tx.insert(courses).values(course).run();
         return { course, session };
       });
@@ -798,6 +798,24 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
           throw new Conflict("This check has already been answered");
         }
         const row = { id: randomUUID(), ...input, concept: input.concept ?? null, createdAt: new Date() };
+        tx.insert(attempts).values(row).run();
+        return row;
+      });
+    },
+
+    /**
+     * Records a repeatable check's latest result (a project milestone's `mivra check`, ADR-016), replacing the one
+     * before it, so the attempt and its evidence are always the latest check.
+     */
+    replaceAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string | null }): AttemptRow {
+      return db.transaction((tx) => {
+        const existing = tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, input.artifactId)).get();
+        const values = { answer: input.answer, grade: input.grade, correct: input.correct, concept: input.concept ?? null, createdAt: clock() };
+        if (existing) {
+          tx.update(attempts).set(values).where(eq(attempts.id, existing.id)).run();
+          return { id: existing.id, artifactId: input.artifactId, sessionId: input.sessionId, ...values };
+        }
+        const row = { id: randomUUID(), artifactId: input.artifactId, sessionId: input.sessionId, ...values };
         tx.insert(attempts).values(row).run();
         return row;
       });

@@ -44,6 +44,17 @@ describe("the command line", () => {
     }
   });
 
+  it("reads project course commands", () => {
+    expect(parseCommand(["link", "c1", "--run", " ./build/mycc {input} "])).toEqual({ name: "link", course: "c1", run: "./build/mycc {input}" });
+    expect(parseCommand(["link", "c1", "--run", "./mycc {input}", "--run-output", "./run.sh {output}"])).toEqual({ name: "link", course: "c1", run: "./mycc {input}", runOutput: "./run.sh {output}" });
+    expect(() => parseCommand(["link", "--run", "./mycc"])).toThrow(/course's id/);
+    expect(() => parseCommand(["link", "c1"])).toThrow(/--run/);
+    expect(parseCommand(["check"])).toEqual({ name: "check", timeoutS: 10 });
+    expect(parseCommand(["check", "--timeout", "2.5"])).toEqual({ name: "check", timeoutS: 2.5 });
+    expect(() => parseCommand(["check", "--timeout", "0"])).toThrow(UsageError);
+    expect(() => parseCommand(["check", "extra"])).toThrow(UsageError);
+  });
+
   it("has help and version flags", () => {
     expect(parseCommand(["--help"])).toEqual({ name: "help" });
     expect(parseCommand(["-v"])).toEqual({ name: "version" });

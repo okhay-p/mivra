@@ -115,7 +115,7 @@ describe("StartCourseForm", () => {
   it("asks what to learn, offers the model choice, and starts a course with the goal", async () => {
     const session = { id: "s1", title: "Calculus", updatedAt: placement.createdAt, courseId: "c1" };
     const fetch = serve(
-      json({ course: { id: "c1", sessionId: "s1", goal: "Calculus", status: "interviewing", syllabus: null, interviewMessageId: null, createdAt: placement.createdAt }, session }, 201),
+      json({ course: { id: "c1", sessionId: "s1", goal: "Calculus", kind: "lessons", status: "interviewing", syllabus: null, interviewMessageId: null, createdAt: placement.createdAt }, session }, 201),
     );
     const onStarted = vi.fn();
     render(<StartCourseForm onStarted={onStarted} onFreeChat={() => {}} />);
@@ -126,7 +126,22 @@ describe("StartCourseForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start" }));
     await waitFor(() => expect(onStarted).toHaveBeenCalledWith({ session, goal: "Calculus" }));
     const start = fetch.mock.calls.find(([url]) => /\/api\/courses$/.test(String(url)))!;
-    expect(JSON.parse(String(start[1]?.body))).toEqual({ goal: "Calculus" });
+    expect(JSON.parse(String(start[1]?.body))).toEqual({ goal: "Calculus", kind: "lessons" });
+  });
+
+  it("starts a project course when asked to", async () => {
+    const session = { id: "s1", title: "A C compiler", updatedAt: placement.createdAt, courseId: "c1" };
+    const fetch = serve(
+      json({ course: { id: "c1", sessionId: "s1", goal: "A C compiler", kind: "project", status: "interviewing", syllabus: null, interviewMessageId: null, createdAt: placement.createdAt }, session }, 201),
+    );
+    const onStarted = vi.fn();
+    render(<StartCourseForm onStarted={onStarted} onFreeChat={() => {}} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Learning goal" }), { target: { value: "A C compiler" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Build it as a project in my own repository" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => expect(onStarted).toHaveBeenCalled());
+    const start = fetch.mock.calls.find(([url]) => /\/api\/courses$/.test(String(url)))!;
+    expect(JSON.parse(String(start[1]?.body))).toEqual({ goal: "A C compiler", kind: "project" });
   });
 
   it("shows the server's error", async () => {
@@ -143,6 +158,7 @@ describe("CourseBar", () => {
     id: "c1",
     sessionId: "s1",
     goal: "Calculus",
+    kind: "lessons",
     status: "active",
     interviewMessageId: null,
     createdAt: placement.createdAt,

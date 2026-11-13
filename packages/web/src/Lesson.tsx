@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { OPEN_SETTINGS, finishLesson, getLesson, retryLesson } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
+import { MilestoneCourseContext } from "./artifacts/ProjectMilestone.js";
 import { mergeViews } from "./chat-artifacts.js";
 import { MathText } from "./MathText.js";
 
@@ -183,6 +184,7 @@ export function LessonPage({
   };
 
   return (
+    <MilestoneCourseContext.Provider value={lesson.courseId}>
     <article className="mx-auto flex w-full max-w-3xl flex-col gap-6 p-4 pb-16" aria-busy={generating} aria-labelledby="lesson-title">
       <header className="flex flex-col gap-1">
         <p className="text-muted-foreground text-sm">Lesson {lesson.position + 1}</p>
@@ -301,7 +303,10 @@ export function LessonPage({
             <>
               <p className="text-muted-foreground text-sm">
                 {lesson.checks.answered} of {lesson.checks.total} checks answered.
-                {!lesson.canFinish && " Answer every check to finish; your score doesn't matter."}
+                {!lesson.canFinish &&
+                  (lesson.sections.some((s) => s.kind === "artifact" && (s.artifact as { kind?: string }).kind === "project_milestone")
+                    ? " Answer every check and run mivra check on the milestone to finish; it doesn't have to pass."
+                    : " Answer every check to finish; your score doesn't matter.")}
               </p>
               <Button
                 className="self-start"
@@ -333,5 +338,6 @@ export function LessonPage({
       )}
       {error && <p className="text-destructive text-sm">{error}</p>}
     </article>
+    </MilestoneCourseContext.Provider>
   );
 }

@@ -15,6 +15,7 @@ import {
 } from "./course.js";
 import { GraphSpec } from "./graph.js";
 import { MultipleChoiceAnswer, MultipleChoiceGrade, MultipleChoicePublic, MultipleChoiceSpec } from "./multiple-choice.js";
+import { MilestoneCheckAnswer, MilestoneGrade, ProjectMilestoneInput, ProjectMilestonePublic, ProjectMilestoneSpec } from "./project-milestone.js";
 import { SetDiagramSpec } from "./set-diagram.js";
 import { TableSpec } from "./table.js";
 import { WorkedStepsSpec } from "./worked-steps.js";
@@ -31,6 +32,7 @@ export * from "./course.js";
 export * from "./lesson.js";
 export * from "./graph.js";
 export * from "./multiple-choice.js";
+export * from "./project-milestone.js";
 export * from "./set-diagram.js";
 export * from "./table.js";
 export * from "./worked-steps.js";
@@ -103,6 +105,14 @@ export const artifactKinds = {
     spec: PlacementQuestionSpec,
     input: artifactMathInput(PlacementQuestionSpec, ["question", "options.*.text", "explanation"]),
   },
+  project_milestone: {
+    version: 1,
+    toolName: "set_project_milestone",
+    description:
+      "Project course lessons only: set this lesson's milestone, the step of the project the learner builds next in their own repository, in whatever language they chose. They check it with `mivra check`, which runs their program on each case's input (on stdin, and as a file whose path replaces {input} in their command) and compares what it prints with what your Python referenceSolution prints for that input. Say exactly what to build in spec and exactly what to print in outputFormat, so a program in any language can match it; trailing spaces and trailing blank lines are ignored, everything else counts, and the program must exit with code 0. Write 3-12 small, fast cases, simplest first, that cover the milestone's edge cases. Mivra runs the reference on every case when you call this; if it fails or times out, nothing is saved and you get the reason, so fix it and call again. Use compare run_output only when the program's output is itself a program, such as generated assembly; the reference then prints what running that output should print. Never show the reference or write the learner's solution.",
+    spec: ProjectMilestoneSpec,
+    input: artifactMathInput(ProjectMilestoneInput, ["title"]),
+  },
   set_diagram: {
     version: 1,
     toolName: "show_set_diagram",
@@ -154,6 +164,9 @@ export const InterviewContextAttempt = z
   .strict();
 export type InterviewContextAttempt = z.infer<typeof InterviewContextAttempt>;
 
+export const MilestoneAttempt = z.object({ answer: MilestoneCheckAnswer, grade: MilestoneGrade, createdAt: z.string().datetime() }).strict();
+export type MilestoneAttempt = z.infer<typeof MilestoneAttempt>;
+
 export const PlacementAttempt = z.object({ answer: PlacementAnswer, grade: PlacementGrade, createdAt: z.string().datetime() }).strict();
 export type PlacementAttempt = z.infer<typeof PlacementAttempt>;
 
@@ -204,6 +217,16 @@ export const ArtifactView = z.discriminatedUnion("kind", [
       version: z.literal(1),
       spec: PlacementQuestionPublic,
       latestAttempt: PlacementAttempt.optional(),
+    })
+    .strict(),
+  z
+    .object({
+      ...ArtifactBase,
+      kind: z.literal("project_milestone"),
+      version: z.literal(1),
+      spec: ProjectMilestonePublic,
+      /** The latest `mivra check`: a milestone is checked as often as the learner likes, and each check replaces the last. */
+      latestAttempt: MilestoneAttempt.optional(),
     })
     .strict(),
   z.object({ ...ArtifactBase, kind: z.literal("set_diagram"), version: z.literal(1), spec: SetDiagramSpec }).strict(),

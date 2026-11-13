@@ -7,12 +7,12 @@ import { z } from "zod";
  */
 
 /** Section kinds the outline can plan: prose, or an existing artifact kind by its tool's purpose. */
-export const LessonSectionKind = z.enum(["prose", "algorithm_trace", "code_exercise", "code_walkthrough", "composition", "graph", "multiple_choice", "set_diagram", "table", "worked_steps"]);
+export const LessonSectionKind = z.enum(["prose", "algorithm_trace", "code_exercise", "code_walkthrough", "composition", "graph", "multiple_choice", "project_milestone", "set_diagram", "table", "worked_steps"]);
 export type LessonSectionKind = z.infer<typeof LessonSectionKind>;
 
 export const MAX_LESSON_SECTIONS = 10;
 
-export const LessonOutlineInput = z
+const LessonOutlineFields = z
   .object({
     title: z.string().trim().min(1).max(120),
     sections: z
@@ -20,22 +20,49 @@ export const LessonOutlineInput = z
         z
           .object({
             title: z.string().trim().min(1).max(120),
-            kind: LessonSectionKind.describe("prose = write_lesson_text; multiple_choice = ask_multiple_choice (a check); code_exercise = ask_code_exercise (a JavaScript or Python exercise the learner solves and submits); the others = the matching show_* tool."),
+            kind: LessonSectionKind.describe(
+              "prose = write_lesson_text; multiple_choice = ask_multiple_choice (a check); code_exercise = ask_code_exercise (a JavaScript or Python exercise the learner solves and submits); project_milestone = set_project_milestone (project courses only: the milestone the learner builds in their repository); the others = the matching show_* tool.",
+            ),
             purpose: z.string().trim().min(1).max(300).describe("What this section does for the learner, in one sentence."),
           })
           .strict(),
       )
       .min(2)
-      .max(MAX_LESSON_SECTIONS)
-      .describe(`2-${MAX_LESSON_SECTIONS} sections in reading order. Include at least one multiple_choice check, usually after the idea it checks.`),
+      .max(MAX_LESSON_SECTIONS),
   })
+  .strict();
+
+/** A lesson's outline in a course of lessons: at least one multiple-choice check, and no milestone. */
+export const LessonOutlineInput = LessonOutlineFields.extend({
+  sections: LessonOutlineFields.shape.sections.describe(`2-${MAX_LESSON_SECTIONS} sections in reading order. Include at least one multiple_choice check, usually after the idea it checks.`),
+})
   .strict()
   .superRefine((outline, ctx) => {
     if (!outline.sections.some((s) => s.kind === "multiple_choice")) {
       ctx.addIssue({ code: "custom", path: ["sections"], message: "Include at least one multiple_choice check" });
     }
+    outline.sections.forEach((s, i) => {
+      if (s.kind === "project_milestone") ctx.addIssue({ code: "custom", path: ["sections", i, "kind"], message: "project_milestone is only for project courses" });
+    });
   });
 export type LessonOutlineInput = z.infer<typeof LessonOutlineInput>;
+
+/**
+ * A milestone lesson's outline in a project course (ADR-016): a few sections that prepare the learner, and exactly one
+ * project_milestone section, last, for the step they build in their repository. Checks are optional.
+ */
+export const ProjectLessonOutlineInput = LessonOutlineFields.extend({
+  sections: LessonOutlineFields.shape.sections.describe(
+    `2-${MAX_LESSON_SECTIONS} sections in reading order: what the milestone needs, then exactly one project_milestone section, last.`,
+  ),
+})
+  .strict()
+  .superRefine((outline, ctx) => {
+    const milestones = outline.sections.filter((s) => s.kind === "project_milestone").length;
+    if (milestones !== 1 || outline.sections.at(-1)?.kind !== "project_milestone") {
+      ctx.addIssue({ code: "custom", path: ["sections"], message: "Include exactly one project_milestone section, as the last section" });
+    }
+  });
 
 export const LessonTextInput = z
   .object({

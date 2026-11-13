@@ -4,6 +4,7 @@ import {
   LessonOutlineInput,
   LessonTextInput,
   MAX_LESSON_SECTIONS,
+  ProjectLessonOutlineInput,
   artifactKinds,
   type CourseLessonsView,
   type LessonSectionKind,
@@ -38,6 +39,16 @@ const LESSON_INSTRUCTIONS = [
   RENDERING_RULES,
 ].join("\n\n");
 
+/**
+ * A project course's lessons (ADR-016): each is one milestone of a project the learner builds in their own
+ * repository, in a language of their choice, and checks there with `mivra check`.
+ */
+const PROJECT_LESSON_INSTRUCTIONS = [
+  "This is a project course: the learner builds one program in their own repository, in the language they chose, one milestone per syllabus topic. This lesson is the milestone for its topic. Its last section is the milestone itself, written with set_project_milestone; the sections before it teach what the milestone needs, briefly, and may include a check. Don't write the learner's code for them: explain ideas, and show small examples in other contexts.",
+  "Each milestone builds on the previous ones, so the program grows: say how this step extends what they have. In the milestone, give the exact output format, so a program in any language can match it, and keep earlier milestones' behaviour working unless the spec says otherwise.",
+  "The learner checks the milestone in their repository with `mivra check`, which runs their own command on each case. Mention that once, briefly, in the milestone's spec; don't explain how to install or link anything.",
+].join("\n\n");
+
 /** The tool that writes each kind of section. */
 const toolForKind: Record<LessonSectionKind, string> = {
   prose: "write_lesson_text",
@@ -47,6 +58,7 @@ const toolForKind: Record<LessonSectionKind, string> = {
   composition: artifactKinds.composition.toolName,
   graph: artifactKinds.graph.toolName,
   multiple_choice: artifactKinds.multiple_choice.toolName,
+  project_milestone: artifactKinds.project_milestone.toolName,
   set_diagram: artifactKinds.set_diagram.toolName,
   table: artifactKinds.table.toolName,
   worked_steps: artifactKinds.worked_steps.toolName,
@@ -144,7 +156,18 @@ export function lessonResults(lesson: LessonRow, { store, lessons, registry }: P
 
 /** Changes whenever what the learner would see does, so a waiting client knows to update. */
 export const lessonRevision = (view: LessonView) =>
-  [view.status, view.version, view.outline ? 1 : 0, view.sections.length, view.checks.answered, view.syllabusVersion].join(":");
+  [view.status, view.version, view.outline ? 1 : 0, view.sections.length, view.checks.answered, view.syllabusVersion, repeatedChecks(view)].join(":");
+
+/** Changes with each new result of a repeatable check (a milestone's `mivra check`), which replaces the last one. */
+function repeatedChecks(view: LessonView): string {
+  let hash = 0;
+  for (const section of view.sections) {
+    const artifact = section.kind === "artifact" ? (section.artifact as { kind?: string; latestAttempt?: { createdAt?: string } }) : undefined;
+    if (artifact?.kind !== "project_milestone" || !artifact.latestAttempt?.createdAt) continue;
+    for (const char of artifact.latestAttempt.createdAt) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
+  }
+  return (hash >>> 0).toString(36);
+}
 
 /** The course's topics in syllabus order with their lessons, which one to show, and which may start next. */
 export function courseLessons(courseId: string, { store, lessons }: Pick<LessonDeps, "store" | "lessons">): CourseLessonsView {
@@ -201,6 +224,7 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
     const written = lessons.sections(version?.sectionIds ?? []).map((s) => s.title);
     const parts = [
       LESSON_INSTRUCTIONS,
+      course?.kind === "project" ? PROJECT_LESSON_INSTRUCTIONS : undefined,
       learnerContext(
         store.listRecentEvidence(MAX_EVIDENCE),
         store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES),
@@ -279,10 +303,14 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
       queue = run.catch(() => undefined);
       return run;
     };
+    const courseKind = store.findCourse(lesson.courseId)?.kind ?? "lessons";
     const tools: Record<string, Tool> = {
       outline_lesson: tool({
-        description: "Plan the lesson: its title and its sections in reading order. Call this once, first.",
-        inputSchema: LessonOutlineInput,
+        description:
+          courseKind === "project"
+            ? "Plan the lesson: its title and its sections in reading order, ending with exactly one project_milestone section. Call this once, first."
+            : "Plan the lesson: its title and its sections in reading order. Call this once, first.",
+        inputSchema: courseKind === "project" ? ProjectLessonOutlineInput : LessonOutlineInput,
         execute: async (outline) => serial(async () => {
           if (!lessons.writeOutline(lesson.id, outline)) return { status: "rejected", reason: `The outline is already written. ${whatNext(lesson.id)}` };
           changed(lesson.id);
@@ -329,7 +357,7 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
       });
     }
     // The existing artifact tools, each also filling the next section of the outline.
-    const artifactTools = registry.toolsFor({ sessionId: lesson.sessionId, runId, store }).tools;
+    const artifactTools = registry.toolsFor({ sessionId: lesson.sessionId, runId, store, lessonCourseKind: courseKind }).tools;
     for (const [kind, name] of Object.entries(toolForKind)) {
       const original = artifactTools[name];
       if (kind === "prose" || !original?.execute) continue;

@@ -97,7 +97,8 @@ export const artifacts = sqliteTable(
 
 /**
  * A learner's graded answer to a check artifact. One attempt per artifact (the grade reveals the
- * answer). `concept` and `correct` double as the first progress evidence (ADR-006).
+ * answer). `concept` and `correct` double as the first progress evidence (ADR-006). A project milestone is
+ * checked as often as the learner likes: each `mivra check` replaces its attempt, until its lesson is finished.
  */
 export const attempts = sqliteTable(
   "attempts",
@@ -189,6 +190,8 @@ export const documentChunks = sqliteTable(
 );
 
 export const courseStatuses = ["interviewing", "active", "complete"] as const;
+/** A course of lessons, or a project course whose topics are milestones checked in the learner's repository (ADR-016). */
+export const courseKinds = ["lessons", "project"] as const;
 
 /**
  * A course (ADR-011): one learning goal, taught in its own chat session. It starts with a placement
@@ -202,6 +205,7 @@ export const courses = sqliteTable(
       .notNull()
       .references(() => sessions.id, { onDelete: "cascade" }),
     goal: text("goal").notNull(),
+    kind: text("kind", { enum: courseKinds }).notNull().default("lessons"),
     status: text("status", { enum: courseStatuses }).notNull(),
     /** The subject icon's Lucide name, from protocol's `courseIcons`, chosen by the tutor with the first syllabus; null until then. */
     icon: text("icon"),

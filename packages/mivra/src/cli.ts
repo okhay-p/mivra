@@ -10,6 +10,7 @@ import { ApiKey, CREDENTIALS_FILE, PROVIDER_ENV, PROVIDER_LABELS, createCredenti
 import { USAGE, UsageError, parseCommand, type Command } from "./args.js";
 import { LOG_FILE, STATE_FILE, claim, clearState, isAlive, readState, running, waitForHolder, writeState } from "./state.js";
 import { confirm, openBrowser, readSecret } from "./terminal.js";
+import { check, link } from "./project.js";
 import { uninstall } from "./uninstall.js";
 import { importObsidian } from "./vault.js";
 
@@ -72,6 +73,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return authLogout(config);
     case "import-obsidian":
       return importObsidian(command.folder, command.importName, config.dataDir, { out, err });
+    case "link":
+      return link(command, { dataDir: config.dataDir, cwd: process.cwd() }, { out, err });
+    case "check":
+      return check(command, { dataDir: config.dataDir, cwd: process.cwd() }, { out, err });
     case "uninstall":
       return uninstall({ dataDir: config.dataDir, deleteData: command.deleteData, stop: () => stop(config.dataDir), confirm, out, err });
   }
