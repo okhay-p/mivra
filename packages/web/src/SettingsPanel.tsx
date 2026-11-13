@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { OPEN_USAGE, getModelTasks, resetModelTask, setModelTask, type ModelSelection, type ModelTaskId, type ModelTaskView } from "./api.js";
+import { ConnectCli } from "./ConnectCli.js";
 import { ModelPicker, modelLabel, useModelPicker, type ModelPickerState } from "./ModelPicker.js";
 
 /** What each overridable task does, as Settings describes it. */
@@ -43,6 +44,7 @@ export function SettingsPanel({ open, onOpenChange }: { open: boolean; onOpenCha
             </div>
           </section>
         )}
+        {open && <ConnectCli />}
       </SheetContent>
     </Sheet>
   );
