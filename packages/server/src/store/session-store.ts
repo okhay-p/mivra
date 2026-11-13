@@ -617,9 +617,16 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       return db.select().from(attempts).where(and(eq(attempts.artifactId, artifactId), eq(attempts.judge, "model"))).get();
     },
 
-    /** Replaces an artifact's stored spec, as a dispute's outcome does to a milestone (ADR-016). */
-    updateArtifactSpec(id: string, spec: unknown) {
-      db.update(artifacts).set({ spec }).where(eq(artifacts.id, id)).run();
+    /**
+     * Replaces an artifact's stored spec, as a dispute's outcome does to a milestone (ADR-016). With `dropEvidence`,
+     * its attempts stop counting as evidence (their concept is cleared) but stay to be shown: they judged a spec that
+     * no longer stands (ADR-009).
+     */
+    updateArtifactSpec(id: string, spec: unknown, { dropEvidence = false }: { dropEvidence?: boolean } = {}) {
+      db.transaction((tx) => {
+        tx.update(artifacts).set({ spec }).where(eq(artifacts.id, id)).run();
+        if (dropEvidence) tx.update(attempts).set({ concept: null }).where(eq(attempts.artifactId, id)).run();
+      });
     },
 
     /** The learner's most recent graded attempts across all sessions, newest first. Rowid breaks timestamp ties. */

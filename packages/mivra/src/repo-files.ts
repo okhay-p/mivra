@@ -61,8 +61,12 @@ const SECRET_PATTERNS = [
   /^service[-_]?account.*\.json$/,
   /^client_secret.*\.json$/,
   // Tokens, keys and passwords kept in data files (not source files: a lexer's token.c is code, not a secret).
-  /(^|[-_.])(api[-_]?keys?|(access|auth|api|bearer|refresh|github|slack|bot)[-_]?tokens?|passwords?|passwd|secrets?)([-_.][^/]*)?\.(json|ya?ml|toml|ini|cfg|conf|txt|properties|xml)$/,
+  /(^|[-_.])(api[-_]?keys?|keys?|(access|auth|api|bearer|refresh|github|slack|bot)[-_]?tokens?|passwords?|passwd|secrets?)([-_.][^/]*)?\.(json|ya?ml|toml|ini|cfg|conf|txt|properties|xml)$/,
 ];
+
+/** Folders of keys: the data files and extensionless files in them are secrets, though code there (`keys/input.c`) isn't. */
+const KEY_DIRS = new Set(["keys", ".keys", "apikeys", "api-keys", "api_keys"]);
+const DATA_FILE = /(^[^.]+$)|\.(json|ya?ml|toml|ini|cfg|conf|txt|properties|xml|env)$/;
 
 /** Text that only a private key contains, in any file. */
 const PRIVATE_KEY = /-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?-----/;
@@ -73,7 +77,9 @@ export function looksSecret(path: string): boolean {
   const secretName = (name: string) => SECRET_NAMES.has(name) || SECRET_PATTERNS.some((pattern) => pattern.test(name));
   // A folder named like a secret (`.env/`, `credentials/`) holds secrets too.
   if (parts.slice(0, -1).some((dir) => SECRET_DIRS.has(dir) || secretName(dir))) return true;
-  return secretName(parts.at(-1) ?? "");
+  const name = parts.at(-1) ?? "";
+  if (parts.slice(0, -1).some((dir) => KEY_DIRS.has(dir)) && DATA_FILE.test(name)) return true;
+  return secretName(name);
 }
 
 /** Runs git in `cwd` without a shell. Rejects if it fails. */

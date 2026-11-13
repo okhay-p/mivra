@@ -310,7 +310,10 @@ export async function disputeMilestone(
     if (lessons.findLesson(lesson.id)?.status === "finished") {
       return { ok: false, error: { kind: "conflict", message: "This milestone's lesson was finished meanwhile, so the dispute wasn't recorded." } };
     }
-    store.updateArtifactSpec(artifactId, ProjectMilestoneSpec.parse({ ...next, disputes: [...(spec.disputes ?? []), record] }));
+    // A withdrawn or corrected case means the latest check and its review judged other cases: no longer evidence.
+    store.updateArtifactSpec(artifactId, ProjectMilestoneSpec.parse({ ...next, disputes: [...(spec.disputes ?? []), record] }), {
+      dropEvidence: milestoneRevision(next) !== milestoneRevision(spec),
+    });
     return { ok: true, lessonId: lesson.id, view: artifactView(artifactId, registry, store)!, dispute: record };
   } catch (error) {
     if (signal?.aborted) return { ok: false, error: { kind: "failed", message: "The dispute was stopped." } };

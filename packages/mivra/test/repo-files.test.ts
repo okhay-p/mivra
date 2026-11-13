@@ -17,10 +17,10 @@ const tempDir = () => {
 
 describe("what mivra check sends for review", () => {
   it("knows secret-looking files by name", () => {
-    for (const path of [".env", ".env.local", ".env.example", "config/.env.production", "prod.env", "id_rsa", "id_ed25519", "keys/server.pem", "tls.key", "cert.p12", "credentials.json", "aws_credentials", ".npmrc", ".netrc", ".git-credentials", "secrets.yaml", "service-account-prod.json", ".ssh/config", "home/.aws/config", "terraform.tfstate", ".env-production", ".env_prod", ".env/production", "config/.env/prod.json", "keys/api-token.json", "auth_token.txt", "github-token.yaml", "api_keys.json", "password.txt", "db-password.ini", "secrets/db.yml", "credentials/prod.json"]) {
+    for (const path of [".env", ".env.local", ".env.example", "config/.env.production", "prod.env", "id_rsa", "id_ed25519", "keys/server.pem", "tls.key", "cert.p12", "credentials.json", "aws_credentials", ".npmrc", ".netrc", ".git-credentials", "secrets.yaml", "service-account-prod.json", ".ssh/config", "home/.aws/config", "terraform.tfstate", ".env-production", ".env_prod", ".env/production", "config/.env/prod.json", "keys/api-token.json", "auth_token.txt", "github-token.yaml", "api_keys.json", "password.txt", "db-password.ini", "secrets/db.yml", "credentials/prod.json", "keys/openai.json", "keys/prod", "config/keys/stripe.yaml", "keys.json", "key.txt", "openai-key.json"]) {
       expect(looksSecret(path), path).toBe(true);
     }
-    for (const path of ["main.rs", "src/environment.py", "README.md", "id_rsa.pub", "keyboard.c", "tokens.txt", ".gitignore", "env.go", "src/token.c", "src/tokenizer.rs", "test/tokens.json", "src/password_check.py", "lexer/keywords.txt"]) {
+    for (const path of ["main.rs", "src/environment.py", "README.md", "id_rsa.pub", "keyboard.c", "tokens.txt", ".gitignore", "env.go", "src/token.c", "src/tokenizer.rs", "test/tokens.json", "src/password_check.py", "lexer/keywords.txt", "keywords.json", "hotkeys.json", "src/keys/input.c", "keys/README.md"]) {
       expect(looksSecret(path), path).toBe(false);
     }
   });
@@ -40,6 +40,8 @@ describe("what mivra check sends for review", () => {
       ".env-production": secret,
       "deploy/.env/production": secret,
       "keys/api-token.json": secret,
+      "keys/openai.json": secret,
+      "keys.json": secret,
       "README.md": `-----BEGIN PRIVATE KEY-----\n${secret}\n-----END PRIVATE KEY-----`,
       "logo.png": "\u0000PNG",
     };
@@ -60,13 +62,15 @@ describe("what mivra check sends for review", () => {
       ".env-production": "secret",
       "deploy/.env/production": "secret",
       "keys/api-token.json": "secret",
+      "keys/openai.json": "secret",
+      "keys.json": "secret",
       "README.md": "secret",
       "logo.png": "binary",
       ...(process.platform !== "win32" ? { "link.txt": "not_a_file" } : {}),
     });
     const body = JSON.stringify(changesToSend(changes));
     expect(body).not.toContain(secret);
-    expect(body).not.toMatch(/\.env|id_ed25519|deploy\.key|api-token|README|link\.txt/);
+    expect(body).not.toMatch(/\.env|id_ed25519|deploy\.key|api-token|openai|keys\.json|README|link\.txt/);
     expect(changesToSend(changes).skipped).toEqual([{ path: "logo.png", reason: "binary" }]);
   });
 

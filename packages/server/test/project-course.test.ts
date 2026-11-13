@@ -417,16 +417,18 @@ describe("reviewing a milestone's code", () => {
   });
 
   it("doesn't let a passing check of cases a dispute has since changed count", async () => {
-    const { app, steps, lesson, cases } = await started();
+    const { app, store, steps, lesson, cases } = await started();
     steps.push({ toolCall: { name: "record_review", input: review() } });
     const passed = (await (await checkWith(app, cases.artifactId, ["tokens: 1", "tokens: 3"], { revision: cases.revision, files: [tokenizer], commit: COMMIT })).json()) as MilestoneCheckResult;
     expect(passed.passed).toBe(true);
     // The case it passed now expects something else, so that output proves nothing about it.
     steps.push({ toolCall: { name: "resolve_case_dispute", input: { outcome: "correct", explanation: "Three numbers.", input: "1 + 2 + 3" } } });
+    expect(store.listRecentEvidence(10).filter((e) => e.concept === "tokenizing")).toHaveLength(2);
     expect((await dispute(app, cases.artifactId, { target: "case", caseIndex: 1, reason: "Too easy?" })).status).toBe(201);
     expect((await milestoneView(app, lesson.id)).passed).toBe(false);
-    const describe = (await getLesson(app, lesson.id)).lesson.sections.at(-1)!.artifact as unknown as MilestoneView;
-    expect(describe.latestAttempt?.grade.correct).toBe(true);
+    // The check and its review are still shown, but they judged other cases, so they're no longer evidence (ADR-009).
+    expect((await milestoneView(app, lesson.id)).latestAttempt?.grade.correct).toBe(true);
+    expect(store.listRecentEvidence(10).filter((e) => e.concept === "tokenizing")).toEqual([]);
   });
 
   it("doesn't save a review that was running when a dispute changed the cases", async () => {
