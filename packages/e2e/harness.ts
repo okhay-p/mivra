@@ -771,6 +771,22 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
       },
     };
   }
+  // A project milestone's code review (ADR-016): approves unless a file prints canned answers ("hardcoded").
+  if (JSON.stringify(prompt[lastUser]?.content).includes("The files changed since the last passed milestone")) {
+    if (prompt.slice(lastUser).some((m) => m.role === "tool")) return { text: "" };
+    const hardCoded = JSON.stringify(prompt[lastUser]?.content).includes("hardcoded");
+    const ok = { passed: true, note: "It counts the words itself." };
+    return {
+      tool: "record_review",
+      input: {
+        noHardCodedOutputs: hardCoded ? { passed: false, note: "main.py prints canned answers for the test inputs." } : ok,
+        concept: ok,
+        quality: { passed: true, note: "Short and clear." },
+        summary: hardCoded ? "Compute the count instead of matching the inputs." : "Nicely done.",
+        suggestions: [],
+      },
+    };
+  }
   if (JSON.stringify(prompt[lastUser]?.content).includes("Mivra lesson request")) {
     const done = prompt.slice(lastUser).filter((m) => m.role === "tool").length;
     const system = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");
