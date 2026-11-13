@@ -501,8 +501,10 @@ describe("a project course on another computer's Mivra", () => {
 
     const checked = await run(clientData, repo, ["check"]);
     expect(checked.stdout).toContain(`Checking against Mivra at ${url}`);
-    expect(checked.stdout).toContain("All 3 cases passed. Recorded in Mivra.");
-    expect(checked.code, checked.stderr).toBe(0);
+    expect(checked.stdout).toContain("All 3 cases passed.");
+    // The tests' result reaches the remote Mivra; passing needs the review too (#122), which has nothing to send outside git.
+    expect(checked.stdout).toContain("Not passed yet. Recorded in Mivra.");
+    expect(checked.code, checked.stderr).toBe(1);
     expect(existsSync(join(clientData, "mivra.pid"))).toBe(false);
     const lesson = (await (await fetch(`${url}/api/lessons/${lessonId}`, { headers: { authorization: `Bearer ${token}` } })).json()) as {
       lesson: { sections: { artifact?: { latestAttempt?: { grade: { passed: number; correct: boolean } } } }[] };
