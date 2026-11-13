@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 13 November 2026
 ---
 
@@ -47,7 +47,7 @@ date: 13 November 2026
 
 - No Docker or extra service. A learner can use any language they have installed, at any project size.
 - Mivra does not sandbox project-course code. It runs as the learner's own tool, with the same trust as their own `make test`, started by them.
-- Grading still starts deterministic, but two things extend ADR-006 and need the owner's approval with this ADR: browser exercises are graded from results the browser reports (not tamper-proof, accepted for a single-user local app), and project milestones add a model-graded code review alongside the tests.
+- Grading still starts deterministic, but two things extend ADR-006, approved by the owner with this ADR (13 November 2026): browser exercises are graded from results the browser reports (not tamper-proof, accepted for a single-user local app), and project milestones add a model-graded code review alongside the tests.
 - The same model writes the tests and the reference, so the reference catches mistakes in the expected outputs but not a misread spec. Disputes and the review are the safety net.
 - Output-only tests can be gamed; the review mitigates this, it doesn't eliminate it.
 - QuickJS and Pyodide add several megabytes of assets.
