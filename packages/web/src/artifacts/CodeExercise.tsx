@@ -5,13 +5,15 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { submitCodeExercise } from "../api.js";
-import { caseInput, createCaseRunner, RunStopped, type CaseRunner } from "../exercise-runner.js";
+import { caseInput, createRunnerFor, RunStopped, type CaseRunner } from "../exercise-runner.js";
 import { MathText } from "../MathText.js";
 import type { ArtifactProps } from "./ArtifactPart.js";
 import { ArtifactBody, ArtifactCard, ArtifactHeader, ArtifactTitle } from "./artifact-card.js";
 
 type Results = (ExerciseCaseRun | undefined)[];
-type Running = { mode: "run" | "submit"; done: number; total: number };
+type Running = { mode: "run" | "submit"; done: number; total: number; starting?: boolean };
+
+const LANGUAGE_NAMES = { javascript: "JavaScript", python: "Python" } as const;
 
 const draftKey = (id: string) => `mivra.exercise.${id}`;
 function readDraft(id: string): string | undefined {
@@ -63,12 +65,14 @@ function CaseResult({
   run,
   passed,
   functionName,
+  stderrLabel,
 }: {
   index: number;
   testCase: ExercisePublicCase;
   run: ExerciseCaseRun | undefined;
   passed: boolean | undefined;
   functionName: string | undefined;
+  stderrLabel: string;
 }) {
   const name = `Case ${index + 1}${testCase.hidden ? " (hidden)" : ""}`;
   const status = passed === undefined ? "Not run" : passed ? "Passed" : "Failed";
@@ -97,7 +101,7 @@ function CaseResult({
           {run && run.error !== undefined && <Block label="Error" text={run.error} tone="error" />}
           {run && run.error === undefined && testCase.kind === "call" && <Block label="Returned" text={run.returned ?? ""} />}
           {run && (testCase.kind === "stdio" || run.stdout !== "") && <Block label={testCase.kind === "stdio" ? "Your output" : "Printed"} text={run.stdout} />}
-          {run?.stderr && <Block label="console.error / warn" text={run.stderr} />}
+          {run?.stderr && <Block label={stderrLabel} text={run.stderr} />}
         </div>
       )}
       {testCase.hidden && run?.error !== undefined && passed === false && <p className="text-destructive text-sm wrap-anywhere">{run.error}</p>}
@@ -106,9 +110,10 @@ function CaseResult({
 }
 
 /**
- * A JavaScript exercise (ADR-016): the learner edits the code, runs the visible cases as often as they like, and
- * submits once. Code runs in QuickJS in a Web Worker (see exercise.worker.ts), one case at a time, with a Stop
- * button and a hard time limit that terminates the worker. Submit runs every case, hidden ones included, and the
+ * A JavaScript or Python exercise (ADR-016): the learner edits the code, runs the visible cases as often as they
+ * like, and submits once. Code runs in a Web Worker, QuickJS for JavaScript (exercise.worker.ts) and Pyodide for
+ * Python (python-exercise.worker.ts), one case at a time, with a Stop button and a hard time limit that
+ * terminates the worker. Python takes a while to load, so it starts loading when the editor gets focus. Submit runs every case, hidden ones included, and the
  * server grades what they produced. After submitting, the saved code and results come back with the view, so a
  * reload shows them without running anything.
  */
@@ -125,6 +130,9 @@ export function CodeExercise({ view, replyInProgress, onUpdate, onRefresh }: Art
   const [error, setError] = useState<string>();
   const runner = useRef<CaseRunner>(undefined);
   const escaped = useRef(false);
+  const python = spec.language === "python";
+  const indent = python ? "    " : "  ";
+  const getRunner = () => (runner.current ??= createRunnerFor(spec.language));
 
   useEffect(() => () => runner.current?.dispose(), []);
   // A graded view (from this tab or a refresh) replaces whatever ran locally.
@@ -151,7 +159,7 @@ export function CodeExercise({ view, replyInProgress, onUpdate, onRefresh }: Art
   };
 
   const runCases = async (mode: Running["mode"], indices: number[]): Promise<Results | undefined> => {
-    runner.current ??= createCaseRunner();
+    const active = getRunner();
     const next: Results = mode === "submit" ? [] : [...results];
     for (const i of indices) next[i] = undefined;
     setResults(next);
@@ -159,8 +167,10 @@ export function CodeExercise({ view, replyInProgress, onUpdate, onRefresh }: Art
     setStatus(undefined);
     try {
       for (const [done, i] of indices.entries()) {
-        setRunning({ mode, done, total: indices.length });
-        next[i] = await runner.current.run(code, spec.functionName, caseInput(spec.cases[i]!));
+        setRunning({ mode, done, total: indices.length, starting: true });
+        next[i] = await active.run(code, spec.functionName, caseInput(spec.cases[i]!), {
+          onStart: () => setRunning({ mode, done, total: indices.length }),
+        });
         setResults([...next]);
       }
       return next;
@@ -222,9 +232,9 @@ export function CodeExercise({ view, replyInProgress, onUpdate, onRefresh }: Art
     e.preventDefault();
     const box = e.currentTarget;
     const { selectionStart: start, selectionEnd: end } = box;
-    const next = `${code.slice(0, start)}  ${code.slice(end)}`;
+    const next = `${code.slice(0, start)}${indent}${code.slice(end)}`;
     edit(next);
-    requestAnimationFrame(() => box.setSelectionRange(start + 2, start + 2));
+    requestAnimationFrame(() => box.setSelectionRange(start + indent.length, start + indent.length));
   };
 
   const busy = running !== undefined;
@@ -232,12 +242,14 @@ export function CodeExercise({ view, replyInProgress, onUpdate, onRefresh }: Art
   const progress = running
     ? running.done >= running.total
       ? "Submitting…"
-      : `Running case ${running.done + 1} of ${running.total}…`
+      : running.starting && python
+        ? "Starting Python… (the first run takes a few seconds)"
+        : `Running case ${running.done + 1} of ${running.total}…`
     : undefined;
 
   return (
     <ArtifactCard role="region" aria-labelledby={titleId}>
-      <ArtifactHeader kind="Exercise" aside="JavaScript · runs in your browser">
+      <ArtifactHeader kind="Exercise" aside={`${LANGUAGE_NAMES[spec.language]} · runs in your browser`}>
         <ArtifactTitle id={titleId} text={spec.title} />
       </ArtifactHeader>
       <ArtifactBody className="@container gap-4">
@@ -254,16 +266,23 @@ export function CodeExercise({ view, replyInProgress, onUpdate, onRefresh }: Art
             value={code}
             onChange={(e) => edit(e.target.value)}
             onKeyDown={onKeyDown}
+            onFocus={() => {
+              if (python && !submitted) getRunner().warm();
+            }}
             readOnly={submitted || busy}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
             wrap="off"
-            className="bg-card dark:bg-card min-h-40 resize-y overflow-x-auto font-mono text-xs leading-relaxed [tab-size:2] md:text-xs"
+            className={cn("bg-card dark:bg-card min-h-40 resize-y overflow-x-auto font-mono text-xs leading-relaxed md:text-xs", python ? "[tab-size:4]" : "[tab-size:2]")}
             data-testid="exercise-editor"
           />
           <p id={hintId} className="text-muted-foreground text-xs">
-            {spec.functionName ? `Define ${spec.functionName} at the top level. ` : "Read input with readLine() or stdin, and print with console.log. "}
+            {spec.functionName
+              ? `Define ${spec.functionName} at the top level. `
+              : python
+                ? "Read input with input() or sys.stdin, and print with print(). "
+                : "Read input with readLine() or stdin, and print with console.log. "}
             {!submitted && "Tab indents; press Escape then Tab to leave the editor."}
           </p>
         </div>
@@ -307,7 +326,15 @@ export function CodeExercise({ view, replyInProgress, onUpdate, onRefresh }: Art
         </div>
         <ol className="flex flex-col gap-2" aria-label="Test cases">
           {spec.cases.map((testCase, i) => (
-            <CaseResult key={i} index={i} testCase={testCase} run={results[i]} passed={passed[i]} functionName={spec.functionName} />
+            <CaseResult
+              key={i}
+              index={i}
+              testCase={testCase}
+              run={results[i]}
+              passed={passed[i]}
+              functionName={spec.functionName}
+              stderrLabel={python ? "stderr" : "console.error / warn"}
+            />
           ))}
         </ol>
       </ArtifactBody>

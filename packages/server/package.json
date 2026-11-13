@@ -29,6 +29,7 @@
     "busboy": "^1.6.0",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.14",
+    "pyodide": "314.0.7",
     "quickjs-emscripten-core": "0.32.0",
     "unpdf": "^2.1.0",
     "yauzl": "^3.4.0",

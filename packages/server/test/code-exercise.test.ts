@@ -1,5 +1,14 @@
 import { CodeExerciseSpec } from "@mivra/protocol";
-import { addLinesExercise, brokenReferenceExercise, loopingReferenceExercise, sumExercise, sumSolution } from "@mivra/protocol/test/code-exercise-fixtures";
+import {
+  addLinesExercise,
+  brokenReferenceExercise,
+  loopingReferenceExercise,
+  pyAddLinesExercise,
+  pyLoopingReferenceExercise,
+  pySumExercise,
+  sumExercise,
+  sumSolution,
+} from "@mivra/protocol/test/code-exercise-fixtures";
 import type { UIMessage } from "ai";
 import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
@@ -100,7 +109,7 @@ describe("checking an exercise's reference at creation", () => {
 
   it("kills the subprocess when the reply is stopped", async () => {
     const controller = new AbortController();
-    const pending = runCasesInChild({ code: "while (true) {}", cases: [{ kind: "stdio", stdin: "" }] }, controller.signal);
+    const pending = runCasesInChild({ language: "javascript", code: "while (true) {}", cases: [{ kind: "stdio", stdin: "" }] }, controller.signal);
     controller.abort();
     await expect(pending).rejects.toThrow("The reply was stopped.");
   });
@@ -109,8 +118,52 @@ describe("checking an exercise's reference at creation", () => {
     process.env.MIVRA_TEST_SECRET = "leak";
     try {
       // The code itself can't reach `process`; this checks the process QuickJS runs in.
-      const [result] = await runCasesInChild({ code: "console.log(typeof process)", cases: [{ kind: "stdio", stdin: "" }] });
+      const [result] = await runCasesInChild({ language: "javascript", code: "console.log(typeof process)", cases: [{ kind: "stdio", stdin: "" }] });
       expect(result).toEqual({ stdout: "undefined\n" });
+    } finally {
+      delete process.env.MIVRA_TEST_SECRET;
+    }
+  });
+});
+
+describe("checking a Python exercise's reference", () => {
+  // Each check starts Pyodide in a fresh subprocess, which takes several seconds (much longer on a busy machine).
+  vi.setConfig({ testTimeout: 180_000 });
+
+  it("records the expected results from running the reference in Pyodide", async () => {
+    const prepared = await prepareCodeExercise(pySumExercise, runCasesInChild);
+    expect(prepared.ok && prepared.spec.cases.map((c) => c.expected)).toEqual([{ returned: "6" }, { returned: "0" }, { returned: "10" }]);
+    const stdio = await prepareCodeExercise(pyAddLinesExercise, runCasesInChild);
+    expect(stdio.ok && stdio.spec.cases.map((c) => c.expected)).toEqual([{ stdout: "5" }, { stdout: "0" }]);
+  });
+
+  it("refuses a Python reference that never stops", async () => {
+    const prepared = await prepareCodeExercise(pyLoopingReferenceExercise, runCasesInChild);
+    expect(!prepared.ok && prepared.reason).toMatch(/case 0 \(call\): Time limit exceeded/);
+  });
+
+  it("gives Python no JavaScript, no environment and no host files", async () => {
+    process.env.MIVRA_TEST_SECRET = "leak";
+    try {
+      const probe = [
+        "import os",
+        "print(os.environ.get('MIVRA_TEST_SECRET'))",
+        "print(sorted(os.listdir('/')))",
+        "from pyodide.ffi import to_js",
+        "try:",
+        "    to_js([]).constructor.constructor('return 1')()",
+        "    print('code from strings ran')",
+        "except Exception as error:",
+        "    print(type(error).__name__)",
+        "for name in ('js', 'pyodide_js'):",
+        "    try:",
+        "        __import__(name)",
+        "        print(name, 'imported')",
+        "    except ImportError:",
+        "        print(name, 'missing')",
+      ].join("\n");
+      const [result] = await runCasesInChild({ language: "python", code: probe, cases: [{ kind: "stdio", stdin: "" }] });
+      expect(result).toEqual({ stdout: "None\n['dev', 'home', 'lib', 'proc', 'tmp']\nJsException\njs missing\npyodide_js missing\n" });
     } finally {
       delete process.env.MIVRA_TEST_SECRET;
     }

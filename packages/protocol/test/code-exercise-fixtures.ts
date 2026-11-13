@@ -48,3 +48,33 @@ export const loopingReferenceExercise: CodeExerciseInput = {
   cases: [{ kind: "call", args: "[[1]]" }],
   referenceSolution: "function sum(xs) { while (true) {} }",
 };
+
+/** sumExercise in Python. */
+export const pySumExercise: CodeExerciseInput = {
+  ...sumExercise,
+  title: "Sum a list",
+  instructions: "Write `total(xs)` that returns the sum of the numbers in `xs`. An empty list sums to 0.",
+  language: "python",
+  starterCode: "def total(xs):\n    # Your code here\n    pass\n",
+  functionName: "total",
+  referenceSolution: "def total(xs):\n    return sum(xs)\n",
+};
+
+/** A correct answer to pySumExercise. */
+export const pySumSolution = "def total(xs):\n    result = 0\n    for x in xs:\n        result += x\n    return result\n";
+
+/** addLinesExercise in Python. */
+export const pyAddLinesExercise: CodeExerciseInput = {
+  ...addLinesExercise,
+  language: "python",
+  starterCode: "a = int(input())\n",
+  referenceSolution: "a = int(input())\nb = int(input())\nprint(a + b)\n",
+};
+
+/** A Python exercise whose reference never stops. */
+export const pyLoopingReferenceExercise: CodeExerciseInput = {
+  ...pySumExercise,
+  title: "Looping total",
+  cases: [{ kind: "call", args: "[[1]]" }],
+  referenceSolution: "def total(xs):\n    while True:\n        pass\n",
+};
