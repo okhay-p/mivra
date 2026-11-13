@@ -459,5 +459,18 @@ describe("a project course on another computer's Mivra", () => {
     expect(refused.code).toBe(1);
     expect(refused.stderr).toContain("MIVRA_ALLOWED_HOSTS");
     expect(existsSync(join(repo, ".mivra.json"))).toBe(false);
+
+    // The first `link --server` against a Mivra that doesn't list this name names the fix too.
+    const guarded = createServer((_req, res) => res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ error: "Host not allowed" })));
+    const guardedPort = await freePort();
+    await new Promise<void>((resolve) => guarded.listen(guardedPort, "127.0.0.1", resolve));
+    onTestFinished(() => {
+      guarded.close();
+    });
+    const fresh = tempDir("mivra-laptop-");
+    const first = await run(fresh, repo, ["link", "--server", `http://127.0.0.1:${guardedPort}`], token);
+    expect(first.code).toBe(1);
+    expect(first.stderr).toContain("MIVRA_ALLOWED_HOSTS");
+    expect(existsSync(join(fresh, "credentials.json"))).toBe(false);
   });
 });

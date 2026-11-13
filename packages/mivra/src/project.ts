@@ -74,9 +74,7 @@ function client({ url, token, remote }: { url: string; token: string; remote: bo
     if (res.status >= 300 && res.status < 400) throw redirected(url, res);
     const message = ((await res.json().catch(() => ({}))) as { error?: unknown }).error;
     if (remote && res.status === 401) throw new ProjectError(`Mivra at ${url} didn't accept the token. ${relink}`);
-    if (remote && res.status === 403 && message === "Host not allowed") {
-      throw new ProjectError(`Mivra at ${url} doesn't accept requests for ${new URL(url).hostname}. Add it to MIVRA_ALLOWED_HOSTS where Mivra runs, and restart it.`);
-    }
+    if (remote && res.status === 403 && message === "Host not allowed") throw hostRefused(url);
     throw new ProjectError(typeof message === "string" ? message : `Mivra answered ${res.status}.`);
   };
 }
@@ -85,6 +83,10 @@ async function connect(dataDir: string) {
   const found = await server(dataDir);
   return { url: found.url, remote: found.remote, call: client(found) };
 }
+
+/** Mivra's Host guard refused the name in the address (ADR-013), which is fixed where Mivra runs. */
+const hostRefused = (url: string) =>
+  new ProjectError(`Mivra at ${url} doesn't accept requests for ${new URL(url).hostname}. Add it to MIVRA_ALLOWED_HOSTS where Mivra runs, and restart it.`);
 
 /** A redirect isn't followed with the token, so name where it goes instead. */
 const redirected = (url: string, res: Response) => {
@@ -101,7 +103,10 @@ async function isMivra(url: string): Promise<boolean> {
     return false;
   }
   if (res.status >= 300 && res.status < 400) throw redirected(url, res);
-  return res.ok && ((await res.json().catch(() => ({}))) as { ok?: unknown }).ok === true;
+  const body = (await res.json().catch(() => ({}))) as { ok?: unknown; error?: unknown };
+  // The Host guard answers before every route, health included, so a missing MIVRA_ALLOWED_HOSTS shows up here first.
+  if (res.status === 403 && body.error === "Host not allowed") throw hostRefused(url);
+  return res.ok && body.ok === true;
 }
 
 /**
