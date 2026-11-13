@@ -73,6 +73,7 @@ class Capped {
   }
 }
 
+const OUTPUT_EXCEEDED = (chars: number) => `Output limit exceeded (${chars.toLocaleString("en-US")} characters).`;
 const STACK_EXCEEDED = "Stack limit exceeded: the code recursed too deeply.";
 const formatBytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 
@@ -90,7 +91,7 @@ export function runExerciseCase(module: QuickJSWASMModule, { code, functionName,
 
   const describe = (vm: QuickJSContext, handle: QuickJSHandle): string => {
     if (timedOut) return `Time limit exceeded (${limits.timeMs / 1000} s): the code ran too long, or never stopped.`;
-    if (output.exceeded) return `Output limit exceeded (${limits.outputChars.toLocaleString("en-US")} characters).`;
+    if (output.exceeded) return OUTPUT_EXCEEDED(limits.outputChars);
     let message = "The code threw an error.";
     try {
       const dumped = vm.dump(handle) as unknown;
@@ -113,12 +114,16 @@ export function runExerciseCase(module: QuickJSWASMModule, { code, functionName,
     return message;
   };
 
-  const finish = (result: { returned?: string; error?: string }): ExerciseCaseRun => ({
+  const finish = (outcome: { returned?: string; error?: string }): ExerciseCaseRun => {
+    // Output past the cap is cut short, so the run can't count even if it finished before the interrupt handler ran.
+    const result = output.exceeded && outcome.error === undefined ? { error: OUTPUT_EXCEEDED(limits.outputChars) } : outcome;
+    return {
     stdout: output.stdout,
     ...(output.stderr ? { stderr: output.stderr } : {}),
     ...(result.returned !== undefined ? { returned: result.returned } : {}),
     ...(result.error !== undefined ? { error: result.error.slice(0, MAX_CASE_ERROR_CHARS) } : {}),
-  });
+    };
+  };
 
   let vm: QuickJSContext | undefined;
   try {

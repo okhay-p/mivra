@@ -170,6 +170,10 @@ describe("running a case in QuickJS", () => {
     const spam = await run("while (true) console.log('spam')", stdio());
     expect(spam.error).toMatch(/^Output limit exceeded/);
     expect(spam.stdout.length).toBeLessThanOrEqual(EXERCISE_LIMITS.outputChars);
+    // One oversized print that ends before the interrupt handler runs still fails.
+    for (const code of ['console.log("x".repeat(20001))', 'function f() { console.log("x".repeat(20001)); return 1 }']) {
+      expect((await run(code, code.startsWith("function") ? call() : stdio())).error).toMatch(/^Output limit exceeded/);
+    }
   });
 
   it("starts every case fresh", async () => {
