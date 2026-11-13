@@ -19,6 +19,8 @@ import {
   MilestoneCases,
   MilestoneCheckAnswer,
   MilestoneCheckResult,
+  MilestoneDispute,
+  MilestoneDisputeRequest,
   NoteGraph,
   NoteGraphView,
   NoteGraphViewQuery,
@@ -49,7 +51,8 @@ import { presentMessages } from "./runtime/artifacts.js";
 import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
 import { courseLessons, createLessonGenerator, lessonRevision, lessonView, reconcileCompletion } from "./runtime/lessons.js";
-import { currentMilestone, recordMilestoneCheck } from "./runtime/milestones.js";
+import { createMilestoneReviewer } from "./runtime/milestone-review.js";
+import { currentMilestone, disputeMilestone, recordMilestoneCheck } from "./runtime/milestones.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
 import { noteGraphView } from "./notes/graph-view.js";
@@ -271,13 +274,31 @@ const checkMilestone = createRoute({
   method: "post",
   path: "/artifacts/{id}/checks",
   description:
-    "Record one `mivra check` of a project milestone (ADR-016): what the learner's program printed for each case. The server grades it deterministically against the reference's outputs and keeps it as the milestone's attempt, replacing the last check. Refused once the milestone's lesson is finished.",
+    "Record one `mivra check` of a project milestone (ADR-016): what the learner's program printed for each case, and the files changed since the last passed milestone. The server grades the cases deterministically against the reference's outputs and keeps that as the milestone's attempt, replacing the last check. If every case passed, a model reviews the files (it can't turn a failed test into a pass) and its verdict is kept as a separate, model-judged attempt. Answers once the review is done. Refused once the milestone's lesson is finished.",
   request: { params: z.object({ id: z.string() }), body: { content: { "application/json": { schema: MilestoneCheckAnswer } } } },
   responses: {
-    201: { description: "The grade, with each case's expected output", content: { "application/json": { schema: MilestoneCheckResult } } },
+    201: { description: "The grade, each case's expected output, the review and whether the milestone passed", content: { "application/json": { schema: MilestoneCheckResult } } },
     400: errorResponse("Invalid results"),
     404: errorResponse("Unknown milestone"),
-    409: errorResponse("The milestone's lesson is finished, or it isn't the lesson's current milestone"),
+    409: errorResponse("The milestone's lesson is finished, it isn't the lesson's current milestone, or its cases changed meanwhile"),
+    413: errorResponse("Too large"),
+  },
+});
+
+const MilestoneDisputeResult = z.object({ view: ArtifactView, dispute: MilestoneDispute });
+
+const disputeMilestoneRoute = createRoute({
+  method: "post",
+  path: "/artifacts/{id}/disputes",
+  description:
+    "Dispute a project milestone's test case or its latest review verdict (ADR-016). The tutor looks again: a case may be kept, withdrawn or corrected (a corrected reference is rerun on every case first), and a verdict upheld or overturned. The dispute and its outcome are kept on the milestone. Answers once the tutor has decided.",
+  request: { params: z.object({ id: z.string() }), body: { content: { "application/json": { schema: MilestoneDisputeRequest } } } },
+  responses: {
+    201: { description: "The milestone as it is now, and the dispute's record", content: { "application/json": { schema: MilestoneDisputeResult } } },
+    400: errorResponse("Invalid dispute"),
+    404: errorResponse("Unknown milestone"),
+    409: errorResponse("The milestone is frozen, another dispute is being decided, or there's nothing to dispute"),
+    502: errorResponse("The tutor couldn't decide"),
   },
 });
 const LessonParams = z.object({ id: z.string() });
@@ -1136,7 +1157,10 @@ const turnErrorStatus = { not_found: 404, invalid: 400, conflict: 409, unavailab
   number
 >;
 
-const attemptErrorStatus = { not_found: 404, invalid: 400, conflict: 409 } as const;
+/** A check's body: 20 results of up to ~22,000 characters and 240,000 characters of files, escaped, with room to spare. */
+const MAX_CHECK_BYTES = 4 * 1024 * 1024;
+
+const attemptErrorStatus = { not_found: 404, invalid: 400, conflict: 409, failed: 502 } as const;
 
 function toSessionJson(row: SessionRow & { courseId?: string | null; icon?: string | null }) {
   return {
@@ -1316,6 +1340,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   const usage = createUsageTracker({ store: usageStore, describe: describeModel });
   const turns = createTurnRunner({ store, registry, model: resolveModel, models: runModels, lessons, notes: noteStore, usage });
   const generator = createLessonGenerator({ store, lessons, registry, model: resolveModel, models: runModels, notes: noteStore, usage });
+  const reviewer = createMilestoneReviewer({ model: resolveModel, models: runModels, usage });
   /** A session's name on the Usage page, read now: usage records keep no titles, and a deleted chat has none. */
   const sessionLabel = (id: string) => {
     const lesson = lessons.findLessonBySession(id);
@@ -1396,6 +1421,11 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
   });
   base.use("/imports", vaultBodyLimit);
   base.use("/imports/:id/files", vaultBodyLimit);
+  // A check sends results and files, both capped by its schema; refuse anything far larger before reading it.
+  base.use(
+    "/artifacts/:id/checks",
+    bodyLimit({ maxSize: MAX_CHECK_BYTES, onError: (c) => c.json({ error: "This check sent too much. Update `mivra`, which caps what it sends." }, 413) }),
+  );
   const api = base
     .openapi(health, (c) => c.json({ ok: true as const }, 200))
     .openapi(listSessions, (c) => c.json(store.listSessions().map(toSessionJson), 200))
@@ -1448,14 +1478,28 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       if (!result.ok) return c.json({ error: result.error.message }, result.error.kind === "not_found" ? 404 : 409);
       return c.json(result.value, 200);
     })
-    .openapi(checkMilestone, (c) => {
-      const result = recordMilestoneCheck(c.req.valid("param").id, c.req.valid("json"), { store, lessons });
-      if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
-      // The lesson page shows the new result.
+    .openapi(checkMilestone, async (c) => {
+      const result = await recordMilestoneCheck(c.req.valid("param").id, c.req.valid("json"), {
+        store,
+        lessons,
+        reviewer,
+        // The lesson page shows the tests' result at once, and the review's when it's done.
+        onRecorded: (lessonId) => generator.changed(lessonId),
+        signal: c.req.raw.signal,
+      });
+      if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind] as 400 | 404 | 409);
       generator.changed(result.lessonId);
       return c.json(result.result, 201);
     }, (result, c) => {
       if (!result.success) return c.json({ error: "Invalid check results. Update Mivra so `mivra check` and the server match." }, 400);
+    })
+    .openapi(disputeMilestoneRoute, async (c) => {
+      const result = await disputeMilestone(c.req.valid("param").id, c.req.valid("json"), { store, lessons, registry, reviewer, signal: c.req.raw.signal });
+      if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
+      generator.changed(result.lessonId);
+      return c.json({ view: result.view, dispute: result.dispute }, 201);
+    }, (result, c) => {
+      if (!result.success) return c.json({ error: "Invalid dispute: say which case, or the review, and why." }, 400);
     })
     .openapi(listCourseLessons, (c) => {
       const course = store.findCourse(c.req.valid("param").id);

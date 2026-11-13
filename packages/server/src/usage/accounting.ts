@@ -6,7 +6,7 @@ import type { ModelPrice } from "../models/catalog.js";
  * are never added again) are tested without a database.
  */
 
-export const usageKindList = ["chat", "continuation", "lesson", "distillation", "test"] as const;
+export const usageKindList = ["chat", "continuation", "lesson", "distillation", "review", "test"] as const;
 export type UsageKind = (typeof usageKindList)[number];
 export type UsageStatus = "completed" | "failed" | "cancelled";
 /** `api`: billed per token to an API key. `subscription`: the learner's ChatGPT plan pays (ADR-015). */
@@ -214,6 +214,7 @@ export const KIND_LABELS: Record<UsageKind, string> = {
   continuation: "Automatic continuations",
   lesson: "Lesson generation",
   distillation: "Reading imported notes",
+  review: "Code reviews",
   test: "Test model",
 };
 

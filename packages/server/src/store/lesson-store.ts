@@ -260,7 +260,7 @@ export function createLessonStore(db: Db, clock: () => Date = () => new Date()) 
         .select({ id: artifacts.id, attempt: attempts.id })
         .from(lessonSections)
         .innerJoin(artifacts, eq(artifacts.id, lessonSections.artifactId))
-        .leftJoin(attempts, eq(attempts.artifactId, artifacts.id))
+        .leftJoin(attempts, and(eq(attempts.artifactId, artifacts.id), eq(attempts.judge, "grader")))
         .where(and(inArray(lessonSections.id, sectionIds), inArray(artifacts.kind, checkKinds)))
         .all();
       return { total: rows.length, answered: rows.filter((r) => r.attempt).length };

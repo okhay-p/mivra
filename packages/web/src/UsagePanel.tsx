@@ -178,9 +178,10 @@ const KIND_DETAILS: Record<string, string> = {
   continuation: "The tutor carrying on after you answer its checks",
   lesson: "Background generation of lessons",
   distillation: "Background reading of imported notes into concepts and memories",
+  review: "Reviews of project milestones' code, and the tutor's answers to disputes",
   test: "Test model under Model providers",
 };
-const KIND_SHORT: Record<string, string> = { chat: "Chat", continuation: "Continuation", lesson: "Lesson", distillation: "Note reading", test: "Test model" };
+const KIND_SHORT: Record<string, string> = { chat: "Chat", continuation: "Continuation", lesson: "Lesson", distillation: "Note reading", review: "Code review", test: "Test model" };
 
 function apiHeadline(t: UsageTotals): string {
   const known = (t.reportedCost ?? 0) + (t.estimatedCost ?? 0);

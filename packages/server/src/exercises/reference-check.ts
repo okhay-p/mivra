@@ -177,13 +177,15 @@ export async function prepareProjectMilestone(
   runCases: RunCases,
   signal?: AbortSignal,
 ): Promise<{ ok: true; spec: ProjectMilestoneSpec } | { ok: false; reason: string }> {
+  const cases = input.cases ?? [];
+  if (input.referenceSolution === undefined || cases.length === 0) return { ok: false, reason: "A tests milestone needs cases and a referenceSolution." };
   let results: ExerciseCaseRun[];
   try {
-    results = await runCases({ language: "python", code: input.referenceSolution, cases: input.cases.map((c) => ({ kind: "stdio" as const, stdin: c.input })) }, signal);
+    results = await runCases({ language: "python", code: input.referenceSolution, cases: cases.map((c) => ({ kind: "stdio" as const, stdin: c.input })) }, signal);
   } catch (error) {
     return { ok: false, reason: error instanceof Error ? error.message : "The reference check failed." };
   }
-  const failures = results.flatMap((run, i) => (run.error !== undefined ? [`case ${i} ("${input.cases[i]!.name}"): ${run.error}`] : []));
+  const failures = results.flatMap((run, i) => (run.error !== undefined ? [`case ${i} ("${cases[i]!.name}"): ${run.error}`] : []));
   if (failures.length === 0 && results.every((run) => normaliseOutput(run.stdout) === "")) {
     failures.push("the reference printed nothing for any case, so there is nothing to compare with");
   }
@@ -193,5 +195,5 @@ export async function prepareProjectMilestone(
       reason: `referenceSolution failed, so the milestone wasn't set. Fix the reference or the cases and call set_project_milestone again. ${failures.slice(0, 5).join("; ")}`,
     };
   }
-  return { ok: true, spec: { ...input, cases: input.cases.map((testCase, i) => ({ ...testCase, expected: normaliseOutput(results[i]!.stdout) })) } };
+  return { ok: true, spec: { ...input, cases: cases.map((testCase, i) => ({ ...testCase, expected: normaliseOutput(results[i]!.stdout) })) } };
 }
