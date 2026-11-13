@@ -85,7 +85,7 @@
   --code-string: oklch(0.78 0.09 195);
   --code-number: oklch(0.76 0.12 355);
   --code-type: oklch(0.76 0.11 250);
-  --code-comment: oklch(0.62 0.012 70);
+  --code-comment: oklch(0.7 0.012 70);
 }
 
 @theme inline {

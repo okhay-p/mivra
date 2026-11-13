@@ -51,6 +51,22 @@ export function dialectOf(language: string | undefined): string | undefined {
 }
 
 /**
+ * Lezer recovers from broken code by trying alternatives, which pathological input can make slow: 4,000 `<` as JSX
+ * takes seconds, while real code of that size takes tens of milliseconds (a cold first parse, a few hundred).
+ * Colouring isn't worth a stalled page, so a parse that runs past its budget is dropped and the code shows plain.
+ */
+export const PARSE_BUDGET_MS = 300;
+function parseWithin(parser: Parser, source: string) {
+  const parse = parser.startParse(source);
+  const deadline = performance.now() + PARSE_BUDGET_MS;
+  for (;;) {
+    const tree = parse.advance();
+    if (tree) return tree;
+    if (performance.now() > deadline) return undefined;
+  }
+}
+
+/**
  * The source's lines, each split into highlighted runs, or undefined for a language we don't highlight. Lines are
  * split on `\n` only, so the caller normalises line endings first; the result always has one entry per line.
  */
@@ -59,7 +75,8 @@ export function highlightLines(source: string, language: string | undefined): To
   if (dialect === undefined) return undefined;
   const lines: Token[][] = [[]];
   try {
-    const tree = parserFor(dialect).parse(source);
+    const tree = parseWithin(parserFor(dialect), source);
+    if (!tree) return undefined;
     highlightCode(
       source,
       tree,

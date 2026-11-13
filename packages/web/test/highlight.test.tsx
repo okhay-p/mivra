@@ -1,7 +1,7 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { CodePane } from "../src/artifacts/CodePane.js";
-import { dialectOf, highlightLines } from "../src/highlight.js";
+import { dialectOf, highlightLines, PARSE_BUDGET_MS } from "../src/highlight.js";
 import { MathText } from "../src/MathText.js";
 import { renderMarkdown } from "../src/render-markdown.js";
 
@@ -63,5 +63,14 @@ describe("highlighted code on the page", () => {
     expect(container.querySelector("pre code .tok-keyword")?.textContent).toBe("const");
     expect(container.querySelectorAll("pre code")[0]!.textContent).toBe("const x = 1;\n");
     expect(container.querySelectorAll("pre code")[1]!.querySelector("span")).toBeNull();
+  });
+});
+
+describe("highlightLines on pathological input", () => {
+  it("gives up on a parse that runs past its budget and shows the code plain", () => {
+    const start = performance.now();
+    const result = highlightLines("<".repeat(4000), "jsx");
+    expect(performance.now() - start).toBeLessThan(PARSE_BUDGET_MS + 300);
+    expect(result).toBeUndefined();
   });
 });
