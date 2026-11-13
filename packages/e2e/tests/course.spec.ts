@@ -15,6 +15,8 @@ test("a course starts from the first screen, runs the placement interview and wr
   // Until the syllabus, the course is titled after its goal, with the graduation cap.
   const entry = page.locator("[data-session-id]").filter({ hasText: goal.slice(0, 60) });
   await expect(entry.locator('svg[data-icon="graduation-cap"]')).toBeVisible();
+  // Every scripted course gets the same title, and tests share a database, so follow this course's own entry.
+  const sessionId = await entry.getAttribute("data-session-id");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(goal.slice(0, 60));
   const derivative = page.getByRole("region", { name: "Placement question: derivative" });
   const limit = page.getByRole("region", { name: "Placement question: limit" });
@@ -44,7 +46,8 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(course.getByRole("list", { name: "What Mivra thinks you know" })).toContainText("From the test");
 
   // The tutor's title and subject icon replace the placeholder, without a reload.
-  const titled = page.locator("[data-session-id]").filter({ hasText: "Calculus for ML" });
+  const titled = page.locator(`[data-session-id="${sessionId}"]`);
+  await expect(titled).toContainText("Calculus for ML");
   await expect(titled.locator('svg[data-icon="sigma"]')).toBeVisible();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Calculus for ML");
   await expect(page.locator("[data-session-id]").filter({ hasText: goal.slice(0, 60) })).toHaveCount(0);
