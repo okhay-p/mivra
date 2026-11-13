@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type InterviewContextAnswer, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type CourseKind, type InterviewContextAnswer, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -222,9 +222,9 @@ export const importVaultZip = (target: ImportTarget, file: File) => {
 };
 
 /** Starts a course for a goal; the server creates its session too. */
-export const startCourse = (goal: string) =>
+export const startCourse = (goal: string, kind: CourseKind = "lessons") =>
   request(
-    () => api.courses.$post({ json: { goal } }),
+    () => api.courses.$post({ json: { goal, kind } }),
     async (res) => {
       const body = (await res.json()) as { course: unknown; session: { id: string; title: string; updatedAt: string; courseId: string | null } };
       return { course: CourseView.parse(body.course), session: body.session };

@@ -8,8 +8,16 @@ import { z } from "zod";
 export const MAX_GOAL_CHARS = 300;
 export const CourseGoal = z.string().trim().min(1).max(MAX_GOAL_CHARS);
 
+/**
+ * A course's kind (ADR-016): `lessons` teaches through lessons with checks; `project` builds one project in the
+ * learner's own repository, a milestone per syllabus topic, checked there with `mivra check`.
+ */
+export const COURSE_KINDS = ["lessons", "project"] as const;
+export const CourseKind = z.enum(COURSE_KINDS);
+export type CourseKind = z.infer<typeof CourseKind>;
+
 /** Body of POST /courses. */
-export const StartCourse = z.object({ goal: CourseGoal }).strict();
+export const StartCourse = z.object({ goal: CourseGoal, kind: CourseKind.optional() }).strict();
 export type StartCourse = z.infer<typeof StartCourse>;
 
 const ConceptName = z.string().trim().min(1).max(80);
@@ -247,6 +255,7 @@ export const CourseView = z
     id: z.string(),
     sessionId: z.string(),
     goal: z.string(),
+    kind: CourseKind,
     status: CourseStatus,
     syllabus: SyllabusView.nullable(),
     /** The tutor's reply that wrote the first syllabus, which ends the placement interview; null if unknown. */

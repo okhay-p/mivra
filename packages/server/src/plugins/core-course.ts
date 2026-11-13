@@ -150,6 +150,12 @@ export const coreCourse: Plugin = {
             if (!lessons || !lessonId) return { status: "rejected", reason: "No lesson is open." };
             const resolved = [];
             for (const op of operations) {
+              // A milestone stays in its lesson: `mivra check` checks the one in the current version (ADR-016).
+              if (op.op === "remove") {
+                const section = lessons.sections([op.sectionId])[0];
+                const artifact = section?.artifactId ? store.findArtifact(section.artifactId) : undefined;
+                if (artifact?.kind === "project_milestone") return { status: "rejected", reason: "A milestone can't be removed from its lesson." };
+              }
               if (op.op !== "insert_artifact") {
                 resolved.push(op);
                 continue;

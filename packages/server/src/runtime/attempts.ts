@@ -28,6 +28,7 @@ export function submitAttempt(
   if (!artifact) return { ok: false, error: { kind: "not_found", message: "Artifact not found" } };
   const check = registry.artifactKind(artifact.kind)?.check;
   if (!check) return { ok: false, error: { kind: "invalid", message: "This artifact can't be answered" } };
+  if (check.repeatable) return { ok: false, error: { kind: "invalid", message: "Check this milestone from your repository with `mivra check`" } };
   // Only a completed reply is kept, so only its checks count. While the reply is still streaming the
   // check could still be discarded, which would orphan the attempt. A lesson section stays even if the
   // rest of its generation fails, so it can be answered at once.

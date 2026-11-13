@@ -64,6 +64,48 @@ const syllabus = {
   known: [{ concept: "derivative", source: "test", note: "Answered correctly." }],
 };
 
+/** A project course's plan (ADR-016): each topic is a milestone. */
+const projectSyllabus = {
+  title: "A word counter",
+  icon: "terminal",
+  topics: [
+    { title: "Count words", summary: "Your program prints how many words its input has.", reason: "The smallest program that runs.", requestedByLearner: false, concepts: ["reading input"] },
+    { title: "Count lines", summary: "It counts lines too.", reason: "Builds on word counts.", requestedByLearner: false, concepts: ["lines"] },
+  ],
+  known: [],
+};
+
+/** A milestone lesson, whose reference the server runs in Pyodide. */
+const PROJECT_LESSON_STEPS: Step[] = [
+  {
+    tool: "outline_lesson",
+    input: {
+      title: "Count the words",
+      sections: [
+        { title: "What a word is", kind: "prose", purpose: "Define a word." },
+        { title: "Build it", kind: "project_milestone", purpose: "The milestone." },
+      ],
+    },
+  },
+  { tool: "write_lesson_text", input: { markdown: "A **word** is a run of characters between spaces." } },
+  {
+    tool: "set_project_milestone",
+    input: {
+      concept: "reading input",
+      title: "Print the word count",
+      spec: "Read the input and print how many words it has. Check it with `mivra check`.",
+      outputFormat: "One line: `words: N`.",
+      checkType: "tests",
+      cases: [
+        { name: "two words", input: "hello world" },
+        { name: "empty", input: "" },
+      ],
+      referenceSolution: "import sys\nprint(f'words: {len(sys.stdin.read().split())}')\n",
+    },
+  },
+  { text: "" },
+];
+
 // Enough topics, with multi-line summaries and reasons, that the expanded syllabus has to scroll (#106).
 const longSyllabus = {
   ...syllabus,
@@ -615,6 +657,8 @@ const SCRIPTS: Record<string, Step[]> = {
   deepnesting: [{ text: `${">".repeat(2000)} deep\n\n**still fine**`, stream: true }],
   // An inequality with many closed intervals, which is ordinary discrete maths.
   intervals: [{ text: `$a<b$ ${"$[0,1]$ ".repeat(66)}` }],
+  // A project course whose learner asked to skip the questions: the syllabus straight away.
+  projectcourse: [{ tool: "write_syllabus", input: projectSyllabus }, { text: "Your project plan is ready." }],
   placementcourse: [
     { tool: "ask_placement_question", input: { concept: "derivative", question: "Is the derivative of $x^2$ equal to $2x$?", options: [{ text: "True" }, { text: "False" }], correctOptionIndex: 0, explanation: "Power rule." } },
     { tool: "ask_placement_question", input: { concept: "limit", question: "What is the limit of $1/x$ as $x \\to \\infty$?", options: [{ text: "0" }, { text: "1" }, { text: "Infinity" }], correctOptionIndex: 0, explanation: "It shrinks towards 0." } },
@@ -736,6 +780,7 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
     if (done === 0 && system.includes("lessonhold")) return { ...LESSON_STEPS[0]!, hold: true };
     if (!system.includes("previous_lesson") && system.includes("lessonwalkthrough")) return LESSON_WALKTHROUGH_STEPS[done] ?? { text: "" };
     if (!system.includes("previous_lesson") && system.includes("lessoncomposition")) return LESSON_COMPOSITION_STEPS[done] ?? { text: "" };
+    if (system.includes("projectcourse")) return PROJECT_LESSON_STEPS[done] ?? { text: "" };
     if (!system.includes("previous_lesson")) return LESSON_STEPS[done] ?? { text: "" };
     // The next lesson revisits the missed idea and, since the learner struggled, adapts the plan once.
     const revisited = /"sectionId":"([^"]+)","title":"The idea"/.exec(system)?.[1] ?? "missing";

@@ -16,6 +16,7 @@ import type { Plugin } from "../runtime/capabilities.js";
 import type { RunCases } from "../exercises/reference-check.js";
 import { codeExerciseKindDefinition } from "./code-exercise.js";
 import { compositionKindDefinition } from "./composition.js";
+import { projectMilestoneKindDefinition } from "./project-milestone.js";
 
 /**
  * First-party learning tools (ADR-006/007): the visualization kinds, the multiple_choice check and code
@@ -170,6 +171,7 @@ export const createCoreLearning = ({ runCases }: { runCases?: RunCases } = {}): 
 
     // A check graded from what the learner's browser reports, against the reference's results (ADR-016).
     api.registerArtifactKind(codeExerciseKindDefinition(runCases));
+    api.registerArtifactKind(projectMilestoneKindDefinition(runCases));
   },
 });
 

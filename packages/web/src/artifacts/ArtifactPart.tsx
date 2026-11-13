@@ -8,6 +8,7 @@ import { Graph } from "./Graph.js";
 import { InterviewContext } from "./InterviewContext.js";
 import { MultipleChoice } from "./MultipleChoice.js";
 import { PlacementQuestion } from "./PlacementQuestion.js";
+import { ProjectMilestone } from "./ProjectMilestone.js";
 import { SetDiagram } from "./SetDiagram.js";
 import { TableArtifact } from "./TableArtifact.js";
 import { WorkedSteps } from "./WorkedSteps.js";
@@ -32,6 +33,7 @@ const renderers: { [K in ArtifactKind]: ComponentType<ArtifactProps<K>> } = {
   interview_context: InterviewContext,
   multiple_choice: MultipleChoice,
   placement_question: PlacementQuestion,
+  project_milestone: ProjectMilestone,
   set_diagram: SetDiagram,
   table: TableArtifact,
   worked_steps: WorkedSteps,

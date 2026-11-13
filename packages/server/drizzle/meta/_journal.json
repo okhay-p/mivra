@@ -134,6 +134,13 @@
       "when": 1794307981176,
       "tag": "0018_happy_hairball",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1794569815779,
+      "tag": "0019_public_doctor_faustus",
+      "breakpoints": true
     }
   ]
 }

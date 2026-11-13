@@ -16,6 +16,9 @@ import {
   MemoryBulkDelete,
   MemoryEdit,
   MemoryView,
+  MilestoneCases,
+  MilestoneCheckAnswer,
+  MilestoneCheckResult,
   NoteGraph,
   NoteGraphView,
   NoteGraphViewQuery,
@@ -46,6 +49,7 @@ import { presentMessages } from "./runtime/artifacts.js";
 import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
 import { courseLessons, createLessonGenerator, lessonRevision, lessonView, reconcileCompletion } from "./runtime/lessons.js";
+import { currentMilestone, recordMilestoneCheck } from "./runtime/milestones.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
 import { noteGraphView } from "./notes/graph-view.js";
@@ -238,6 +242,44 @@ const getCourse = createRoute({
 });
 
 const CourseParams = z.object({ id: z.string() });
+
+const getCourseById = createRoute({
+  method: "get",
+  path: "/courses/{id}",
+  description: "A course by its id, as `mivra link` looks it up.",
+  request: { params: CourseParams },
+  responses: {
+    200: { description: "The course with its latest syllabus", content: { "application/json": { schema: CourseView } } },
+    404: errorResponse("Unknown course"),
+  },
+});
+
+const getMilestone = createRoute({
+  method: "get",
+  path: "/courses/{id}/milestone",
+  description:
+    "The current milestone of a project course (ADR-016), as `mivra check` fetches it: its cases' inputs as data. It never carries a command: the only command that runs is the one the learner set with `mivra link`.",
+  request: { params: CourseParams },
+  responses: {
+    200: { description: "The milestone's cases", content: { "application/json": { schema: MilestoneCases } } },
+    404: errorResponse("Unknown course"),
+    409: errorResponse("Not a project course, or no milestone to check right now"),
+  },
+});
+
+const checkMilestone = createRoute({
+  method: "post",
+  path: "/artifacts/{id}/checks",
+  description:
+    "Record one `mivra check` of a project milestone (ADR-016): what the learner's program printed for each case. The server grades it deterministically against the reference's outputs and keeps it as the milestone's attempt, replacing the last check. Refused once the milestone's lesson is finished.",
+  request: { params: z.object({ id: z.string() }), body: { content: { "application/json": { schema: MilestoneCheckAnswer } } } },
+  responses: {
+    201: { description: "The grade, with each case's expected output", content: { "application/json": { schema: MilestoneCheckResult } } },
+    400: errorResponse("Invalid results"),
+    404: errorResponse("Unknown milestone"),
+    409: errorResponse("The milestone's lesson is finished, or it isn't the lesson's current milestone"),
+  },
+});
 const LessonParams = z.object({ id: z.string() });
 const LessonResponse = z.object({ lesson: LessonView, revision: z.string() });
 const lessonResponse = (description: string) => ({ description, content: { "application/json": { schema: LessonResponse } } });
@@ -1115,6 +1157,7 @@ function toCourseJson(row: CourseRow, store: SessionStore, lessons: LessonStore)
     id: row.id,
     sessionId: row.sessionId,
     goal: row.goal,
+    kind: row.kind,
     status: row.status,
     syllabus: syllabus
       ? {
@@ -1386,13 +1429,33 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       return c.body(null, 204);
     })
     .openapi(startCourse, (c) => {
-      const { course, session } = store.createCourse(c.req.valid("json").goal);
+      const { goal, kind } = c.req.valid("json");
+      const { course, session } = store.createCourse(goal, kind);
       return c.json({ course: toCourseJson(course, store, lessons), session: toSessionJson({ ...session, courseId: course.id }) }, 201);
     })
     .openapi(getCourse, (c) => {
       const course = store.findCourseBySession(c.req.valid("param").id);
       if (!course) return c.json({ error: "This session isn't a course" }, 404);
       return c.json(toCourseJson(course, store, lessons), 200);
+    })
+    .openapi(getCourseById, (c) => {
+      const course = store.findCourse(c.req.valid("param").id);
+      if (!course) return c.json({ error: "Course not found" }, 404);
+      return c.json(toCourseJson(course, store, lessons), 200);
+    })
+    .openapi(getMilestone, (c) => {
+      const result = currentMilestone(c.req.valid("param").id, { store, lessons });
+      if (!result.ok) return c.json({ error: result.error.message }, result.error.kind === "not_found" ? 404 : 409);
+      return c.json(result.value, 200);
+    })
+    .openapi(checkMilestone, (c) => {
+      const result = recordMilestoneCheck(c.req.valid("param").id, c.req.valid("json"), { store, lessons });
+      if (!result.ok) return c.json({ error: result.error.message }, attemptErrorStatus[result.error.kind]);
+      // The lesson page shows the new result.
+      generator.changed(result.lessonId);
+      return c.json(result.result, 201);
+    }, (result, c) => {
+      if (!result.success) return c.json({ error: "Invalid check results. Update Mivra so `mivra check` and the server match." }, 400);
     })
     .openapi(listCourseLessons, (c) => {
       const course = store.findCourse(c.req.valid("param").id);

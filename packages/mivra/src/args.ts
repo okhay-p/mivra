@@ -11,6 +11,8 @@ export type Command =
   | { name: "auth-login"; newAccount: boolean; open: boolean }
   | { name: "auth-logout" }
   | { name: "import-obsidian"; folder: string; importName?: string }
+  | { name: "link"; course: string; run: string; runOutput?: string }
+  | { name: "check"; timeoutS: number }
   | { name: "uninstall"; deleteData: boolean | undefined }
   | { name: "help" }
   | { name: "version" };
@@ -34,6 +36,12 @@ Commands:
   auth logout chatgpt      Sign out of ChatGPT
   import obsidian <folder> Import an Obsidian vault's notes into a running Mivra; run it again to re-import
     --name <name>          Name the import (default: the folder's name)
+  link <course>            Link this folder to a project course, in .mivra.json (no secrets; safe to commit)
+    --run <command>        How to run your program, e.g. "./build/mycc {input}": {input} becomes the path to a
+                           file holding a case's input, which also comes on stdin. Runs without a shell
+    --run-output <command> For cases that run your program's output (e.g. assembly): {output} is its path
+  check                    Run your program on the current milestone's cases and record the result in Mivra
+    --timeout <seconds>    Time limit for each run (default: 10)
   uninstall                Stop Mivra and ask whether to delete its data, before you remove the package
     --delete-data          Delete the data without asking
     --keep-data            Keep the data without asking
@@ -60,6 +68,9 @@ export function parseCommand(argv: string[]): Command {
       options: {
         port: { type: "string" },
         name: { type: "string" },
+        run: { type: "string" },
+        "run-output": { type: "string" },
+        timeout: { type: "string" },
         detach: { type: "boolean", default: false },
         open: { type: "boolean", default: true },
         check: { type: "boolean", default: true },
@@ -119,6 +130,21 @@ export function parseCommand(argv: string[]): Command {
       if (!arg) throw new UsageError("Give the vault's folder: `mivra import obsidian <folder>`.");
       tooMany(3);
       return { name: "import-obsidian", folder: arg, ...(values.name === undefined ? {} : { importName: values.name }) };
+    case "link": {
+      if (!sub) throw new UsageError('Give the course\'s id, as the milestone in Mivra shows it: `mivra link <course> --run "<command>"`.');
+      tooMany(2);
+      if (!values.run?.trim()) throw new UsageError('Say how to run your program with --run, e.g. `mivra link <course> --run "./build/mycc {input}"`.');
+      return { name: "link", course: sub, run: values.run.trim(), ...(values["run-output"]?.trim() ? { runOutput: values["run-output"].trim() } : {}) };
+    }
+    case "check": {
+      tooMany(1);
+      let timeoutS = 10;
+      if (values.timeout !== undefined) {
+        timeoutS = Number(values.timeout);
+        if (!Number.isFinite(timeoutS) || timeoutS < 1 || timeoutS > 600) throw new UsageError(`--timeout needs a number of seconds from 1 to 600, not "${values.timeout}".`);
+      }
+      return { name: "check", timeoutS };
+    }
     case "uninstall":
       tooMany(1);
       if (values["delete-data"] && values["keep-data"]) throw new UsageError("Use --delete-data or --keep-data, not both.");

@@ -94,14 +94,16 @@ describe("syllabus", () => {
   it("validates a course view and the start body", () => {
     expect(StartCourse.safeParse({ goal: "  " }).success).toBe(false);
     expect(StartCourse.safeParse({ goal: "Calculus" }).success).toBe(true);
+    expect(StartCourse.safeParse({ goal: "A C compiler", kind: "project" }).success).toBe(true);
+    expect(StartCourse.safeParse({ goal: "A C compiler", kind: "other" }).success).toBe(false);
     expect(
-      CourseView.safeParse({ id: "c", sessionId: "s", goal: "Calculus", status: "interviewing", syllabus: null, interviewMessageId: null, createdAt: new Date().toISOString() }).success,
+      CourseView.safeParse({ id: "c", sessionId: "s", goal: "Calculus", kind: "lessons", status: "interviewing", syllabus: null, interviewMessageId: null, createdAt: new Date().toISOString() }).success,
     ).toBe(true);
   });
 });
 
 describe("lesson schemas", async () => {
-  const { LessonOutlineInput, LessonSectionKind, LessonTextInput, artifactKinds } = await import("../src/index.js");
+  const { LessonOutlineInput, LessonSectionKind, LessonTextInput, ProjectLessonOutlineInput, artifactKinds } = await import("../src/index.js");
 
   it("plans every artifact kind except the interview's, plus prose", () => {
     const expected = [...Object.keys(artifactKinds).filter((k) => k !== "placement_question" && k !== "interview_context"), "prose"].sort();
@@ -114,5 +116,18 @@ describe("lesson schemas", async () => {
     const sections = [{ title: "a", kind: "prose", purpose: "p" }, { title: "b", kind: "table", purpose: "p" }];
     expect(LessonOutlineInput.safeParse({ title: "t", sections }).success).toBe(false);
     expect(LessonOutlineInput.safeParse({ title: "t", sections: [...sections, { title: "c", kind: "multiple_choice", purpose: "p" }] }).success).toBe(true);
+  });
+
+  it("keeps milestones to project courses, where a lesson ends with exactly one", () => {
+    const prose = { title: "a", kind: "prose", purpose: "p" };
+    const check = { title: "c", kind: "multiple_choice", purpose: "p" };
+    const milestone = { title: "m", kind: "project_milestone", purpose: "p" };
+    expect(LessonOutlineInput.safeParse({ title: "t", sections: [prose, check, milestone] }).success).toBe(false);
+    expect(ProjectLessonOutlineInput.safeParse({}).success).toBe(false);
+    expect(ProjectLessonOutlineInput.safeParse({ title: "t", sections: [prose, milestone] }).success).toBe(true);
+    expect(ProjectLessonOutlineInput.safeParse({ title: "t", sections: [prose, check, milestone] }).success).toBe(true);
+    expect(ProjectLessonOutlineInput.safeParse({ title: "t", sections: [prose, check] }).success).toBe(false);
+    expect(ProjectLessonOutlineInput.safeParse({ title: "t", sections: [milestone, prose] }).success).toBe(false);
+    expect(ProjectLessonOutlineInput.safeParse({ title: "t", sections: [prose, milestone, { ...milestone, title: "n" }] }).success).toBe(false);
   });
 });

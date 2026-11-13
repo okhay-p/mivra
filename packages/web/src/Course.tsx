@@ -1,8 +1,9 @@
-import { MAX_GOAL_CHARS, type CourseView, type KnownSource } from "@mivra/protocol";
+import { MAX_GOAL_CHARS, type CourseKind, type CourseView, type KnownSource } from "@mivra/protocol";
 import { ChevronDown, GraduationCap } from "lucide-react";
 import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
@@ -21,6 +22,7 @@ export interface StartedCourse {
 export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started: StartedCourse) => void; onFreeChat: () => void }) {
   const goalId = useId();
   const [goal, setGoal] = useState("");
+  const [kind, setKind] = useState<CourseKind>("lessons");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   // The selection is app-wide (ADR-012): the one chosen here writes the syllabus and teaches the course.
@@ -32,7 +34,7 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
     if (!text || busy) return;
     setBusy(true);
     setError(undefined);
-    const result = await startCourse(text);
+    const result = await startCourse(text, kind);
     setBusy(false);
     if (!result.ok) return setError(result.error);
     onStarted({ session: result.value.session, goal: text });
@@ -68,6 +70,24 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
           </Button>
         </div>
         {error && <FieldError id={`${goalId}-error`} role="alert">{error}</FieldError>}
+        <div className="flex items-start gap-2.5 pt-1">
+          <Checkbox
+            id={`${goalId}-project`}
+            aria-describedby={`${goalId}-project-description`}
+            checked={kind === "project"}
+            onCheckedChange={(checked) => setKind(checked === true ? "project" : "lessons")}
+            disabled={busy}
+            className="mt-0.5"
+          />
+          <div className="flex flex-col gap-0.5">
+            <FieldLabel htmlFor={`${goalId}-project`} className="font-normal">
+              Build it as a project in my own repository
+            </FieldLabel>
+            <FieldDescription id={`${goalId}-project-description`} className="text-[0.8125rem]">
+              Milestones instead of lessons, in any language you have installed, each checked with <code className="font-mono text-xs">mivra check</code>.
+            </FieldDescription>
+          </div>
+        </div>
       </Field>
       <div className="flex justify-center">
         <ModelPicker state={modelPicker} disabled={busy} />
@@ -97,10 +117,15 @@ export function CourseBar({ course, children, onUndo }: { course: CourseView; ch
         <Badge variant="outline" className="border-border-strong bg-card shrink-0 font-mono text-[0.6875rem] font-medium tracking-[0.06em] uppercase">
           {course.status === "interviewing" ? "Placement interview" : course.status === "complete" ? "Complete" : "In progress"}
         </Badge>
+        {course.kind === "project" && (
+          <Badge variant="outline" className="border-border-strong bg-card shrink-0 font-mono text-[0.6875rem] font-medium tracking-[0.06em] uppercase">
+            Project
+          </Badge>
+        )}
         {syllabus && (
           <CollapsibleTrigger asChild>
             <Button variant="ghost" size="sm" className="ml-auto shrink-0">
-              Syllabus · {syllabus.topics.length} topics
+              Syllabus · {syllabus.topics.length} {course.kind === "project" ? "milestones" : "topics"}
               <ChevronDown className={cn("transition-transform", open && "rotate-180")} aria-hidden />
             </Button>
           </CollapsibleTrigger>

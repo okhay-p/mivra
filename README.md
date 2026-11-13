@@ -35,6 +35,8 @@ Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first tim
 | `mivra auth login chatgpt` / `mivra auth logout chatgpt` | Sign in with ChatGPT to use your plan, or sign out |
 | `mivra uninstall` | Stop Mivra and ask whether to delete your data. Run it before `npm uninstall -g @okhay-p/mivra`; `--delete-data` or `--keep-data` answers ahead |
 | `mivra import obsidian <folder>` | Import an Obsidian vault's notes into a running Mivra. Run it again after you've changed the vault to update it. `--name` names the import |
+| `mivra link <course> --run "<command>"` | In your project's folder, link it to a project course, saved in `.mivra.json` (no secrets, safe to commit). `{input}` in the command becomes the path to a file holding a test's input, which also comes on stdin |
+| `mivra check` | Run your program on the current milestone's tests and record the result in a running Mivra. `--timeout <seconds>` sets each run's limit (default 10) |
 
 You can also import a vault from the app: open **Imported notes** in the sidebar, choose the vault's folder, and re-import or delete it there later. On a phone or tablet that can't choose folders, upload a `.zip` of the vault instead.
 

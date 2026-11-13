@@ -1,4 +1,4 @@
-import { ArtifactView } from "@mivra/protocol";
+import { ArtifactView, type CourseKind } from "@mivra/protocol";
 import { tool, type Tool, type ToolSet } from "ai";
 import type { ZodType } from "zod";
 import type { LessonStore } from "../store/lesson-store.js";
@@ -12,6 +12,8 @@ export interface TurnContext {
   lessons?: LessonStore;
   /** The lesson the learner had open when they sent this turn, in a course session. */
   lessonId?: string;
+  /** Set only while a lesson is being generated: the kind of course it belongs to. */
+  lessonCourseKind?: CourseKind;
 }
 
 /** A gradable artifact kind (a check). Grading is deterministic (ADR-006). */
@@ -22,6 +24,11 @@ export interface CheckDefinition {
   concept?(spec: unknown, answer: unknown): string | undefined;
   /** What the model sees about the learner's attempt (or its absence) on later turns. */
   describeAttempt(spec: unknown, attempt: AttemptRow | undefined): unknown;
+  /**
+   * Answered as often as the learner likes, each answer replacing the last, through the kind's own route rather than
+   * POST /artifacts/{id}/attempts: a project milestone, checked with `mivra check` (ADR-016).
+   */
+  repeatable?: boolean;
 }
 
 /** An artifact kind the agent can produce through a tool call (ADR-006). */

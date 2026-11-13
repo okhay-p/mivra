@@ -23,6 +23,10 @@ Files use four digits (`0010-*.md`); the code cites them as `ADR-010`. The next 
 - [ADR-015](0015-sign-in-with-chatgpt.md): sign in with ChatGPT through OpenAI's open-source route, as a provider beside the API keys
 - [ADR-016](0016-code-exercises-and-project-courses.md): code exercises in the browser (JavaScript in QuickJS, Python in Pyodide), and project courses checked in the learner's own repo with `mivra check`
 
+## Proposed
+
+- [ADR-017](0017-project-milestones-in-the-syllabus.md): a project course's milestones are its syllabus topics, one per lesson; each `mivra check` replaces the milestone's attempt; it freezes with its lesson
+
 ## Project scope
 
 - Name: Mivra.
