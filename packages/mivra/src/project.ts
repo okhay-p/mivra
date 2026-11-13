@@ -76,7 +76,7 @@ function client({ url, token, remote }: { url: string; token: string; remote: bo
       throw new ProjectError(`${url} redirects${location ? ` to ${location}` : ""}, which Mivra doesn't follow. Use Mivra's own address: \`mivra link --server <url>\`.`);
     }
     const message = ((await res.json().catch(() => ({}))) as { error?: unknown }).error;
-    if (remote && res.status === 401) throw new ProjectError(`Mivra at ${url} didn't accept the saved token. ${relink}`);
+    if (remote && res.status === 401) throw new ProjectError(`Mivra at ${url} didn't accept the token. ${relink}`);
     if (remote && res.status === 403 && message === "Host not allowed") {
       throw new ProjectError(`Mivra at ${url} doesn't accept requests for ${new URL(url).hostname}. Add it to MIVRA_ALLOWED_HOSTS where Mivra runs, and restart it.`);
     }
