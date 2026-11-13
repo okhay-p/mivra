@@ -28,6 +28,14 @@ const Formula = memo(function Formula({ source, display }: { source: string; dis
   return html === undefined ? <span className="katex-error">{source}</span> : <span className="math-text-formula" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
+/**
+ * One display formula from its LaTeX source, without delimiters, through the same trusted typesetter. A formula
+ * KaTeX can't parse shows its source text, so stored maths always stays readable.
+ */
+export function DisplayFormula({ source }: { source: string }) {
+  return <Formula source={source} display />;
+}
+
 /** A rendered block as React elements. Formulas come as an index into the block's typeset HTML. */
 function RenderedTree({ block }: { block: RenderedBlock }) {
   return useMemo(() => {

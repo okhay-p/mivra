@@ -13,6 +13,7 @@ import { deriveConceptState } from "../src/runtime/learner-context.js";
 import { createTurnRunner } from "../src/runtime/turn-runner.js";
 import { createSessionStore } from "../src/store/session-store.js";
 import { fixedModel } from "./support/models.js";
+import { aliasingComposition } from "@mivra/protocol/test/composition-fixtures";
 
 const TOKEN = "test-token";
 const auth = { authorization: `Bearer ${TOKEN}` };
@@ -1024,4 +1025,41 @@ it("recovers interrupted continuations with a durable retry budget and cooldown,
   store.finishRun(cancelled.id, cancelledSession.id, "cancelled");
   expect(store.startContinuation(cancelledSession.id, ["multiple_choice"])).toBeUndefined();
   db.$client.close();
+});
+
+describe("composition through the agent", () => {
+  it("streams, stores and reloads the full view, without the raw tool call", async () => {
+    const { app, db, model } = setup([{ toolCall: { name: "show_composition", input: aliasingComposition } }, { text: "Step through the names." }]);
+    const sessionId = await newSession(app);
+    const sse = await turn(app, db, sessionId, "why does b change when I append to a?");
+    expect(sse).toContain('"kind":"composition"');
+    expect(sse).not.toContain("show_composition");
+    expect(db.select().from(artifacts).get()).toMatchObject({ kind: "composition", version: 1, spec: aliasingComposition });
+    expect(artifactParts(await messagesJson(app, sessionId))).toEqual([expect.objectContaining({ kind: "composition", version: 1, spec: aliasingComposition })]);
+    // Offered with routing guidance on both sides: containers here, topology on show_graph.
+    const described = Object.fromEntries((model.doStreamCalls[0]!.tools ?? []).map((t) => [t.name, "description" in t ? t.description : ""]));
+    expect(described.show_composition).toMatch(/Use show_graph instead for topology/);
+    expect(described.show_graph).toMatch(/use show_composition instead/);
+    const system = JSON.stringify(model.doStreamCalls[0]!.prompt.filter((m) => m.role === "system"));
+    expect(system).toContain("show_composition for where things are and how they move between containers");
+  });
+
+  it("is explanatory only: it can't be answered and records no attempt or evidence", async () => {
+    const { app, db } = setup([{ toolCall: { name: "show_composition", input: aliasingComposition } }, { text: "Step through it." }]);
+    const sessionId = await newSession(app);
+    await turn(app, db, sessionId, "show me");
+    const res = await answer(app, db.select().from(artifacts).get()!.id, { answer: { optionIndex: 0 } });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(db.select().from(attempts).all()).toEqual([]);
+    expect(db.select().from(runs).all()).toHaveLength(1);
+  });
+
+  it("stores nothing for a step that leaves an entity unaccounted for, and tells the model how to fix it", async () => {
+    const bad = { ...aliasingComposition, steps: [{ ...aliasingComposition.steps[0], hidden: ["b"] }] };
+    const { app, db, model } = setup([{ toolCall: { name: "show_composition", input: bad } }, { text: "Let me fix that." }]);
+    const sessionId = await newSession(app);
+    await turn(app, db, sessionId, "show me");
+    expect(db.select().from(artifacts).all()).toEqual([]);
+    expect(JSON.stringify(model.doStreamCalls[1]!.prompt)).toMatch(/list2.{0,8} is not accounted for in step 1/);
+  });
 });

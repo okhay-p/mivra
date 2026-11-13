@@ -9,7 +9,7 @@ How to run Mivra from source, test it, and how its parts work. For installing an
 | `packages/server` | Hono API server (Node.js). Owns the agent runtime, the SQLite database (Drizzle + better-sqlite3) and model access (Vercel AI SDK). Binds to `127.0.0.1` only. |
 | `packages/web` | React + Vite web UI (shadcn/ui on Tailwind v4). Talks to the server only through its API. |
 | `packages/mivra` | The installable `@okhay-p/mivra` package and its `mivra` command (ADR-013): the server, protocol and built UI bundled into one npm package, with `start`, `stop`, `status` and `auth`. |
-| `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `code_walkthrough`, `set_diagram`, `graph`, `multiple_choice`, `table`, `worked_steps`), their tool definitions and the deterministic grader. Shared by server and web. |
+| `packages/protocol` | Versioned Zod schemas for learning artifacts (`algorithm_trace`, `code_walkthrough`, `composition`, `set_diagram`, `graph`, `multiple_choice`, `table`, `worked_steps`), their tool definitions and the deterministic grader. Shared by server and web. |
 
 ## Setup
 
@@ -122,7 +122,7 @@ Automatic quiz continuations run on the server even with no tab connected. `GET 
 
 ## Learning artifacts
 
-The agent shows interactive artifacts through tool calls (ADR-006): `show_algorithm_trace`, `show_code_walkthrough`, `show_set_diagram`, `show_graph`, `ask_multiple_choice`, `show_table` and `show_worked_steps`, registered by the first-party `core-learning` plugin (`packages/server/src/plugins/`) through the capability registry (ADR-007).
+The agent shows interactive artifacts through tool calls (ADR-006): `show_algorithm_trace`, `show_code_walkthrough`, `show_composition`, `show_set_diagram`, `show_graph`, `ask_multiple_choice`, `show_table` and `show_worked_steps`, registered by the first-party `core-learning` plugin (`packages/server/src/plugins/`) through the capability registry (ADR-007).
 
 - Each tool call's input is validated against its `packages/protocol` schema and stored in `artifacts` with the full spec. Client output fails closed: the live stream and `GET /api/sessions/{id}/messages` pass only text, reasoning text and lifecycle parts plus `data-artifact` parts with the artifact's public view. Raw tool calls, provider metadata, sources and files never reach a client. Thinking streams into a collapsed disclosure: opening it may reveal answers mentioned by the model (ADR-006). Private artifact fields still stay on the server.
 - `POST /api/artifacts/{id}/attempts` with `{ "answer": { "optionIndex": n } }` grades a check deterministically and returns the view with the grade. One attempt per check, accepted once the reply that asked it has finished.

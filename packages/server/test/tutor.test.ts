@@ -7,6 +7,7 @@ import { createApp } from "../src/app.js";
 import { openDb, type Db } from "../src/db/client.js";
 import { artifacts, lessonSections, runs } from "../src/db/schema.js";
 import { createSessionStore } from "../src/store/session-store.js";
+import { eventLoopComposition } from "@mivra/protocol/test/composition-fixtures";
 
 // Whole lessons generate through the app here, which is slow when the machine is busy.
 vi.setConfig({ testTimeout: 30_000 });
@@ -260,6 +261,24 @@ describe("the tutor drawer", () => {
     const after = (await lesson(app, lessonId)).lesson;
     expect(after.version).toBe(2);
     expect(after.sections[0]).toMatchObject({ title: "Walk", kind: "artifact", artifact: { kind: "code_walkthrough", spec: walkthrough } });
+  });
+
+  it("inserts a composition made in the same reply as a lesson section", async () => {
+    const { app, db, session, lessonId, steps } = await setup();
+    steps.push(
+      { toolCall: { name: "show_composition", input: eventLoopComposition } },
+      {
+        get toolCall() {
+          const id = db.select().from(artifacts).all().find((a) => a.kind === "composition")!.id;
+          return { name: "change_lesson", input: { reason: "Add the event loop", operations: [{ op: "insert_artifact", afterSectionId: null, title: "Event loop", artifactId: id }] } };
+        },
+      },
+      { text: "Added." },
+    );
+    await chat(app, db, session.id, "Add the event loop", lessonId);
+    const after = (await lesson(app, lessonId)).lesson;
+    expect(after.version).toBe(2);
+    expect(after.sections[0]).toMatchObject({ title: "Event loop", kind: "artifact", artifact: { kind: "composition", version: 1, spec: eventLoopComposition } });
   });
 
   it("can't change a finished lesson, and Add to lesson refuses too", async () => {

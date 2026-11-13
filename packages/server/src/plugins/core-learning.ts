@@ -13,6 +13,7 @@ import {
   type MultipleChoiceGrade,
 } from "@mivra/protocol";
 import type { Plugin } from "../runtime/capabilities.js";
+import { compositionKindDefinition } from "./composition.js";
 
 /**
  * First-party learning tools (ADR-006/007): the visualization kinds and the multiple_choice check,
@@ -54,6 +55,9 @@ export const coreLearning: Plugin = {
         spec: CodeWalkthroughSpec.parse(spec),
       }),
     });
+
+    // Explanatory only, like the walkthrough: no check, so stepping records no attempt or evidence.
+    api.registerArtifactKind(compositionKindDefinition);
 
     const graph = artifactKinds.graph;
     api.registerArtifactKind({

@@ -8,6 +8,9 @@
       "@mivra/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./test/composition-fixtures": {
+      "@mivra/source": "./test/composition-fixtures.ts"
     }
   },
   "scripts": {

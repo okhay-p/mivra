@@ -7,7 +7,7 @@ import { z } from "zod";
  */
 
 /** Section kinds the outline can plan: prose, or an existing artifact kind by its tool's purpose. */
-export const LessonSectionKind = z.enum(["prose", "algorithm_trace", "code_walkthrough", "graph", "multiple_choice", "set_diagram", "table", "worked_steps"]);
+export const LessonSectionKind = z.enum(["prose", "algorithm_trace", "code_walkthrough", "composition", "graph", "multiple_choice", "set_diagram", "table", "worked_steps"]);
 export type LessonSectionKind = z.infer<typeof LessonSectionKind>;
 
 export const MAX_LESSON_SECTIONS = 10;

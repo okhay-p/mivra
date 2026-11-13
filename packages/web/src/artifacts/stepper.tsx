@@ -111,10 +111,13 @@ export function SeenOnly({ children }: { children: ReactNode }) {
 export function StepperControls({
   stepper,
   play = false,
+  placement = "footer",
   children,
 }: {
   stepper: ReturnType<typeof useStepper>;
   play?: boolean;
+  /** "header" draws the bar under the card's header, so it stays put while the content below it changes size. */
+  placement?: "footer" | "header";
   children?: ReactNode;
 }) {
   const { index, last, playing, go, togglePlay } = stepper;
@@ -123,7 +126,10 @@ export function StepperControls({
     "bg-card dark:bg-card border-border-strong dark:border-border-strong hover:bg-sunken dark:hover:bg-sunken hover:text-foreground aria-disabled:cursor-not-allowed aria-disabled:opacity-45";
   return (
     // The inset footer of an artifact card (artifact-card.tsx), so it's drawn edge to edge under the body.
-    <div data-slot="artifact-footer" className="bg-sunken/55 flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-b-xl border-t px-3.5 py-2.5">
+    <div
+      data-slot={placement === "footer" ? "artifact-footer" : "artifact-controls"}
+      className={cn("bg-sunken/55 flex flex-wrap items-center gap-x-4 gap-y-2.5 px-3.5 py-2.5", placement === "footer" ? "rounded-b-xl border-t" : "border-b")}
+    >
       <div className="flex flex-wrap items-center gap-1.5">
         <Button type="button" variant="outline" size="sm" className={inactive} onClick={() => go(index - 1)} aria-disabled={index === 0}>
           <ChevronLeft />
