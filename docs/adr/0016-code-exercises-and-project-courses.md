@@ -52,7 +52,7 @@ date: 13 November 2026
 - Output-only tests can be gamed; the review mitigates this, it doesn't eliminate it.
 - QuickJS and Pyodide add several megabytes of assets.
 
-**Still open within this decision:** artifact and milestone schemas; exact limits; asset packaging; TypeScript (via a transpiler) for browser exercises; output normalisation rules; the review rubric; how milestones fit ADR-011's syllabus and freezing; the remote-server token flow; run-command quoting on Windows.
+**Still open within this decision:** artifact and milestone schemas; exact limits; asset packaging; TypeScript (via a transpiler) for browser exercises; output normalisation rules; the review rubric; how milestones fit ADR-011's syllabus and freezing; run-command quoting on Windows. (The remote-server token flow is settled below.)
 
 **Build order:**
 
@@ -61,3 +61,9 @@ date: 13 November 2026
 3. Project courses: milestones, `mivra link` and `mivra check` with `tests` milestones against a local server.
 4. Model review, `review` milestones and disputes.
 5. CLI against a remote server (token flow, Tailscale docs).
+
+**As built: the remote-server token flow** (issue #123, step 5). Details in [development.md](../development.md#project-courses).
+
+- **The token is Mivra's existing API token** (`auth-token`, ADR-013's bearer token), not a second one. Anyone who can reach the server's address already gets that token in `index.html`, so a separate, narrower CLI token wouldn't protect anything a tailnet peer couldn't already reach. `mivra check` against a remote server sends it like the web UI does, and every `/api` request without it is refused (401), compared in constant time.
+- **Showing the token differs from the loopback-only rule for keys, on purpose.** Settings → Connect a CLI shows it to any browser that opened Mivra, local or not. That browser already holds the token (it calls the API with it), so hiding it there would protect nothing, and in the documented setup (Docker behind `tailscale serve`) no browser request is loopback, so the rule would hide the item exactly where it's needed. API keys stay loopback-only: they're third-party secrets a remote browser never otherwise sees. The token is masked until the learner asks to see or copy it. On the server, `mivra token` (or `docker exec mivra mivra token`) prints it.
+- **The laptop keeps it in `credentials.json`** (mode 0600) under `server`, beside any API keys, with the server's origin; `.mivra.json` never holds either. `mivra link --server <url>` reads the token from a hidden prompt or stdin (never an argument), checks it against the server before saving, and `mivra link --local` forgets it. The CLI never follows a redirect with the token, and its errors never include it.

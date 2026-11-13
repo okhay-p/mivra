@@ -37,6 +37,8 @@ Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first tim
 | `mivra import obsidian <folder>` | Import an Obsidian vault's notes into a running Mivra. Run it again after you've changed the vault to update it. `--name` names the import |
 | `mivra link <course> --run "<command>"` | In your project's folder, link it to a project course, saved in `.mivra.json` (no secrets, safe to commit). `{input}` in the command becomes the path to a file holding a test's input, which also comes on stdin |
 | `mivra check` | Run your program on the current milestone's tests and record the result in a running Mivra. `--timeout <seconds>` sets each run's limit (default 10) |
+| `mivra link --server <url>` | Use a Mivra on another computer for `link` and `check`, such as one in Docker on a home server. It asks for that Mivra's token and saves both on this computer, never in `.mivra.json`. `mivra link --local` goes back to the Mivra on this computer |
+| `mivra token` | Print this Mivra's token, to paste into `mivra link --server` on another computer. It's also under **Settings → Connect a CLI** |
 
 You can also import a vault from the app: open **Imported notes** in the sidebar, choose the vault's folder, and re-import or delete it there later. On a phone or tablet that can't choose folders, upload a `.zip` of the vault instead.
 
@@ -54,6 +56,28 @@ docker run -d --name mivra --restart unless-stopped \
 Then open <http://127.0.0.1:4096>. Your data is kept in the `mivra-data` volume. Because the browser reaches the container over Docker's network, keys can't be changed from the app here: pass them with `-e`, or save one with `docker exec -i mivra mivra auth set openrouter`. To sign in with ChatGPT, use **Continue with ChatGPT** under Model providers and paste back the address the browser ends on, or run `docker exec -it mivra mivra auth login chatgpt --no-open`.
 
 Docker is also the easiest route on systems Mivra has no prebuilt database driver for (see [Supported systems](#supported-systems)).
+
+### Project courses against a home server
+
+To work on a project course on your laptop while Mivra runs in Docker on another machine, keep the container on that machine's loopback and reach it over [Tailscale](https://tailscale.com):
+
+```sh
+# On the server
+docker run -d --name mivra --restart unless-stopped \
+  -p 127.0.0.1:4096:4096 -v mivra-data:/data \
+  -e MIVRA_ALLOWED_HOSTS=<server>.<tailnet>.ts.net \
+  ghcr.io/okhay-p/mivra
+tailscale serve --bg 4096
+docker exec mivra mivra token
+
+# On your laptop, with the token from above (or from Settings → Connect a CLI)
+mivra link --server https://<server>.<tailnet>.ts.net
+cd my-project
+mivra link <course> --run "./build/my-program {input}"
+mivra check
+```
+
+The token and address are saved in your laptop's `~/.mivra/credentials.json`, never in `.mivra.json`. Your program and its tests run on your laptop, next to your code; only the results go to Mivra. Anyone with the token can use your Mivra, so keep it private.
 
 ## Your data and privacy
 
