@@ -27,6 +27,54 @@ const snapshot = (card: Locator) =>
 
 const pageOverflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
+/**
+ * Every drawn connector in a card, checked in the page: where it starts and where its arrowhead's tip is, against
+ * the edges of the cards its chip says it joins, and how many points along it fall inside any card or heading.
+ */
+const connectors = (card: Locator) =>
+  card.evaluate((root) => {
+    const grid = root.querySelector<HTMLElement>('[data-testid="composition-groups"]')!;
+    const svg = grid.querySelector("svg")!;
+    const origin = svg.getBoundingClientRect();
+    const boxes = [...grid.querySelectorAll<HTMLElement>('[data-testid="composition-entity"], [data-composition-obstacle]')].map((el) => el.getBoundingClientRect());
+    const cardBox = (id: string) => grid.querySelector<HTMLElement>(`[data-entity="${CSS.escape(id)}"]`)!.getBoundingClientRect();
+    const onSide = (p: { x: number; y: number }, r: DOMRect) => (Math.abs(p.x - r.left) <= 1.5 || Math.abs(p.x - r.right) <= 1.5) && p.y > r.top && p.y < r.bottom;
+    return [...svg.querySelectorAll<SVGGElement>('[data-testid="composition-connector"]')].map((g) => {
+      const id = g.dataset.connection!;
+      const chip = grid.querySelector<HTMLElement>(`[data-testid="composition-reference"][data-connection="${CSS.escape(id)}"]`)!;
+      const from = chip.closest<HTMLElement>("[data-entity]")!.dataset.entity!;
+      const to = chip.dataset.to!;
+      const path = g.querySelector("path")!;
+      const at = (l: number) => {
+        const p = path.getPointAtLength(l);
+        return { x: origin.left + p.x, y: origin.top + p.y };
+      };
+      const [tx, ty] = g.querySelector("polygon")!.getAttribute("points")!.split(" ")[0]!.split(",").map(Number);
+      const tip = { x: origin.left + tx!, y: origin.top + ty! };
+      const length = path.getTotalLength();
+      const samples = Array.from({ length: Math.ceil(length) + 1 }, (_, i) => at(Math.min(i, length)));
+      const inside = samples.filter((p) => boxes.some((r) => p.x > r.left + 1 && p.x < r.right - 1 && p.y > r.top + 1 && p.y < r.bottom - 1));
+      return { id, from, to, d: path.getAttribute("d"), drawn: chip.dataset.drawn === "true", attached: onSide(at(0), cardBox(from)) && onSide(tip, cardBox(to)), crossings: inside.length };
+    });
+  });
+
+/** The cards' animations that are still running, from the motion layer. */
+const glides = (card: Locator) =>
+  card.evaluate((root) =>
+    root.getAnimations({ subtree: true }).filter((a) => a.playState === "running" && (a.effect as KeyframeEffect | null)?.target?.matches('[data-testid="composition-entity"]')).length,
+  );
+
+/** Where each card is drawn, by id: equal for two visits to a step once nothing is gliding. */
+const positions = (card: Locator) =>
+  card.getByTestId("composition-entity").evaluateAll((els) =>
+    Object.fromEntries(
+      els.map((el) => {
+        const r = el.getBoundingClientRect();
+        return [(el as HTMLElement).dataset.entity, [Math.round(r.x), Math.round(r.y)]];
+      }),
+    ),
+  );
+
 test.describe("composition", () => {
   test("Python aliasing: references are chips, and seek, back and restart match stepping forward", async ({ page }) => {
     const { cards } = await showCompositions(page, "compositionalias");
@@ -254,5 +302,126 @@ test.describe("composition", () => {
     await expect(inserted.getByTestId("composition-changes")).toContainText("Task queue is reordered");
     await page.setViewportSize({ width: 320, height: 800 });
     await expect.poll(() => pageOverflow(page)).toBeLessThanOrEqual(0);
+  });
+
+  test("drawn connectors attach to their cards, stay clear of every other card, and give way to chips when narrow", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const { cards } = await showCompositions(page, "compositionalias");
+    const card = cards.first();
+    const visible = () => card.getByTestId("composition-reference").evaluateAll((chips) => chips.map((chip) => (chip as HTMLElement).dataset.connection).sort());
+    const checkAll = async () => {
+      const drawn = await connectors(card);
+      expect(drawn.map((c) => c.id).sort()).toEqual(await visible());
+      for (const connector of drawn) {
+        expect(connector, connector.id).toMatchObject({ attached: true, crossings: 0, drawn: true });
+      }
+    };
+    await expect.poll(async () => (await connectors(card)).length).toBe(1);
+    await checkAll();
+    const next = card.getByRole("button", { name: "Next" });
+    for (let i = 1; i < 4; i++) {
+      await next.click();
+      await expect(card.getByTestId("composition-groups")).not.toHaveAttribute("data-moving");
+      await expect.poll(async () => (await connectors(card)).length).toBe((await visible()).length);
+      await checkAll();
+    }
+    await expect(next).toBeFocused();
+
+    // One narrow column: no lines, every reference still a chip, nothing wider than the page.
+    await page.setViewportSize({ width: 320, height: 900 });
+    await expect(card.getByTestId("composition-groups")).toHaveAttribute("data-narrow", "true");
+    await expect(card.getByTestId("composition-connector")).toHaveCount(0);
+    await expect(card.getByTestId("composition-reference")).toHaveText(["→refers to list", "→refers to new list"]);
+    await expect(card.locator('[data-testid="composition-reference"][data-drawn]')).toHaveCount(0);
+    await expect.poll(() => pageOverflow(page)).toBeLessThanOrEqual(0);
+
+    // Wide again: the lines come back, attached to where the cards now are.
+    await page.setViewportSize({ width: 1100, height: 900 });
+    await expect.poll(async () => (await connectors(card)).length).toBe(2);
+    await checkAll();
+    await page.evaluate(() => document.documentElement.classList.add("dark"));
+    await checkAll();
+  });
+
+  test("parallel references keep separate lines and both chips; a route that would cross a card is left to its chip", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    for (const [script, at] of [["compositionqueue", "1"], ["compositionrich", "0"]] as const) {
+      const { cards } = await showCompositions(page, script);
+      const card = cards.first();
+      await card.getByTestId("composition-seek").selectOption(at);
+      const chips = await card.getByTestId("composition-reference").count();
+      await expect.poll(async () => (await connectors(card)).length).toBeGreaterThan(0);
+      const drawn = await connectors(card);
+      expect(drawn.length).toBeLessThanOrEqual(chips);
+      for (const connector of drawn) expect(connector, connector.id).toMatchObject({ attached: true, crossings: 0 });
+      // Two lines between the same cards never share a path.
+      expect(new Set(drawn.map((c) => c.d)).size).toBe(drawn.length);
+      // A connection with no line still has its chip; one with a line says so.
+      await expect(card.locator('[data-testid="composition-reference"][data-drawn="true"]')).toHaveCount(drawn.length);
+    }
+  });
+
+  test("Next glides cards to their new places; a seek or reduced motion cuts; rapid steps land on the chosen step", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const { cards } = await showCompositions(page, "compositionloop");
+    const card = cards.first();
+    const groups = card.getByTestId("composition-groups");
+    const seek = card.getByTestId("composition-seek");
+
+    // Where each step puts the cards, reached by seeking, which never animates.
+    const placed: Record<string, [number, number]>[] = [];
+    for (const at of ["0", "1", "2", "3"]) {
+      await seek.selectOption(at);
+      expect(await glides(card)).toBe(0);
+      placed.push(await positions(card));
+    }
+    await seek.selectOption("1");
+    const changes = await card.getByTestId("composition-changes").textContent();
+
+    // Next: the step changes at once, and onClick glides across from the queue.
+    await card.getByRole("button", { name: "Next" }).click();
+    expect(await glides(card)).toBeGreaterThan(0);
+    await expect(card.getByTestId("step-counter")).toHaveText("Step 3 of 4");
+    await expect(card.locator('[data-group="stack"] [data-entity="click"]')).toBeVisible();
+    await expect(groups).not.toHaveAttribute("data-moving");
+    expect(await positions(card)).toEqual(placed[2]);
+    // Announced once, as a step, whatever the motion did.
+    await expect(card.getByTestId("composition-status")).toContainText("onClick moves from Task queue to Call stack.");
+
+    // Rapid steps through the motion: every glide is cut short or rebased, and the cards land on the chosen step.
+    await card.focus();
+    for (const key of ["ArrowLeft", "ArrowRight", "ArrowLeft", "ArrowLeft", "ArrowRight"]) await page.keyboard.press(key);
+    await expect(card.getByTestId("step-counter")).toHaveText("Step 2 of 4");
+    await expect.poll(() => glides(card)).toBe(0);
+    expect(await positions(card)).toEqual(placed[1]);
+    await expect(card.getByTestId("composition-changes")).toHaveText(changes!);
+    await expect(card).toBeFocused();
+
+    // A seek to the very next step still cuts.
+    await seek.selectOption("2");
+    expect(await glides(card)).toBe(0);
+    expect(await positions(card)).toEqual(placed[2]);
+
+    // Resizing mid-glide stops it, and the cards are where the new width puts them.
+    await seek.selectOption("1");
+    await card.getByRole("button", { name: "Next" }).click();
+    await page.setViewportSize({ width: 360, height: 900 });
+    await expect.poll(() => glides(card)).toBe(0);
+    await expect(groups).not.toHaveAttribute("data-moving");
+    await expect.poll(() => pageOverflow(page)).toBeLessThanOrEqual(0);
+    const stack = (await card.locator('[data-group="stack"]').boundingBox())!;
+    const click = (await card.locator('[data-entity="click"]').boundingBox())!;
+    expect(click.y).toBeGreaterThanOrEqual(stack.y);
+    expect(click.y + click.height).toBeLessThanOrEqual(stack.y + stack.height);
+
+    // Reduced motion: a cut, with the same summary.
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await seek.selectOption("1");
+    await card.getByRole("button", { name: "Next" }).click();
+    expect(await glides(card)).toBe(0);
+    await expect(groups).not.toHaveAttribute("data-moving");
+    expect(await positions(card)).toEqual(placed[2]);
+    await expect(card.getByTestId("composition-changes")).toContainText("onClick moves from Task queue to Call stack.");
   });
 });

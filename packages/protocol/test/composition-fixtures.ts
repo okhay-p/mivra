@@ -257,3 +257,53 @@ export const richComposition = {
     },
   ],
 } satisfies CompositionSpec;
+
+/**
+ * For #114's motion: a queue built from two stacks. Moving the inbox into the outbox moves three cards at once and
+ * reverses them, and two differently named references from the queue to one item are parallel connections.
+ */
+export const twoStackQueueComposition = {
+  title: "A queue from two stacks",
+  groups: [
+    { id: "inbox", label: "Inbox stack", ordered: true },
+    { id: "outbox", label: "Outbox stack", ordered: true },
+    { id: "names", label: "Names", ordered: false },
+  ],
+  entities: [
+    { id: "q", label: "queue", properties: [{ name: "size", value: 3 }] },
+    { id: "one", label: "job 1", properties: [] },
+    { id: "two", label: "job 2", properties: [] },
+    { id: "three", label: "job 3", properties: [] },
+  ],
+  connections: [
+    { id: "front", from: "q", to: "one", label: "front" },
+    { id: "next", from: "q", to: "one", label: "next out" },
+    { id: "back", from: "q", to: "three", label: "back" },
+    { id: "front2", from: "q", to: "two", label: "front" },
+  ],
+  steps: [
+    {
+      label: "enqueue 1, 2, 3",
+      explanation: "Each job is pushed onto the inbox, so the last one in is at the top and the front of the queue is at the bottom.",
+      placements: [{ groupId: "inbox", entityIds: ["three", "two", "one"] }, { groupId: "outbox", entityIds: [] }, { groupId: "names", entityIds: ["q"] }],
+      hidden: [],
+      connections: ["front", "back"],
+    },
+    {
+      label: "transfer",
+      explanation: "Dequeuing needs the bottom job, so every job is popped off the inbox and pushed onto the outbox, which reverses them.",
+      placements: [{ groupId: "inbox", entityIds: [] }, { groupId: "outbox", entityIds: ["one", "two", "three"] }, { groupId: "names", entityIds: ["q"] }],
+      hidden: [],
+      connections: ["front", "next", "back"],
+      emphasis: [{ entityId: "one", tone: "active" }],
+    },
+    {
+      label: "dequeue()",
+      explanation: "The outbox's top job leaves; job 2 is now the front.",
+      placements: [{ groupId: "inbox", entityIds: [] }, { groupId: "outbox", entityIds: ["two", "three"] }, { groupId: "names", entityIds: ["q"] }],
+      hidden: ["one"],
+      connections: ["front2", "back"],
+      state: [{ entityId: "q", properties: [{ name: "size", value: 2 }] }],
+    },
+  ],
+} satisfies CompositionSpec;

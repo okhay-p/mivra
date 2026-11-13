@@ -11,9 +11,9 @@ import {
   kindForTool,
   resolveCompositionStep,
 } from "../src/index.js";
-import { aliasingComposition, eventLoopComposition, pipelineComposition, richComposition } from "./composition-fixtures.js";
+import { aliasingComposition, eventLoopComposition, pipelineComposition, richComposition, twoStackQueueComposition } from "./composition-fixtures.js";
 
-const fixtures = { aliasingComposition, pipelineComposition, eventLoopComposition, richComposition };
+const fixtures = { aliasingComposition, pipelineComposition, eventLoopComposition, richComposition, twoStackQueueComposition };
 
 /** The smallest valid composition: one group holding one entity, in one step. */
 const step = { explanation: "x", placements: [{ groupId: "g", entityIds: ["e"] }], hidden: [] as string[], connections: [] as string[] };
