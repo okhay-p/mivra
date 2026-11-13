@@ -17,7 +17,8 @@ const auth = { authorization: `Bearer ${TOKEN}` };
 const json = { ...auth, "content-type": "application/json" };
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 1, text: 1, reasoning: 0 } };
 
-type Step = { toolCall: { name: string; input: unknown } } | { text: string };
+/** A step can wait on `gate` before the model answers, to hold a call open while something else happens. */
+type Step = ({ toolCall: { name: string; input: unknown } } | { text: string }) & { gate?: Promise<void> };
 
 function scriptedModel(steps: Step[]) {
   let call = 0;
@@ -27,7 +28,8 @@ function scriptedModel(steps: Step[]) {
     doStream: async (options) => {
       prompts.push(JSON.stringify(options.prompt));
       tools.push((options.tools ?? []).map((t) => t.name));
-      const step = steps[call++] ?? { text: "" };
+      const step: Step = steps[call++] ?? { text: "" };
+      await step.gate;
       const chunks: object[] =
         "toolCall" in step
           ? [
@@ -412,6 +414,42 @@ describe("reviewing a milestone's code", () => {
     expect(view.spec.cases[1]).toMatchObject({ input: "1 + 2 + 3", expected: "tokens: 5" });
     expect(view.spec.disputes[0]).toMatchObject({ outcome: "corrected", before: { input: "1 + 2", expected: "tokens: 3" } });
     expect(JSON.stringify(view)).not.toContain("referenceSolution");
+  });
+
+  it("doesn't let a passing check of cases a dispute has since changed count", async () => {
+    const { app, steps, lesson, cases } = await started();
+    steps.push({ toolCall: { name: "record_review", input: review() } });
+    const passed = (await (await checkWith(app, cases.artifactId, ["tokens: 1", "tokens: 3"], { revision: cases.revision, files: [tokenizer], commit: COMMIT })).json()) as MilestoneCheckResult;
+    expect(passed.passed).toBe(true);
+    // The case it passed now expects something else, so that output proves nothing about it.
+    steps.push({ toolCall: { name: "resolve_case_dispute", input: { outcome: "correct", explanation: "Three numbers.", input: "1 + 2 + 3" } } });
+    expect((await dispute(app, cases.artifactId, { target: "case", caseIndex: 1, reason: "Too easy?" })).status).toBe(201);
+    expect((await milestoneView(app, lesson.id)).passed).toBe(false);
+    const describe = (await getLesson(app, lesson.id)).lesson.sections.at(-1)!.artifact as unknown as MilestoneView;
+    expect(describe.latestAttempt?.grade.correct).toBe(true);
+  });
+
+  it("doesn't save a review that was running when a dispute changed the cases", async () => {
+    const { app, steps, lesson, cases, prompts } = await started();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    steps.push(
+      { toolCall: { name: "record_review", input: review() }, gate },
+      { toolCall: { name: "resolve_case_dispute", input: { outcome: "withdraw", explanation: "Fair." } } },
+    );
+    const calls = prompts.length;
+    const checking = checkWith(app, cases.artifactId, ["tokens: 1", "tokens: 3"], { revision: cases.revision, files: [tokenizer], commit: COMMIT });
+    // The review has taken its step and waits; the dispute withdraws a case meanwhile.
+    await vi.waitFor(() => expect(prompts.length).toBe(calls + 1));
+    const disputed = dispute(app, cases.artifactId, { target: "case", caseIndex: 1, reason: "Operators aren't tokens." });
+    expect((await disputed).status).toBe(201);
+    release();
+    const result = (await (await checking).json()) as MilestoneCheckResult;
+    expect(result.review.status).toBe("failed");
+    expect(result.passed).toBe(false);
+    const view = await milestoneView(app, lesson.id);
+    expect(view.passed).toBe(false);
+    expect(view.latestReview).toBeUndefined();
   });
 
   it("looks again at a disputed verdict, and an overturned one still needs the tests", async () => {

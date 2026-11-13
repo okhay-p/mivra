@@ -30,7 +30,7 @@ export interface Changes {
 const LOCKFILES = new Set(["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "cargo.lock", "poetry.lock", "pipfile.lock", "uv.lock", "composer.lock", "gemfile.lock", "go.sum", "flake.lock", "mix.lock", "pubspec.lock", "podfile.lock", "packages.lock.json"]);
 
 /** Folders whose contents are credentials. */
-const SECRET_DIRS = new Set([".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker"]);
+const SECRET_DIRS = new Set([".ssh", ".aws", ".gnupg", ".azure", ".kube", ".docker", "secrets", ".secrets"]);
 
 /** File names that hold credentials, whole (lower-cased). */
 const SECRET_NAMES = new Set([
@@ -50,7 +50,7 @@ const SECRET_NAMES = new Set([
 
 /** Name patterns that hold credentials (tested against the lower-cased base name). */
 const SECRET_PATTERNS = [
-  /^\.env($|\.)/, // .env, .env.local, .env.production, .env.example: all of them
+  /^\.env($|[-_.])/, // .env, .env.local, .env-production, .env_prod, .env.example: all of them
   /\.env$/, // prod.env
   /^\.?envrc$/,
   /\.(pem|key|p8|p12|pfx|jks|keystore|ppk|asc|gpg|kdbx|tfstate|tfvars|secret|secrets)$/,
@@ -60,6 +60,8 @@ const SECRET_PATTERNS = [
   /^secrets?\./,
   /^service[-_]?account.*\.json$/,
   /^client_secret.*\.json$/,
+  // Tokens, keys and passwords kept in data files (not source files: a lexer's token.c is code, not a secret).
+  /(^|[-_.])(api[-_]?keys?|(access|auth|api|bearer|refresh|github|slack|bot)[-_]?tokens?|passwords?|passwd|secrets?)([-_.][^/]*)?\.(json|ya?ml|toml|ini|cfg|conf|txt|properties|xml)$/,
 ];
 
 /** Text that only a private key contains, in any file. */
@@ -68,9 +70,10 @@ const PRIVATE_KEY = /-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY( BLOCK)?-----/;
 /** Whether a path (relative, with `/` or the platform's separator) looks like it holds a secret, by its name alone. */
 export function looksSecret(path: string): boolean {
   const parts = path.split(/[\\/]/).map((p) => p.toLowerCase());
-  if (parts.slice(0, -1).some((dir) => SECRET_DIRS.has(dir))) return true;
-  const name = parts.at(-1) ?? "";
-  return SECRET_NAMES.has(name) || SECRET_PATTERNS.some((pattern) => pattern.test(name));
+  const secretName = (name: string) => SECRET_NAMES.has(name) || SECRET_PATTERNS.some((pattern) => pattern.test(name));
+  // A folder named like a secret (`.env/`, `credentials/`) holds secrets too.
+  if (parts.slice(0, -1).some((dir) => SECRET_DIRS.has(dir) || secretName(dir))) return true;
+  return secretName(parts.at(-1) ?? "");
 }
 
 /** Runs git in `cwd` without a shell. Rejects if it fails. */

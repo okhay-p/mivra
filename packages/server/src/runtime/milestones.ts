@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   CommitId,
   MilestoneCheckAnswer,
@@ -24,6 +24,7 @@ import type { CapabilityRegistry } from "./capabilities.js";
 import { publicErrorText } from "./errors.js";
 import { courseLessons } from "./lessons.js";
 import { disputeRecord, type MilestoneReviewer } from "./milestone-review.js";
+import { checkIsCurrent, milestoneRevision } from "../exercises/milestone-revision.js";
 
 /**
  * Project courses (ADR-016): the milestone `mivra check` checks, recording what it found, the model's review of the
@@ -55,16 +56,14 @@ export function readReview(attempt: AttemptRow | undefined): MilestoneReview | u
   return parsed.success ? parsed.data : undefined;
 }
 
-/** Names the cases a check runs: a check sent for other cases (a dispute changed them meanwhile) is refused. */
-export function milestoneRevision(spec: ProjectMilestoneSpec): string {
-  const active = activeMilestoneCases(spec).map((c) => [c.index, c.name, c.input, c.compare ?? "stdout", c.expected]);
-  return createHash("sha256").update(JSON.stringify([spec.checkType, active])).digest("hex").slice(0, 16);
-}
+export { milestoneRevision };
 
-/** Whether a milestone's latest check passed: every case, and the review's approval. */
+/** Whether a milestone's latest check passed: every current case, and the review's approval. */
 export function milestoneCheckPassed(artifactId: string, store: SessionStore): boolean {
   const check = store.findAttempt(artifactId);
-  return Boolean(check && milestonePassed(check.grade as MilestoneGrade, readReview(store.findReview(artifactId))));
+  const artifact = store.findArtifact(artifactId);
+  if (!check || !artifact || !checkIsCurrent(ProjectMilestoneSpec.parse(artifact.spec), check.answer)) return false;
+  return milestonePassed(check.grade as MilestoneGrade, readReview(store.findReview(artifactId)));
 }
 
 /** The current milestone's cases, as data for `mivra check`. Never anything to run. */
@@ -131,9 +130,18 @@ function openMilestone(artifactId: string, { store, lessons }: Deps, frozen: str
   return { ok: true as const, artifact, lesson, spec: ProjectMilestoneSpec.parse(artifact.spec) };
 }
 
-/** Whether a stored check is still the one with this id, in a lesson that isn't finished: a review may be saved for it. */
-const stillCurrent = (checkId: string, lessonId: string, lessons: LessonStore) => (check: AttemptRow | undefined) =>
-  readCheck(check)?.checkId === checkId && lessons.findLesson(lessonId)?.status !== "finished";
+/**
+ * Whether a stored check is still the one with this id, of the milestone's current cases, in a lesson that isn't
+ * finished: a review may be saved for it.
+ */
+const stillCurrent = (checkId: string, artifactId: string, lessonId: string, { store, lessons }: Deps) => (check: AttemptRow | undefined) => {
+  const artifact = store.findArtifact(artifactId);
+  return (
+    readCheck(check)?.checkId === checkId &&
+    Boolean(artifact && checkIsCurrent(ProjectMilestoneSpec.parse(artifact.spec), check?.answer)) &&
+    lessons.findLesson(lessonId)?.status !== "finished"
+  );
+};
 
 /**
  * Grades one `mivra check` deterministically (ADR-006) and records it as the milestone's attempt, replacing the last
@@ -161,7 +169,7 @@ export async function recordMilestoneCheck(
   const grade = gradeMilestone(spec, parsed.data);
   const checkId = randomUUID();
   // With no cases to run (a review milestone, or every case withdrawn) the tests say nothing, so they give no evidence.
-  store.replaceAttempt({ artifactId, sessionId: artifact.sessionId, answer: { ...parsed.data, checkId }, grade, correct: grade.correct, concept: active.length > 0 ? spec.concept : null });
+  store.replaceAttempt({ artifactId, sessionId: artifact.sessionId, answer: { ...parsed.data, revision: milestoneRevision(spec), checkId }, grade, correct: grade.correct, concept: active.length > 0 ? spec.concept : null });
   onRecorded?.(lesson.id);
 
   const files = parsed.data.files ?? [];
@@ -173,7 +181,7 @@ export async function recordMilestoneCheck(
       const verdict = await reviewer.review({ spec, files, deleted: parsed.data.deleted, skipped: parsed.data.skipped }, signal);
       const saved = store.saveReview(
         { artifactId, sessionId: artifact.sessionId, answer: { checkId }, grade: verdict, correct: verdict.approved, concept: spec.concept },
-        stillCurrent(checkId, lesson.id, lessons),
+        stillCurrent(checkId, artifactId, lesson.id, { store, lessons }),
       );
       review = saved ? { status: "done", review: verdict } : { status: "failed", error: "A newer check, or finishing the lesson, replaced this one while it was reviewed." };
     } catch (error) {
@@ -292,7 +300,7 @@ export async function disputeMilestone(
       );
       const saved = store.saveReview(
         { artifactId, sessionId: artifact.sessionId, answer: { checkId: check.checkId }, grade: verdict, correct: verdict.approved, concept: spec.concept },
-        stillCurrent(check.checkId, lesson.id, lessons),
+        stillCurrent(check.checkId, artifactId, lesson.id, { store, lessons }),
       );
       if (!saved) return { ok: false, error: { kind: "conflict", message: "A newer check replaced the one you disputed. Look at its review first." } };
       next = spec;

@@ -10,6 +10,7 @@ import {
   toProjectMilestonePublic,
   type MilestoneGrade,
 } from "@mivra/protocol";
+import { checkIsCurrent } from "../exercises/milestone-revision.js";
 import { prepareProjectMilestone, runCasesInChild, type RunCases } from "../exercises/reference-check.js";
 import type { AttemptRow } from "../store/session-store.js";
 import type { ArtifactKindDefinition } from "../runtime/capabilities.js";
@@ -55,13 +56,15 @@ export function projectMilestoneKindDefinition(runCases: RunCases = runCasesInCh
     toView: ({ id, createdAt, spec, attempt, review }) => {
       const grade = attempt?.grade as MilestoneGrade | undefined;
       const verdict = attempt ? reviewOf(review) : undefined;
+      // A check of cases a dispute has since changed can't pass: the learner checks again.
+      const current = attempt ? checkIsCurrent(ProjectMilestoneSpec.parse(spec), attempt.answer) : false;
       return {
         id,
         createdAt: createdAt.toISOString(),
         kind: "project_milestone",
         version: 1,
         spec: toProjectMilestonePublic(ProjectMilestoneSpec.parse(spec)),
-        ...(attempt && grade ? { latestAttempt: { answer: toMilestoneCheckView(checkAnswer(attempt)), grade, createdAt: attempt.createdAt.toISOString() }, passed: milestonePassed(grade, verdict) } : {}),
+        ...(attempt && grade ? { latestAttempt: { answer: toMilestoneCheckView(checkAnswer(attempt)), grade, createdAt: attempt.createdAt.toISOString() }, passed: current && milestonePassed(grade, verdict) } : {}),
         ...(verdict && review ? { latestReview: { review: verdict, createdAt: review.createdAt.toISOString() } } : {}),
       };
     },
@@ -97,8 +100,9 @@ export function projectMilestoneKindDefinition(runCases: RunCases = runCasesInCh
           ];
         });
         const tests = grade.total === 0 ? "no tests to run" : grade.correct ? "all cases passed" : `passed ${grade.passed} of ${grade.total} cases`;
+        const current = checkIsCurrent(milestone, attempt.answer);
         return {
-          learnerResult: `${milestonePassed(grade, verdict) ? "milestone passed" : "milestone not passed yet"}: ${tests} in the latest mivra check`,
+          learnerResult: `${current && milestonePassed(grade, verdict) ? "milestone passed" : "milestone not passed yet"}: ${tests} in the latest mivra check${current ? "" : ", which ran cases a dispute has since changed, so it must be checked again"}`,
           ...(failed.length > 0 ? { failedCases: failed.slice(0, 5) } : {}),
           // The review is a model's judgement, recorded apart from the tests.
           codeReview: verdict
