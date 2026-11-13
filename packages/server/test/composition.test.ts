@@ -58,15 +58,13 @@ describe("composition's server contract", () => {
     expect(compositionKindDefinition.spec.safeParse({}).success).toBe(false);
   });
 
-  // Flip this when #113 registers the kind: see the activation steps on compositionArtifactKind.
-  it("stays dormant: the default plugins neither register the kind nor offer its tool", () => {
+  it("is active: core-learning registers the kind, offers its tool and lets a lesson plan it", () => {
     const registry = createCapabilityRegistry([coreLearning, coreMemory, coreCourse]);
-    expect(registry.artifactKind("composition")).toBeUndefined();
-    expect(registry.artifactKindForTool("show_composition")).toBeUndefined();
+    expect(registry.artifactKind("composition")).toMatchObject({ kind: "composition", toolName: "show_composition" });
+    expect(registry.artifactKindForTool("show_composition")?.kind).toBe("composition");
     const { tools } = createCapabilityRegistry([coreLearning]).toolsFor({ sessionId: "s", runId: "r", store: {} as never });
-    expect(Object.keys(tools)).toContain("show_graph");
-    expect(Object.keys(tools)).not.toContain("show_composition");
+    expect(Object.keys(tools)).toEqual(expect.arrayContaining(["show_graph", "show_composition"]));
     const outline = { title: "t", sections: [{ title: "a", kind: "composition", purpose: "p" }, { title: "b", kind: "multiple_choice", purpose: "p" }] };
-    expect(LessonOutlineInput.safeParse(outline).success).toBe(false);
+    expect(LessonOutlineInput.safeParse(outline).success).toBe(true);
   });
 });

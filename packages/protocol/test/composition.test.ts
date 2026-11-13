@@ -11,9 +11,9 @@ import {
   kindForTool,
   resolveCompositionStep,
 } from "../src/index.js";
-import { aliasingComposition, eventLoopComposition, pipelineComposition } from "./composition-fixtures.js";
+import { aliasingComposition, eventLoopComposition, pipelineComposition, richComposition } from "./composition-fixtures.js";
 
-const fixtures = { aliasingComposition, pipelineComposition, eventLoopComposition };
+const fixtures = { aliasingComposition, pipelineComposition, eventLoopComposition, richComposition };
 
 /** The smallest valid composition: one group holding one entity, in one step. */
 const step = { explanation: "x", placements: [{ groupId: "g", entityIds: ["e"] }], hidden: [] as string[], connections: [] as string[] };
@@ -528,12 +528,20 @@ describe("composition rollout", () => {
     expect(CompositionArtifactView.safeParse({ ...view, spec: { ...aliasingComposition, secret: 1 } }).success).toBe(false);
   });
 
-  // Flip these when #113 adds the renderer: see the activation steps on compositionArtifactKind.
-  it("stays dormant: not a registered kind, a lesson section kind or a client view yet", () => {
-    expect(Object.keys(artifactKinds)).not.toContain("composition");
-    expect(kindForTool("show_composition")).toBeUndefined();
-    expect(LessonSectionKind.safeParse("composition").success).toBe(false);
-    expect(ArtifactView.safeParse(view).success).toBe(false);
+  it("is active: a registered kind, a lesson section kind and a client view", () => {
+    expect(artifactKinds.composition).toBe(compositionArtifactKind);
+    expect(kindForTool("show_composition")).toBe("composition");
+    expect(LessonSectionKind.safeParse("composition").success).toBe(true);
+    expect(ArtifactView.parse(view)).toEqual(view);
+    expect(ArtifactView.safeParse({ ...view, spec: {} }).success).toBe(false);
+    expect(ArtifactView.safeParse({ ...view, secret: 1 }).success).toBe(false);
+  });
+
+  it("routes topology to show_graph and containers to show_composition", () => {
+    expect(artifactKinds.graph.description).toMatch(/use show_composition instead/);
+    expect(compositionArtifactKind.description).toMatch(/show_algorithm_trace for an algorithm over a sequence/);
+    expect(compositionArtifactKind.description).toMatch(/show_code_walkthrough to explain source lines/);
+    expect(compositionArtifactKind.description).toMatch(/show_table for tabular comparison/);
   });
 });
 

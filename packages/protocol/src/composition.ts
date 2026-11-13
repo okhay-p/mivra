@@ -16,9 +16,7 @@ import { artifactMathInput } from "./artifact-math-input.js";
  *   declared properties, never the previous step's.
  * - An entity's `body` is fixed across steps.
  *
- * Staged rollout: this file is the whole protocol contract, but the kind is not in `artifactKinds`,
- * `ArtifactView` or `LessonSectionKind` yet, so the model can't produce it before a renderer exists.
- * `compositionArtifactKind` lists the activation points for #113.
+ * Registered in `artifactKinds` and `LessonSectionKind`; the web renders it in `artifacts/Composition.tsx` (#113).
  */
 
 export const MAX_COMPOSITION_GROUPS = 4;
@@ -492,18 +490,7 @@ export function compositionChanges(spec: CompositionSpec, index: number): Compos
 const DESCRIPTION =
   "Show the learner where things are: entities as cards inside named groups, the references between them, and how that changes step by step. Use it for location, sharing and changing contents, such as two variables referring to one object (aliasing), values moving through pipeline stages, or tasks moving between a queue and a stack. Declare every group, entity and connection once, then give each step as a complete snapshot: one placement for every group (entityIds may be []), every other entity in `hidden`, and the ids of the connections shown. Nothing carries over between steps, so repeat whatever still applies; `state` replaces an entity's whole property list for that step only, and without it the entity shows its declared properties again. In an ordered group the first entity is the front or top: say in the explanation which end is which. Keep it small (roughly 3-8 entities and 3-8 steps) and make each explanation say what changed and why. Never give coordinates or styles: the layout is automatic. Code in a body is inert text. Use show_graph instead for topology, state machines, flowcharts, trees and graph algorithms, show_algorithm_trace for an algorithm over a sequence, show_code_walkthrough to explain source lines, show_table for tabular comparison, and show_set_diagram or show_worked_steps for sets and proofs.";
 
-/**
- * composition's entry for `artifactKinds`, kept out of it until the web has a renderer (#113). To activate:
- * 1. `packages/protocol/src/index.ts`: add `composition: compositionArtifactKind` to `artifactKinds` (keep
- *    the keys in order) and `CompositionArtifactView` to the `ArtifactView` union.
- * 2. `packages/protocol/src/lesson.ts`: add "composition" to `LessonSectionKind`.
- * 3. `packages/server/src/runtime/lessons.ts`: add `composition` to `toolForKind` (a type error until then).
- * 4. `packages/server/src/plugins/core-learning.ts`: `api.registerArtifactKind(compositionKindDefinition)`,
- *    from `./composition.js`. That is what offers show_composition to the model and to insert_artifact.
- * 5. `packages/web/src/artifacts/ArtifactPart.tsx`: add the renderer (a type error until then).
- * 6. Flip the "stays dormant" tests in `packages/protocol/test/composition.test.ts` and
- *    `packages/server/test/composition.test.ts`.
- */
+/** composition's entry in `artifactKinds`. */
 export const compositionArtifactKind = {
   version: 1,
   toolName: "show_composition",

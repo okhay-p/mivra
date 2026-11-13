@@ -2,6 +2,7 @@ import { z } from "zod";
 import { artifactMathInput, checkMathText } from "./artifact-math-input.js";
 import { AlgorithmTraceSpec } from "./algorithm-trace.js";
 import { CodeWalkthroughSpec } from "./code-walkthrough.js";
+import { CompositionArtifactView, compositionArtifactKind } from "./composition.js";
 import {
   InterviewContextAnswer,
   InterviewContextGrade,
@@ -53,11 +54,12 @@ export const artifactKinds = {
     spec: CodeWalkthroughSpec,
     input: artifactMathInput(CodeWalkthroughSpec, ["title", "steps.*.explanation"]),
   },
+  composition: compositionArtifactKind,
   graph: {
     version: 1,
     toolName: "show_graph",
     description:
-      "Show the learner a graph or tree, drawn for you, optionally with steps they can walk through. Use it for graphs, trees, BFS, DFS, shortest paths, spanning trees and tree traversals, whenever seeing the structure or watching an algorithm move over it will help. Never give coordinates: the layout is automatic. For a binary search tree or binary tree traversal, set kind to tree and give every edge a side, so a lone left child and a lone right child are drawn differently. The automatic layout may draw crossing edges that mean nothing, even when the graph is planar, so don't use this to show whether a graph is planar. Keep it small enough to read (roughly 4-15 nodes, 5-20 steps) and make each step's explanation say what changed and why. For a component hierarchy (such as React components), set kind to tree and directed to true, with one node per component instance (distinct ids for two instances of the same component, labelled with the short component name) and one edge from each parent to each child it renders, labelled with the props it passes (e.g. \"count\" or \"onClick\"). Use steps to highlight where state is owned and the nodes and edges its value flows through, with variables for simple state such as count = 1. The nodes and edges stay the same on every step: don't add callback edges back up the tree, and don't suggest that a component's output changes just because it re-renders.",
+      "Show the learner a graph or tree, drawn for you, optionally with steps they can walk through. Use it for graphs, trees, BFS, DFS, shortest paths, spanning trees and tree traversals, whenever seeing the structure or watching an algorithm move over it will help. Never give coordinates: the layout is automatic. For a binary search tree or binary tree traversal, set kind to tree and give every edge a side, so a lone left child and a lone right child are drawn differently. The automatic layout may draw crossing edges that mean nothing, even when the graph is planar, so don't use this to show whether a graph is planar. Keep it small enough to read (roughly 4-15 nodes, 5-20 steps) and make each step's explanation say what changed and why. For a component hierarchy (such as React components), set kind to tree and directed to true, with one node per component instance (distinct ids for two instances of the same component, labelled with the short component name) and one edge from each parent to each child it renders, labelled with the props it passes (e.g. \"count\" or \"onClick\"). Use steps to highlight where state is owned and the nodes and edges its value flows through, with variables for simple state such as count = 1. The nodes and edges stay the same on every step: don't add callback edges back up the tree, and don't suggest that a component's output changes just because it re-renders. To show where things are and how they move between containers, such as names sharing one object, values passing through pipeline stages or tasks moving between a queue and a stack, use show_composition instead.",
     spec: GraphSpec,
     input: artifactMathInput(GraphSpec, ["title", "nodes.*.label", "edges.*.label", "steps.*.explanation"], (spec, ctx) => {
       spec.nodes.forEach((node, i) => {
@@ -149,6 +151,7 @@ export const ArtifactView = z.discriminatedUnion("kind", [
   z
     .object({ ...ArtifactBase, kind: z.literal("code_walkthrough"), version: z.literal(1), spec: CodeWalkthroughSpec })
     .strict(),
+  CompositionArtifactView,
   z.object({ ...ArtifactBase, kind: z.literal("graph"), version: z.literal(1), spec: GraphSpec }).strict(),
   z
     .object({

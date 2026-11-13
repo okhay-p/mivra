@@ -7,6 +7,7 @@ import { openDb, type Db } from "../src/db/client.js";
 import { lessons as lessonsTable, runs } from "../src/db/schema.js";
 import { NOTE_EXCERPTS_LABEL } from "../src/runtime/note-context.js";
 import { createSessionStore } from "../src/store/session-store.js";
+import { aliasingComposition } from "@mivra/protocol/test/composition-fixtures";
 
 // Whole lessons generate through the app here, which is slow when the machine is busy.
 vi.setConfig({ testTimeout: 30_000 });
@@ -154,6 +155,26 @@ describe("lessons", () => {
     expect(prompts[0]).toContain("nothing waits for the learner's answer");
     expect(prompts[0]).toContain("use a different example to illustrate");
     // A walkthrough is no check: only the multiple-choice section counts.
+    expect(done.lesson.checks).toEqual({ total: 1, answered: 0 });
+  });
+
+  it("writes a composition section with show_composition, and refuses a graph in its slot", async () => {
+    const graph = { title: "g", directed: true, nodes: [{ id: "a" }, { id: "b" }], edges: [{ from: "a", to: "b" }] };
+    const { app, course, topics, prompts } = await setup([
+      outline([{ title: "Two names", kind: "composition" }, { title: "Check", kind: "multiple_choice" }]),
+      { toolCall: { name: "show_graph", input: graph } },
+      { toolCall: { name: "show_composition", input: aliasingComposition } },
+      check,
+      { text: "" },
+    ]);
+    const { lesson } = (await (await start(app, course.id, topics[0]!.id)).json()) as LessonJson;
+    const done = await until(app, lesson.id, "ready");
+    expect(done.lesson.sections.map((s) => [s.title, s.kind])).toEqual([["Two names", "artifact"], ["Check", "artifact"]]);
+    expect(done.lesson.sections[0]!.artifact).toMatchObject({ kind: "composition", version: 1, spec: aliasingComposition });
+    expect(prompts[0]).toContain("plan a composition section and write it with show_composition");
+    expect(prompts[1]).toContain("with show_composition");
+    expect(JSON.stringify(prompts)).toContain("Wrong tool for the next section");
+    // Stepping through it is no check: only the multiple-choice section counts.
     expect(done.lesson.checks).toEqual({ total: 1, answered: 0 });
   });
 

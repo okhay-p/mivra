@@ -10,12 +10,7 @@ export function compositionView({ id, createdAt, spec }: { id: string; createdAt
   return { id, createdAt: createdAt.toISOString(), kind: "composition", version: 1, spec: CompositionSpec.parse(spec) };
 }
 
-/**
- * composition's registration, ready but not registered: no plugin passes it to `registerArtifactKind`
- * until the web can render it (#113), so the model is never offered show_composition before then. The
- * activation steps are listed on `compositionArtifactKind`. Explanatory only: no check, so viewing and
- * stepping record no attempt or evidence.
- */
+/** composition's registration, made by core-learning. Explanatory only: no check, so viewing and stepping record no attempt or evidence. */
 export const compositionKindDefinition = {
   kind: "composition",
   version: compositionArtifactKind.version,

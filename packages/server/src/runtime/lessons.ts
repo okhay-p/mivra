@@ -34,7 +34,7 @@ const LESSON_INSTRUCTIONS = [
   "You are Mivra, writing one lesson of a course for this learner. The learner reads it on a page, not in a chat: write no greetings and no questions to them outside checks.",
   "First call outline_lesson once. Then write the sections in outline order, one tool call per section and one section per step: write_lesson_text for prose, ask_multiple_choice for a check, and the matching show_* tool for each visual. Keep each section focused, and keep the whole lesson short enough to finish in about 10-15 minutes.",
   "A check's answer and explanation are hidden until the learner answers, so never reveal them in prose. Stop when every section is written; write no text reply.",
-  "Every section is on the page as soon as it is written, so nothing waits for the learner's answer. A code prediction check is fine: put the short snippet in a fenced code block in the prose section before it and keep its answer in the check's hidden fields, but never reveal that answer in any visible section, including a walkthrough or trace of the same snippet; use a different example to illustrate with show_code_walkthrough. For a component hierarchy, use show_graph as a directed tree, as its description says.",
+  "Every section is on the page as soon as it is written, so nothing waits for the learner's answer. A code prediction check is fine: put the short snippet in a fenced code block in the prose section before it and keep its answer in the check's hidden fields, but never reveal that answer in any visible section, including a walkthrough or trace of the same snippet; use a different example to illustrate with show_code_walkthrough. For a component hierarchy, use show_graph as a directed tree, as its description says. For where things are and how they move between containers (names sharing one object, values passing through stages, tasks moving between a queue and a stack), plan a composition section and write it with show_composition; keep graph sections for topology, trees and graph algorithms.",
   RENDERING_RULES,
 ].join("\n\n");
 
@@ -43,6 +43,7 @@ const toolForKind: Record<LessonSectionKind, string> = {
   prose: "write_lesson_text",
   algorithm_trace: artifactKinds.algorithm_trace.toolName,
   code_walkthrough: artifactKinds.code_walkthrough.toolName,
+  composition: artifactKinds.composition.toolName,
   graph: artifactKinds.graph.toolName,
   multiple_choice: artifactKinds.multiple_choice.toolName,
   set_diagram: artifactKinds.set_diagram.toolName,

@@ -9,6 +9,7 @@ import { createApp } from "../server/src/app.js";
 import { createOAuthClient } from "../server/src/chatgpt/oauth.js";
 import { createChatGptSession, memoryChatGptStore } from "../server/src/chatgpt/session.js";
 import { memoryCredentials } from "../server/src/credentials.js";
+import { aliasingComposition, eventLoopComposition, pipelineComposition, richComposition } from "../protocol/test/composition-fixtures.js";
 import { fakeAuth } from "../server/test/support/fake-chatgpt-auth.js";
 import { createFakeCompatible } from "../server/test/support/fake-compatible.js";
 import { staticCatalog } from "../server/src/models/catalog.js";
@@ -544,6 +545,15 @@ const SCRIPTS: Record<string, Step[]> = {
     { text: "The repaired proof is inline." },
   ],
   dijkstra: [{ tool: "show_graph", input: dijkstraGraph }, { text: "Follow the edges." }],
+  compositionalias: [{ tool: "show_composition", input: aliasingComposition }, { text: "Step through the names." }],
+  compositionpipeline: [{ tool: "show_composition", input: pipelineComposition }, { text: "Follow the stages." }],
+  compositionloop: [{ tool: "show_composition", input: eventLoopComposition }, { text: "Watch the queue." }],
+  compositionrich: [{ tool: "show_composition", input: richComposition }, { text: "Look at the full cards." }],
+  compositiontwo: [
+    { tool: "show_composition", input: aliasingComposition },
+    { tool: "show_composition", input: eventLoopComposition },
+    { text: "Two compositions." },
+  ],
 
   tabset: [{ tool: "show_set_diagram", input: tabSet }, { text: "Tab through the diagram." }],
   tabgraph: [{ tool: "show_graph", input: tabGraph }, { text: "Tab through the graph." }],
@@ -675,6 +685,23 @@ const LESSON_WALKTHROUGH_STEPS: Step[] = [
   { text: "" },
 ];
 
+/** A first lesson with a composition section, for a course whose goal says lessoncomposition. */
+const LESSON_COMPOSITION_STEPS: Step[] = [
+  {
+    tool: "outline_lesson",
+    input: {
+      title: "What a limit is",
+      sections: [
+        { title: "Two names", kind: "composition", purpose: "Show two names sharing one list." },
+        { title: "Quick check", kind: "multiple_choice", purpose: "Check the idea." },
+      ],
+    },
+  },
+  { tool: "show_composition", input: aliasingComposition },
+  LESSON_STEPS[2]!,
+  { text: "" },
+];
+
 function nextStep(prompt: PromptMessage[], effort?: string): Step {
   const lastUser = prompt.findLastIndex((m) => m.role === "user");
   // Distilling imported notes (ADR-014): a concept and a known memory per note, named by its title. A note saying
@@ -702,6 +729,7 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
     if (done === 0 && system.includes("lessonbroken")) return { error: "PROVIDER-LESSON-FAILURE", hold: true };
     if (done === 0 && system.includes("lessonhold")) return { ...LESSON_STEPS[0]!, hold: true };
     if (!system.includes("previous_lesson") && system.includes("lessonwalkthrough")) return LESSON_WALKTHROUGH_STEPS[done] ?? { text: "" };
+    if (!system.includes("previous_lesson") && system.includes("lessoncomposition")) return LESSON_COMPOSITION_STEPS[done] ?? { text: "" };
     if (!system.includes("previous_lesson")) return LESSON_STEPS[done] ?? { text: "" };
     // The next lesson revisits the missed idea and, since the learner struggled, adapts the plan once.
     const revisited = /"sectionId":"([^"]+)","title":"The idea"/.exec(system)?.[1] ?? "missing";
@@ -736,6 +764,14 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
   const text = JSON.stringify(prompt[lastUser]?.content);
   // The tutor drawer (ADR-011): Explain answers, and Change edits the open lesson by its section id.
   if (text.includes('Explain \\"The idea\\"')) return { text: "Here is more on the idea." };
+  // The tutor makes a composition, then adds it to the open lesson as a section with insert_artifact.
+  if (text.includes("insertcomposition")) {
+    const results = prompt.slice(lastUser).filter((m) => m.role === "tool");
+    if (results.length === 0) return { tool: "show_composition", input: eventLoopComposition };
+    if (results.length > 1) return { text: "I added the event loop." };
+    const artifactId = /artifactId\\?":\\?"([\w-]+)/.exec(JSON.stringify(results))?.[1] ?? "missing";
+    return { tool: "change_lesson", input: { reason: "Add the event loop", operations: [{ op: "insert_artifact", afterSectionId: null, title: "Event loop", artifactId }] } };
+  }
   if (text.includes("changelesson")) {
     if (prompt.slice(lastUser).some((m) => m.role === "tool")) return { text: "I simplified it." };
     const system = JSON.stringify(prompt[0]?.content).replaceAll("\\", "");
