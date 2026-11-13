@@ -21,6 +21,7 @@ export * from "./artifact-math-input.js";
 export * from "./math-text.js";
 export * from "./algorithm-trace.js";
 export * from "./code-walkthrough.js";
+export * from "./composition.js";
 export * from "./course.js";
 export * from "./lesson.js";
 export * from "./graph.js";
