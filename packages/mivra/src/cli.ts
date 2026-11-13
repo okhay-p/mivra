@@ -9,7 +9,8 @@ import { loadConfig, type Config } from "../../server/src/config.js";
 import { ApiKey, CREDENTIALS_FILE, PROVIDER_ENV, PROVIDER_LABELS, createCredentialStore, type ProviderId } from "../../server/src/credentials.js";
 import { USAGE, UsageError, parseCommand, type Command } from "./args.js";
 import { LOG_FILE, STATE_FILE, claim, clearState, isAlive, readState, running, waitForHolder, writeState } from "./state.js";
-import { openBrowser, readSecret } from "./terminal.js";
+import { confirm, openBrowser, readSecret } from "./terminal.js";
+import { uninstall } from "./uninstall.js";
 import { importObsidian } from "./vault.js";
 
 /** The package root: dist/ or src/ sits one level below it. */
@@ -71,6 +72,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return authLogout(config);
     case "import-obsidian":
       return importObsidian(command.folder, command.importName, config.dataDir, { out, err });
+    case "uninstall":
+      return uninstall({ dataDir: config.dataDir, deleteData: command.deleteData, stop: () => stop(config.dataDir), confirm, out, err });
   }
 }
 

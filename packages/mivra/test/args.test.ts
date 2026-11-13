@@ -26,6 +26,14 @@ describe("the command line", () => {
     }
   });
 
+  it("reads the uninstall command", () => {
+    expect(parseCommand(["uninstall"])).toEqual({ name: "uninstall", deleteData: undefined });
+    expect(parseCommand(["uninstall", "--delete-data"])).toEqual({ name: "uninstall", deleteData: true });
+    expect(parseCommand(["uninstall", "--keep-data"])).toEqual({ name: "uninstall", deleteData: false });
+    expect(() => parseCommand(["uninstall", "--delete-data", "--keep-data"])).toThrow(UsageError);
+    expect(() => parseCommand(["uninstall", "now"])).toThrow(UsageError);
+  });
+
   it("never takes a key as an argument", () => {
     expect(() => parseCommand(["auth", "set", "openrouter", "sk-or-v1-secret"])).toThrow(UsageError);
   });

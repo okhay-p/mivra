@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 
 /** Opens a URL in the default browser. Failing to (no desktop, say) only means the user opens it themselves. */
 export function openBrowser(url: string) {
@@ -49,4 +50,18 @@ export async function readSecret(prompt: string, input: NodeJS.ReadStream = proc
     };
     input.on("data", onData);
   });
+}
+
+/** Asks a yes/no question and reads one line. Anything but y or yes, including no answer at all, is a no. */
+export async function confirm(question: string, input: NodeJS.ReadStream = process.stdin, output: NodeJS.WriteStream = process.stderr): Promise<boolean> {
+  output.write(question);
+  const lines = createInterface({ input, terminal: false });
+  const answer = await new Promise<string>((resolve) => {
+    lines.once("line", resolve);
+    lines.once("close", () => resolve(""));
+  });
+  lines.close();
+  input.pause();
+  if (!input.isTTY) output.write("\n");
+  return /^(y|yes)$/i.test(answer.trim());
 }
