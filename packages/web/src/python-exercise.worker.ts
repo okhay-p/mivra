@@ -55,17 +55,24 @@ const prepare = () =>
     return createPythonCaseRunner(pyodide);
   })());
 
+// Python a case left to run later (a callback scheduled through `pyodide.webloop`) is interrupted at once
+// (createPythonCaseRunner), and its error surfaces here, between cases. It isn't the runner failing, so it stays here.
+self.addEventListener("error", (event) => event.preventDefault());
+self.addEventListener("unhandledrejection", (event) => event.preventDefault());
+
 self.onmessage = async ({ data }: MessageEvent<ExerciseWorkerRequest>) => {
   const reply = (message: ExerciseWorkerResponse) => self.postMessage(message);
+  // Answered before anything else, so the page can tell this worker isn't stuck.
+  if (data.kind === "ping") return reply({ id: data.id, pong: true });
   let runner: PythonCaseRunner;
   try {
     runner = await prepare();
   } catch (error) {
     // Loading failed; the page drops this worker, and the next run starts a fresh one.
-    if (data.warm) return;
+    if (data.kind !== "case") return;
     return reply({ id: data.id, ok: false, error: `Python couldn't start: ${error instanceof Error ? error.message : String(error)}`, restart: true });
   }
-  if (data.warm) return;
+  if (data.kind !== "case") return;
   try {
     const testCase = ExerciseCaseInput.parse(data.testCase);
     reply({ id: data.id, started: true });

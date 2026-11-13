@@ -4,11 +4,11 @@ import { caseInput, createCaseRunner, RunStopped } from "../src/exercise-runner.
 /** A worker that answers only when told to, recording what it was sent and whether it was terminated. */
 function fakeWorker() {
   const target = new EventTarget();
-  const sent: { id: number; testCase: unknown }[] = [];
+  const sent: { id: number; kind: string; testCase?: unknown }[] = [];
   const worker = {
     terminated: false,
     sent,
-    postMessage: (message: { id: number; testCase: unknown }) => sent.push(message),
+    postMessage: (message: { id: number; kind: string; testCase?: unknown }) => sent.push(message),
     terminate() {
       worker.terminated = true;
     },
@@ -95,7 +95,7 @@ describe("the exercise case runner", () => {
     runner.warm();
     runner.warm();
     expect(spawned).toBe(1);
-    expect(workers[0]!.sent).toEqual([expect.objectContaining({ warm: true })]);
+    expect(workers[0]!.sent).toEqual([expect.objectContaining({ kind: "warm" })]);
     const pending = runner.run("x", undefined, { kind: "stdio", stdin: "" });
     const { id } = workers[0]!.sent[1]!;
     workers[0]!.reply({ id, ok: true, run: { stdout: "", error: "broken" }, restart: true });
@@ -103,6 +103,47 @@ describe("the exercise case runner", () => {
     expect(workers[0]!.terminated).toBe(true);
     void runner.run("x", undefined, { kind: "stdio", stdin: "" });
     expect(spawned).toBe(2);
+  });
+
+  it("terminates an idle, loaded worker that stops answering, and keeps one that answers", async () => {
+    vi.useFakeTimers();
+    const workers = [fakeWorker(), fakeWorker()];
+    let spawned = 0;
+    const runner = createCaseRunner({ spawn: () => workers[spawned++]!, hardLimitMs: 3_000, startupLimitMs: 10_000 });
+    const pending = runner.run("x", undefined, { kind: "stdio", stdin: "" });
+    const { id } = workers[0]!.sent[0]!;
+    workers[0]!.reply({ id, started: true });
+    workers[0]!.reply({ id, ok: true, run: { stdout: "" } });
+    await pending;
+
+    // It answers every ping, so it stays.
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      const ping = workers[0]!.sent.at(-1)!;
+      expect(ping.kind).toBe("ping");
+      workers[0]!.reply({ id: ping.id, pong: true });
+    }
+    expect(workers[0]!.terminated).toBe(false);
+
+    // Code a case left behind keeps it busy: it stops answering, and is terminated within the hard limit.
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(workers[0]!.terminated).toBe(true);
+    void runner.run("x", undefined, { kind: "stdio", stdin: "" });
+    expect(spawned).toBe(2);
+  });
+
+  it("restarts a loaded worker that doesn't start the next case within the hard limit", async () => {
+    vi.useFakeTimers();
+    const worker = fakeWorker();
+    const runner = createCaseRunner({ spawn: () => worker, hardLimitMs: 3_000, startupLimitMs: 60_000 });
+    const first = runner.run("x", undefined, { kind: "stdio", stdin: "" });
+    worker.reply({ id: worker.sent[0]!.id, started: true });
+    worker.reply({ id: worker.sent[0]!.id, ok: true, run: { stdout: "" } });
+    await first;
+    const next = runner.run("x", undefined, { kind: "stdio", stdin: "" });
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expect(next).resolves.toMatchObject({ error: expect.stringMatching(/still busy with code from an earlier run/) });
+    expect(worker.terminated).toBe(true);
   });
 
   it("reports a crashed worker as the case's error", async () => {

@@ -79,6 +79,27 @@ describe("the Python case runner", () => {
     expect(run("print(globals().get('counter'))\nimport sys\nprint(sys.getrecursionlimit() > 50)\n", stdio())).toEqual({ stdout: "None\nTrue\n" });
   });
 
+  it("interrupts Python a case left to run later, once the case is over", async () => {
+    const code = [
+      "from pyodide.webloop import scheduleCallback",
+      "from pyodide.ffi import create_proxy",
+      "import builtins",
+      "builtins.stopped_later = False",
+      "def later():",
+      "    try:",
+      "        while True:",
+      "            pass",
+      "    except KeyboardInterrupt:",
+      "        builtins.stopped_later = True",
+      "scheduleCallback(create_proxy(later), 10)",
+      "print('scheduled')",
+    ].join("\n");
+    expect(run(code, stdio())).toEqual({ stdout: "scheduled\n" });
+    // The callback runs on this event loop; without the idle interrupt this wait would never end.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(run("import builtins\nprint(builtins.stopped_later)\n", stdio())).toEqual({ stdout: "True\n" });
+  });
+
   it("gives Python no way to JavaScript", () => {
     expect(run("import js\n", stdio()).error).toMatch(/^ModuleNotFoundError: No module named 'js'/);
     expect(run("import pyodide_js\n", stdio()).error).toMatch(/^ModuleNotFoundError: No module named 'pyodide_js'/);

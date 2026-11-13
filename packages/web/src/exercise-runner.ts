@@ -11,6 +11,11 @@ export const HARD_CASE_LIMIT_MS = EXERCISE_LIMITS.timeMs + 3_000;
 /** How long Python may take to load (about 12 MB of files, then starting the interpreter) before a run gives up. */
 export const PYTHON_STARTUP_LIMIT_MS = 120_000;
 
+/** How often an idle, loaded worker is asked whether it's stuck. */
+export const HEARTBEAT_MS = 1_000;
+
+const BUSY_WORKER = "The runner was still busy with code from an earlier run, so it was restarted. Run again.";
+
 /** Just what running a case needs: its input. Expected results and whether it's hidden stay on the page. */
 export const caseInput = (testCase: ExercisePublicCase): ExerciseCaseInput =>
   testCase.kind === "stdio" ? { kind: "stdio", stdin: testCase.stdin } : { kind: "call", args: testCase.args };
@@ -45,85 +50,129 @@ export interface CaseRunnerOptions {
   spawn?: () => WorkerLike;
   hardLimitMs?: number;
   /**
-   * The worker sends `started` when a case begins, after loading its runtime: the hard limit runs from then,
-   * and loading has `startupLimitMs`. Otherwise the hard limit runs from when the case is sent.
+   * For a runtime that loads slowly (Python). The worker sends `started` when a case begins: the hard limit runs
+   * from then, and loading has `startupLimitMs`. Once loaded, the worker is pinged while idle, and terminated if
+   * it doesn't answer within the hard limit: code a case left to run later mustn't keep it busy. Without this,
+   * the hard limit runs from when the case is sent.
    */
   startupLimitMs?: number;
 }
 
+/** One worker and what the page knows about it. */
+interface Live {
+  worker: WorkerLike;
+  /** It has started a case, so its runtime is loaded. */
+  loaded: boolean;
+  /** When the unanswered ping was sent. */
+  pinged?: number;
+  heartbeat?: ReturnType<typeof setInterval>;
+}
+
 /** Runs cases in a Web Worker, one at a time, each with a hard time limit. */
 export function createCaseRunner({ spawn = newWorker("javascript"), hardLimitMs = HARD_CASE_LIMIT_MS, startupLimitMs }: CaseRunnerOptions = {}): CaseRunner {
-  let worker: WorkerLike | undefined;
+  let live: Live | undefined;
   let nextId = 0;
   let cancel: (() => void) | undefined;
 
   const kill = () => {
-    worker?.terminate();
-    worker = undefined;
+    if (!live) return;
+    clearInterval(live.heartbeat);
+    live.worker.terminate();
+    live = undefined;
+  };
+
+  const current = (): Live => {
+    if (live) return live;
+    const fresh: Live = { worker: spawn(), loaded: false };
+    fresh.worker.addEventListener("message", (({ data }: MessageEvent<ExerciseWorkerResponse>) => {
+      if ("pong" in data) fresh.pinged = undefined;
+    }) as EventListener);
+    live = fresh;
+    return fresh;
+  };
+
+  const watch = (target: Live) => {
+    if (startupLimitMs === undefined || !target.loaded || target !== live) return;
+    target.pinged = undefined;
+    target.heartbeat = setInterval(() => {
+      if (target.pinged !== undefined) {
+        if (Date.now() - target.pinged >= hardLimitMs) kill();
+        return;
+      }
+      target.pinged = Date.now();
+      target.worker.postMessage({ id: ++nextId, kind: "ping" } satisfies ExerciseWorkerRequest);
+    }, HEARTBEAT_MS);
   };
 
   return {
     run(code, functionName, testCase, { onStart } = {}) {
-      worker ??= spawn();
-      const current = worker;
+      const target = current();
+      clearInterval(target.heartbeat);
+      const { worker } = target;
       const id = ++nextId;
       return new Promise<ExerciseCaseRun>((resolve, reject) => {
         let timer: ReturnType<typeof setTimeout>;
         const cleanup = () => {
           clearTimeout(timer);
-          current.removeEventListener("message", onMessage as EventListener);
-          current.removeEventListener("error", onError);
+          worker.removeEventListener("message", onMessage as EventListener);
+          worker.removeEventListener("error", onError);
           cancel = undefined;
         };
-        const timeLimit = () => {
+        const finish = (run: ExerciseCaseRun) => {
+          cleanup();
+          watch(target);
+          resolve(run);
+        };
+        const fail = (error: string) => {
           cleanup();
           kill();
-          resolve({ stdout: "", error: `Time limit exceeded (${EXERCISE_LIMITS.timeMs / 1000} s): the code ran too long, or never stopped.` });
+          resolve({ stdout: "", error });
         };
+        const timeLimit = () => fail(`Time limit exceeded (${EXERCISE_LIMITS.timeMs / 1000} s): the code ran too long, or never stopped.`);
         const onMessage = ({ data }: MessageEvent<ExerciseWorkerResponse>) => {
-          if (data.id !== id) return;
+          if (data.id !== id || "pong" in data) return;
           if ("started" in data) {
+            target.loaded = true;
             clearTimeout(timer);
             timer = setTimeout(timeLimit, hardLimitMs);
             onStart?.();
             return;
           }
-          cleanup();
-          if (data.restart) kill();
-          if (data.ok) resolve(data.run);
-          else resolve({ stdout: "", error: data.error.startsWith("Python couldn't start") ? data.error : `The code couldn't run: ${data.error}` });
+          if (data.restart) {
+            cleanup();
+            kill();
+            return resolve(data.ok ? data.run : { stdout: "", error: data.error });
+          }
+          if (data.ok) finish(data.run);
+          else finish({ stdout: "", error: `The code couldn't run: ${data.error}` });
         };
         // The worker crashed (it may have run out of memory). A fresh one takes the next case.
         const onError = (event: Event) => {
           event.preventDefault();
-          cleanup();
-          kill();
-          resolve({ stdout: "", error: "The code stopped the runner, probably by using too much memory." });
+          fail("The code stopped the runner, probably by using too much memory.");
         };
         if (startupLimitMs === undefined) {
           timer = setTimeout(timeLimit, hardLimitMs);
           onStart?.();
+        } else if (target.loaded) {
+          // Loaded already, so the case should start at once; if not, earlier code is keeping the worker busy.
+          timer = setTimeout(() => fail(BUSY_WORKER), hardLimitMs);
         } else {
-          timer = setTimeout(() => {
-            cleanup();
-            kill();
-            resolve({ stdout: "", error: "Python took too long to start. Check your connection to Mivra and try again." });
-          }, startupLimitMs);
+          timer = setTimeout(() => fail("Python took too long to start. Check your connection to Mivra and try again."), startupLimitMs);
         }
         cancel = () => {
           cleanup();
           kill();
           reject(new RunStopped());
         };
-        current.addEventListener("message", onMessage as EventListener);
-        current.addEventListener("error", onError);
-        current.postMessage({ id, code, functionName, testCase } satisfies ExerciseWorkerRequest);
+        worker.addEventListener("message", onMessage as EventListener);
+        worker.addEventListener("error", onError);
+        worker.postMessage({ id, kind: "case", code, functionName, testCase } satisfies ExerciseWorkerRequest);
       });
     },
     warm() {
-      if (worker) return;
-      worker = spawn();
-      worker.postMessage({ id: ++nextId, warm: true } satisfies ExerciseWorkerRequest);
+      if (live) return;
+      current().worker.postMessage({ id: ++nextId, kind: "warm" } satisfies ExerciseWorkerRequest);
     },
     stop() {
       if (cancel) cancel();

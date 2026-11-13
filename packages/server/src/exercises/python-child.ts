@@ -48,6 +48,9 @@ process.once("message", async (message: unknown) => {
     const pyodide = await load();
     removeGlobals();
     const runner = createPythonCaseRunner(pyodide);
+    // Python a case left to run later is interrupted (createPythonCaseRunner), and its error mustn't end this
+    // process before the results are sent.
+    process.on("uncaughtException", () => {});
     const results: ExerciseCaseRun[] = job.cases.map((testCase) => runner.run({ code: job.code, functionName: job.functionName, testCase }));
     send({ ok: true, results });
   } catch (error) {

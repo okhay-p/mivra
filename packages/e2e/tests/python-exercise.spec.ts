@@ -106,6 +106,21 @@ test.describe("python exercise", () => {
     await expect(status(card)).toContainText("Stopped.");
     await expect(card.getByRole("button", { name: "Run" })).toBeEnabled();
 
+    // Code left to run after its case (a deferred call into C, which the interrupt check can't stop) mustn't keep
+    // the worker busy: the page stops getting answers from it and replaces it.
+    const deferred = [
+      "from pyodide.webloop import scheduleCallback",
+      "from pyodide.ffi import create_proxy",
+      "def total(xs):",
+      "    scheduleCallback(create_proxy(lambda: sum(range(10 ** 15))), 10)",
+      "    return sum(xs)",
+    ].join("\n");
+    await editor(card).fill(deferred);
+    await card.getByRole("button", { name: "Run" }).click();
+    // Whether the second case runs before the deferred call depends on timing; either way the run finishes.
+    await expect(status(card)).toContainText(/[12] of 2 visible cases passed\./, { timeout: PYTHON_MS });
+    await page.waitForTimeout(8_000);
+
     // A fixed version runs in a fresh worker.
     await editor(card).fill(SOLUTION);
     await card.getByRole("button", { name: "Run" }).click();

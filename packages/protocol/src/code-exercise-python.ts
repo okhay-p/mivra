@@ -14,7 +14,8 @@ import { OUTPUT_EXCEEDED, STACK_EXCEEDED, type RunCaseOptions } from "./code-exe
  *
  * Time is limited through Pyodide's interrupt check, which reads `buffer[0]` every few bytecodes: past the
  * deadline it reads SIGINT and Python raises KeyboardInterrupt, again at every check, so code that catches
- * it still stops. A long call into C (a huge `sum(range(...))`) doesn't check, so callers keep a hard limit of
+ * it still stops. Between cases the deadline stays in the past, so Python that a case left to run later (a
+ * callback scheduled through `pyodide.webloop`, say) is interrupted as soon as it starts. A long call into C (a huge `sum(range(...))`) doesn't check, so callers keep a hard limit of
  * their own around a case, as for QuickJS.
  */
 
@@ -172,7 +173,8 @@ const timeLimit = (ms: number) => `Time limit exceeded (${ms / 1000} s): the cod
  * the interrupt check. Call it once, before any untrusted code runs.
  */
 export function createPythonCaseRunner(pyodide: PyodideLike, { now = Date.now }: { now?: () => number } = {}): PythonCaseRunner {
-  let deadline = Number.POSITIVE_INFINITY;
+  // No case is running yet: any Python is interrupted.
+  let deadline = Number.NEGATIVE_INFINITY;
   let interrupted = false;
   // Pyodide reads index 0 and writes it back to 0 once it has seen a signal; the write is ignored, so every
   // check after the deadline interrupts again.
@@ -193,8 +195,8 @@ export function createPythonCaseRunner(pyodide: PyodideLike, { now = Date.now }:
     }
   }
   pyodide.runPython(HARNESS);
-  pyodide.setInterruptBuffer(buffer as never);
   const harness = pyodide.runPython("_mivra_run") as (...args: unknown[]) => string;
+  pyodide.setInterruptBuffer(buffer as never);
   let broken = false;
 
   return {
@@ -221,7 +223,7 @@ export function createPythonCaseRunner(pyodide: PyodideLike, { now = Date.now }:
         if (/fatal error/i.test(message)) broken = true;
         return finish({ error: /maximum call stack|too much recursion/i.test(message) ? STACK_EXCEEDED : `The code couldn't run: ${message}` });
       } finally {
-        deadline = Number.POSITIVE_INFINITY;
+        deadline = Number.NEGATIVE_INFINITY;
       }
       const result = JSON.parse(raw) as HarnessResult;
       const output = { stdout: result.stdout, stderr: result.stderr };
