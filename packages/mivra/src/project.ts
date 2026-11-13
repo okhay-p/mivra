@@ -11,6 +11,7 @@ import {
   type MilestoneCaseResult,
 } from "@mivra/protocol";
 import { z } from "zod";
+import { CREDENTIALS_FILE, ServerToken, readRemoteServer, removeRemoteServer, saveRemoteServer } from "../../server/src/credentials.js";
 import { TOKEN_FILE } from "../../server/src/security.js";
 import { CommandError, fillPlaceholders, runProgram, splitCommand, stopCurrent, type ProgramRun, type RunLimits } from "./run-command.js";
 import { running } from "./state.js";
@@ -41,29 +42,85 @@ type Io = { out: (message: string) => void; err: (message: string) => void };
 
 class ProjectError extends Error {}
 
-/** The running Mivra's address and token, from the data dir, as `mivra import` finds them. */
-async function connect(dataDir: string) {
-  const server = await running(dataDir);
-  if (!server) throw new ProjectError("Mivra isn't running. Start it with `mivra start --detach`, then try again.");
-  let token: string;
+/**
+ * How to reach Mivra: the remote one saved with `mivra link --server` (ADR-016), else the one running from this data
+ * dir, with its token, as `mivra import` finds it.
+ */
+async function server(dataDir: string): Promise<{ url: string; token: string; remote: boolean }> {
+  const remote = readRemoteServer(dataDir);
+  if (remote) return { ...remote, remote: true };
+  const local = await running(dataDir);
+  if (!local) throw new ProjectError("Mivra isn't running. Start it with `mivra start --detach`, then try again.");
   try {
-    token = readFileSync(join(dataDir, TOKEN_FILE), "utf8").trim();
+    return { url: local.url, token: readFileSync(join(dataDir, TOKEN_FILE), "utf8").trim(), remote: false };
   } catch {
     throw new ProjectError(`Couldn't read Mivra's API token from ${join(dataDir, TOKEN_FILE)}.`);
   }
+}
+
+/** Calls Mivra's API. Errors name what to fix and never include the token. */
+function client({ url, token, remote }: { url: string; token: string; remote: boolean }) {
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
-  const call = async (path: string, init: RequestInit = {}) => {
+  const relink = `Get its token from Settings → Connect a CLI, or \`mivra token\` where it runs, and run \`mivra link --server ${url}\` again.`;
+  return async (path: string, init: RequestInit = {}) => {
     let res: Response;
     try {
-      res = await fetch(`${server.url}/api${path}`, { ...init, headers, signal: AbortSignal.timeout(30_000) });
+      // A redirect isn't followed: the token goes only to the address the learner gave.
+      res = await fetch(`${url}/api${path}`, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(30_000) });
     } catch {
-      throw new ProjectError(`Couldn't reach Mivra at ${server.url}.`);
+      throw new ProjectError(remote ? `Couldn't reach Mivra at ${url}. Check it's running and that this computer can reach it.` : `Couldn't reach Mivra at ${url}.`);
     }
     if (res.ok) return res.json() as Promise<unknown>;
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      throw new ProjectError(`${url} redirects${location ? ` to ${location}` : ""}, which Mivra doesn't follow. Use Mivra's own address: \`mivra link --server <url>\`.`);
+    }
     const message = ((await res.json().catch(() => ({}))) as { error?: unknown }).error;
+    if (remote && res.status === 401) throw new ProjectError(`Mivra at ${url} didn't accept the saved token. ${relink}`);
+    if (remote && res.status === 403 && message === "Host not allowed") {
+      throw new ProjectError(`Mivra at ${url} doesn't accept requests for ${new URL(url).hostname}. Add it to MIVRA_ALLOWED_HOSTS where Mivra runs, and restart it.`);
+    }
     throw new ProjectError(typeof message === "string" ? message : `Mivra answered ${res.status}.`);
   };
-  return { url: server.url, call };
+}
+
+async function connect(dataDir: string) {
+  const found = await server(dataDir);
+  return { url: found.url, remote: found.remote, call: client(found) };
+}
+
+/** Says whether there's a Mivra at the address, without the token, so a wrong address isn't mistaken for a wrong token. */
+async function isMivra(url: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${url}/api/health`, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
+    return res.ok && ((await res.json()) as { ok?: unknown }).ok === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `mivra link --server <url>`: checks the token works there, then saves both in the data dir's credentials file
+ * (ADR-013's store), never in `.mivra.json`.
+ */
+async function connectRemote(url: string, dataDir: string, readToken: () => Promise<string>, io: Io) {
+  if (!(await isMivra(url))) throw new ProjectError(`There's no Mivra answering at ${url}. Check the address, and that Mivra is running there.`);
+  let input: string;
+  try {
+    input = await readToken();
+  } catch (error) {
+    throw new ProjectError((error as Error).message);
+  }
+  const token = ServerToken.safeParse(input);
+  if (!token.success) throw new ProjectError(input ? token.error.issues[0]!.message : "No token given.");
+  // Any authenticated read proves the token; this one is small and calls no model.
+  await client({ url, token: token.data, remote: true })("/settings/tasks");
+  saveRemoteServer(dataDir, { url, token: token.data });
+  io.out(`Connected to Mivra at ${url}. Its address and token are saved in ${join(dataDir, CREDENTIALS_FILE)}, not in .mivra.json.`);
+  const { hostname, protocol } = new URL(url);
+  if (protocol === "http:" && !["localhost", "127.0.0.1", "[::1]"].includes(hostname)) {
+    io.err("The token goes over plain HTTP to that address. That's only safe on a network that encrypts traffic itself, such as a tailnet.");
+  }
 }
 
 /** Checks a command can be run as Mivra will run it, and says why not. */
@@ -84,25 +141,31 @@ function failed(error: unknown, io: Io): number {
   return 1;
 }
 
-/** `mivra link <course> --run <command>`: writes `.mivra.json` in the current directory. */
+/**
+ * `mivra link <course> --run <command>`: writes `.mivra.json` in the current directory. `--server <url>` first
+ * connects this computer to a Mivra on another one; `--local` goes back to the one running here.
+ */
 export async function link(
-  { course, run, runOutput }: { course: string; run: string; runOutput?: string },
-  { dataDir, cwd }: { dataDir: string; cwd: string },
+  { course, run, runOutput, server: url, local }: { course?: string; run?: string; runOutput?: string; server?: string; local?: boolean },
+  { dataDir, cwd, readToken }: { dataDir: string; cwd: string; readToken: () => Promise<string> },
   io: Io,
 ): Promise<number> {
   try {
-    checkCommand(run, "--run");
+    if (run !== undefined) checkCommand(run, "--run");
     if (runOutput !== undefined) {
       checkCommand(runOutput, "--run-output");
       if (!runOutput.includes("{output}")) throw new ProjectError('--run-output needs {output} where the path to your program\'s output goes, e.g. "./run-asm.sh {output}".');
     }
-    const { call } = await connect(dataDir);
+    if (local) io.out(removeRemoteServer(dataDir) ? "Forgot the remote Mivra: link and check use the one running on this computer again." : "Link and check already use the Mivra running on this computer.");
+    if (url) await connectRemote(url, dataDir, readToken, io);
+    if (course === undefined || run === undefined) return 0;
+    const { call, url: at, remote } = await connect(dataDir);
     const found = CourseView.parse(await call(`/courses/${encodeURIComponent(course)}`));
     if (found.kind !== "project") throw new ProjectError(`"${found.goal}" isn't a project course, so there's nothing to check from a repository.`);
     const path = join(cwd, LINK_FILE);
     const file: LinkFile = { course: found.id, run, ...(runOutput ? { runOutput } : {}) };
     writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`);
-    io.out(`Linked this folder to "${found.goal}" in ${path}. It holds no secrets, so you can commit it.`);
+    io.out(`Linked this folder to "${found.goal}"${remote ? ` on Mivra at ${at}` : ""} in ${path}. It holds no secrets, so you can commit it.`);
     io.out(`Mivra will run: ${run}${run.includes("{input}") ? "" : "  (each case's input comes on stdin; add {input} to get it as a file path too)"}`);
     io.out("Run `mivra check` here to check the current milestone.");
     return 0;
@@ -204,7 +267,8 @@ export async function check({ timeoutS }: { timeoutS: number }, { dataDir, cwd }
     const root = dirname(found.path);
     checkCommand(found.file.run, `"run" in ${found.path}`);
     if (found.file.runOutput) checkCommand(found.file.runOutput, `"runOutput" in ${found.path}`);
-    const { call } = await connect(dataDir);
+    const { call, url, remote } = await connect(dataDir);
+    if (remote) io.out(`Checking against Mivra at ${url}; your program runs here.`);
     const milestone = MilestoneCases.parse(await call(`/courses/${encodeURIComponent(found.file.course)}/milestone`));
     io.out(`Milestone ${milestone.position}: ${milestone.title} (${milestone.cases.length} ${milestone.cases.length === 1 ? "case" : "cases"})`);
     const limits = { timeoutMs: timeoutS * 1000, maxOutputBytes: MAX_OUTPUT_BYTES };

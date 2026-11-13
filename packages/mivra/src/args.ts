@@ -11,7 +11,8 @@ export type Command =
   | { name: "auth-login"; newAccount: boolean; open: boolean }
   | { name: "auth-logout" }
   | { name: "import-obsidian"; folder: string; importName?: string }
-  | { name: "link"; course: string; run: string; runOutput?: string }
+  | { name: "link"; course?: string; run?: string; runOutput?: string; server?: string; local: boolean }
+  | { name: "token" }
   | { name: "check"; timeoutS: number }
   | { name: "uninstall"; deleteData: boolean | undefined }
   | { name: "help" }
@@ -40,6 +41,10 @@ Commands:
     --run <command>        How to run your program, e.g. "./build/mycc {input}": {input} becomes the path to a
                            file holding a case's input, which also comes on stdin. Runs without a shell
     --run-output <command> For cases that run your program's output (e.g. assembly): {output} is its path
+  link --server <url>      Use the Mivra at this address (on another computer) for link and check. Asks for its
+                           token (or pipe it in) and saves both in the data dir, never in .mivra.json
+  link --local             Go back to the Mivra running on this computer
+  token                    Print this Mivra's token, for \`mivra link --server\` on another computer
   check                    Run your program on the current milestone's cases and record the result in Mivra
     --timeout <seconds>    Time limit for each run (default: 10)
   uninstall                Stop Mivra and ask whether to delete its data, before you remove the package
@@ -50,6 +55,23 @@ Providers: ${providerIds.join(", ")}
 Data lives in ~/.mivra, or MIVRA_DATA_DIR.`;
 
 export class UsageError extends Error {}
+
+/**
+ * A remote Mivra's address for `--server`, as its origin: http(s) only, with nothing a token could leak through or
+ * that Mivra wouldn't serve (a user name, a path, a query).
+ */
+export function serverUrl(input: string): string {
+  let url: URL;
+  try {
+    url = new URL(input.trim());
+  } catch {
+    throw new UsageError(`--server needs an address such as https://mivra.example.ts.net, not "${input}".`);
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") throw new UsageError("--server needs an http:// or https:// address.");
+  if (url.username || url.password) throw new UsageError("Leave the user name and password out of --server: Mivra asks for its token separately.");
+  if ((url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) throw new UsageError(`--server takes the address Mivra opens at, without a path: ${url.origin}`);
+  return url.origin;
+}
 
 const provider = (value: string | undefined): ProviderId => {
   if (!value) throw new UsageError(`Name a provider: ${providerIds.join(", ")}.`);
@@ -70,6 +92,8 @@ export function parseCommand(argv: string[]): Command {
         name: { type: "string" },
         run: { type: "string" },
         "run-output": { type: "string" },
+        server: { type: "string" },
+        local: { type: "boolean", default: false },
         timeout: { type: "string" },
         detach: { type: "boolean", default: false },
         open: { type: "boolean", default: true },
@@ -131,11 +155,23 @@ export function parseCommand(argv: string[]): Command {
       tooMany(3);
       return { name: "import-obsidian", folder: arg, ...(values.name === undefined ? {} : { importName: values.name }) };
     case "link": {
-      if (!sub) throw new UsageError('Give the course\'s id, as the milestone in Mivra shows it: `mivra link <course> --run "<command>"`.');
       tooMany(2);
+      const runOutput = values["run-output"]?.trim();
+      const server = values.server === undefined ? undefined : serverUrl(values.server);
+      if (server && values.local) throw new UsageError("Use --server or --local, not both.");
+      if (!sub) {
+        if (server || values.local) {
+          if (values.run !== undefined || runOutput) throw new UsageError('Give the course\'s id with --run: `mivra link <course> --run "<command>"`.');
+          return { name: "link", ...(server ? { server } : {}), local: values.local };
+        }
+        throw new UsageError('Give the course\'s id, as the milestone in Mivra shows it: `mivra link <course> --run "<command>"`.');
+      }
       if (!values.run?.trim()) throw new UsageError('Say how to run your program with --run, e.g. `mivra link <course> --run "./build/mycc {input}"`.');
-      return { name: "link", course: sub, run: values.run.trim(), ...(values["run-output"]?.trim() ? { runOutput: values["run-output"].trim() } : {}) };
+      return { name: "link", course: sub, run: values.run.trim(), ...(runOutput ? { runOutput } : {}), ...(server ? { server } : {}), local: values.local };
     }
+    case "token":
+      tooMany(1);
+      return { name: "token" };
     case "check": {
       tooMany(1);
       let timeoutS = 10;

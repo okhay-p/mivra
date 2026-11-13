@@ -7,6 +7,7 @@ import { ChatGptError } from "../../server/src/chatgpt/oauth.js";
 import { CHATGPT_FILE, chatGptFileStore, createChatGptSession } from "../../server/src/chatgpt/session.js";
 import { loadConfig, type Config } from "../../server/src/config.js";
 import { ApiKey, CREDENTIALS_FILE, PROVIDER_ENV, PROVIDER_LABELS, createCredentialStore, type ProviderId } from "../../server/src/credentials.js";
+import { TOKEN_FILE, loadOrCreateToken } from "../../server/src/security.js";
 import { USAGE, UsageError, parseCommand, type Command } from "./args.js";
 import { LOG_FILE, STATE_FILE, claim, clearState, isAlive, readState, running, waitForHolder, writeState } from "./state.js";
 import { confirm, openBrowser, readSecret } from "./terminal.js";
@@ -74,7 +75,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     case "import-obsidian":
       return importObsidian(command.folder, command.importName, config.dataDir, { out, err });
     case "link":
-      return link(command, { dataDir: config.dataDir, cwd: process.cwd() }, { out, err });
+      return link(command, { dataDir: config.dataDir, cwd: process.cwd(), readToken: () => readSecret("Paste the Mivra token (hidden): ") }, { out, err });
+    case "token":
+      return printToken(config.dataDir);
     case "check":
       return check(command, { dataDir: config.dataDir, cwd: process.cwd() }, { out, err });
     case "uninstall":
@@ -339,6 +342,16 @@ async function authLogout(config: Config): Promise<number> {
   }
   const { revoked } = await session.signOut();
   out(revoked ? "Signed out of ChatGPT." : "Signed out of ChatGPT here, but ChatGPT didn't confirm it. To be sure, disconnect Mivra in ChatGPT's settings.");
+  return 0;
+}
+
+/**
+ * `mivra token`: this Mivra's API token, for `mivra link --server` on another computer (ADR-016). Only the token
+ * goes to stdout, so it can be piped; whoever can run this can read the data dir anyway.
+ */
+function printToken(dataDir: string): number {
+  err(`Mivra's token, from ${join(dataDir, TOKEN_FILE)}. On the other computer, run \`mivra link --server <this Mivra's address>\` and paste it there. Anyone with it can use this Mivra, so keep it private.`);
+  out(loadOrCreateToken(dataDir));
   return 0;
 }
 
