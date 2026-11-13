@@ -13,6 +13,7 @@ import {
 import { z } from "zod";
 import { CREDENTIALS_FILE, ServerToken, readRemoteServer, removeRemoteServer, saveRemoteServer } from "../../server/src/credentials.js";
 import { TOKEN_FILE } from "../../server/src/security.js";
+import { changesToSend, collectChanges, type Changes } from "./repo-files.js";
 import { CommandError, fillPlaceholders, runProgram, splitCommand, stopCurrent, type ProgramRun, type RunLimits } from "./run-command.js";
 import { running } from "./state.js";
 
@@ -62,11 +63,11 @@ async function server(dataDir: string): Promise<{ url: string; token: string; re
 function client({ url, token, remote }: { url: string; token: string; remote: boolean }) {
   const headers = { authorization: `Bearer ${token}`, "content-type": "application/json" };
   const relink = `Get its token from Settings → Connect a CLI, or \`mivra token\` where it runs, and run \`mivra link --server ${url}\` again.`;
-  return async (path: string, init: RequestInit = {}) => {
+  return async (path: string, init: RequestInit = {}, timeoutMs = 30_000) => {
     let res: Response;
     try {
       // A redirect isn't followed: the token goes only to the address the learner gave.
-      res = await fetch(`${url}/api${path}`, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(30_000) });
+      res = await fetch(`${url}/api${path}`, { ...init, headers, redirect: "manual", signal: AbortSignal.timeout(timeoutMs) });
     } catch {
       throw new ProjectError(remote ? `Couldn't reach Mivra at ${url}. Check it's running and that this computer can reach it.` : `Couldn't reach Mivra at ${url}.`);
     }
@@ -264,8 +265,68 @@ const excerpt = (text: string, lines = 8) => {
   return [...shown, ...(all.length > lines ? [`        … (${all.length - lines} more lines)`] : [])].join("\n");
 };
 
+/** How long a check's POST may take: the server answers once the model has reviewed the code. */
+const CHECK_TIMEOUT_MS = 5 * 60_000;
+
+const kb = (chars: number) => `${(chars / 1024).toFixed(1)} KB`;
+
+const SKIP_TEXT: Record<Changes["skipped"][number]["reason"], string> = {
+  secret: "looks like it holds a secret: never sent, not even its name",
+  not_a_file: "a link or folder: never followed",
+  binary: "binary",
+  too_large: "too large to review",
+  size_cap: "over the size Mivra sends for one check",
+  lockfile: "a lockfile",
+};
+
+/** Lists what a check sends for review, as `--dry-run` shows it and a check sums it up. */
+function describeChanges(changes: Changes, io: Io, { full }: { full: boolean }) {
+  if (changes.source === "none") {
+    io.out(changes.note ?? "No files to send.");
+    return;
+  }
+  const total = changes.files.reduce((sum, f) => sum + f.content.length, 0);
+  const what = changes.sinceUsed ? "changed since the last passed milestone" : "in the repository (no earlier passed milestone to compare with)";
+  if (!full) {
+    io.out(`Sending ${changes.files.length} ${changes.files.length === 1 ? "file" : "files"} (${kb(total)}) ${what} for review${changes.skipped.length ? `, leaving out ${changes.skipped.length}` : ""}. See them with \`mivra check --dry-run\`.`);
+    return;
+  }
+  io.out(changes.files.length === 0 ? `No files ${what} to send.` : `Files ${what} that would be sent for review (${changes.files.length}, ${kb(total)}):`);
+  for (const file of changes.files) io.out(`  ${file.path}  (${kb(file.content.length)})`);
+  if (changes.skipped.length > 0) {
+    io.out("Not sent:");
+    for (const skip of changes.skipped) io.out(`  ${skip.path}  (${SKIP_TEXT[skip.reason]})`);
+  }
+  if (changes.deleted.length > 0) io.out(`Named as deleted: ${changes.deleted.join(", ")}`);
+  if (changes.commit) io.out(`Commit: ${changes.commit}`);
+}
+
+const CRITERIA = [
+  ["noHardCodedOutputs", "Computes its output"],
+  ["concept", "Shows the milestone's concept"],
+  ["quality", "Code quality"],
+] as const;
+
+/** Prints what the review found. */
+function showReview(review: MilestoneCheckResult["review"], io: Io) {
+  if (review.status === "skipped") {
+    io.out(review.reason === "tests_failed" ? "Review: not yet, since the tests must pass first." : "Review: nothing was sent to review, so the milestone can't pass yet.");
+    return;
+  }
+  if (review.status === "failed") {
+    io.out(`Review: it didn't finish (${review.error}). Run mivra check again.`);
+    return;
+  }
+  const { review: verdict } = review;
+  io.out(`Review (judged by a model, ${verdict.model}): ${verdict.approved ? "approved" : "changes requested"}`);
+  for (const [key, label] of CRITERIA) io.out(`  ${verdict[key].passed ? "pass" : "FAIL"}  ${label}: ${verdict[key].note}`);
+  io.out(`  ${verdict.summary}`);
+  for (const suggestion of verdict.suggestions) io.out(`  - ${suggestion}`);
+  if (!verdict.approved) io.out("  You can dispute the verdict from the milestone in Mivra.");
+}
+
 /** `mivra check`: runs the learner's command on the current milestone's cases and records the result in Mivra. */
-export async function check({ timeoutS }: { timeoutS: number }, { dataDir, cwd }: { dataDir: string; cwd: string }, io: Io): Promise<number> {
+export async function check({ timeoutS, dryRun = false }: { timeoutS: number; dryRun?: boolean }, { dataDir, cwd }: { dataDir: string; cwd: string }, io: Io): Promise<number> {
   // The program runs in its own process group, so Ctrl+C reaches only Mivra: stop the program with it.
   const onInterrupt = () => {
     stopCurrent();
@@ -280,7 +341,15 @@ export async function check({ timeoutS }: { timeoutS: number }, { dataDir, cwd }
     const { call, url, remote } = await connect(dataDir);
     if (remote) io.out(`Checking against Mivra at ${url}; your program runs here.`);
     const milestone = MilestoneCases.parse(await call(`/courses/${encodeURIComponent(found.file.course)}/milestone`));
-    io.out(`Milestone ${milestone.position}: ${milestone.title} (${milestone.cases.length} ${milestone.cases.length === 1 ? "case" : "cases"})`);
+    const count = milestone.checkType === "review" ? "checked by review" : `${milestone.cases.length} ${milestone.cases.length === 1 ? "case" : "cases"}`;
+    io.out(`Milestone ${milestone.position}: ${milestone.title} (${count})`);
+    const changes = await collectChanges(root, milestone.since);
+    if (dryRun) {
+      if (milestone.cases.length > 0) io.out(`A check would run your command on ${milestone.cases.length} ${milestone.cases.length === 1 ? "case" : "cases"} and send what it printed.`);
+      describeChanges(changes, io, { full: true });
+      io.out("Nothing was run or sent.");
+      return 0;
+    }
     const limits = { timeoutMs: timeoutS * 1000, maxOutputBytes: MAX_OUTPUT_BYTES };
     const results: MilestoneCaseResult[] = [];
     for (const testCase of milestone.cases) {
@@ -291,7 +360,11 @@ export async function check({ timeoutS }: { timeoutS: number }, { dataDir, cwd }
         return 1;
       }
     }
-    const graded = MilestoneCheckResult.parse(await call(`/artifacts/${encodeURIComponent(milestone.artifactId)}/checks`, { method: "POST", body: JSON.stringify({ results }) }));
+    describeChanges(changes, io, { full: false });
+    const body = { results, revision: milestone.revision, ...changesToSend(changes) };
+    const graded = MilestoneCheckResult.parse(
+      await call(`/artifacts/${encodeURIComponent(milestone.artifactId)}/checks`, { method: "POST", body: JSON.stringify(body) }, CHECK_TIMEOUT_MS),
+    );
     milestone.cases.forEach((testCase, i) => {
       const passed = graded.grade.cases[i]?.passed ?? false;
       io.out(`  ${passed ? "pass" : "FAIL"}  ${testCase.name}`);
@@ -306,8 +379,10 @@ export async function check({ timeoutS }: { timeoutS: number }, { dataDir, cwd }
       if (result.stderr) io.out(`      stderr:\n${excerpt(result.stderr, 4)}`);
     });
     const { passed, total } = graded.grade;
-    io.out(passed === total ? `All ${total} cases passed. Recorded in Mivra.` : `${passed} of ${total} cases passed. Recorded in Mivra.`);
-    return passed === total ? 0 : 1;
+    if (total > 0) io.out(passed === total ? `All ${total} cases passed.` : `${passed} of ${total} cases passed.`);
+    showReview(graded.review, io);
+    io.out(graded.passed ? "Milestone passed. Recorded in Mivra." : "Not passed yet. Recorded in Mivra.");
+    return graded.passed ? 0 : 1;
   } catch (error) {
     return failed(error, io);
   } finally {
