@@ -12,8 +12,23 @@ import { newQuickJSWASMModuleFromVariant, newVariant, type QuickJSSyncVariant } 
  * before any code runs.
  */
 
-export type ExerciseWorkerRequest = { id: number; code: string; functionName?: string; testCase: ExerciseCaseInput };
-export type ExerciseWorkerResponse = { id: number; ok: true; run: ExerciseCaseRun } | { id: number; ok: false; error: string };
+/**
+ * One case to run; a hint to load the runtime now, before the first case (`warm`); or a check that the worker
+ * isn't stuck (`ping`, answered with `pong`).
+ */
+export type ExerciseWorkerRequest =
+  | { id: number; kind: "case"; code: string; functionName?: string; testCase: ExerciseCaseInput }
+  | { id: number; kind: "warm" }
+  | { id: number; kind: "ping" };
+/**
+ * A case's result. A worker that loads its runtime slowly (Python) also sends `started` as the case begins, so the
+ * page times the case rather than the load. `restart` asks the page to replace the worker: its runtime is broken.
+ */
+export type ExerciseWorkerResponse =
+  | { id: number; started: true }
+  | { id: number; pong: true }
+  | { id: number; ok: true; run: ExerciseCaseRun; restart?: boolean }
+  | { id: number; ok: false; error: string; restart?: boolean };
 
 const variant = releaseSync as unknown as QuickJSSyncVariant;
 let compiled: Promise<WebAssembly.Module> | undefined;
@@ -21,6 +36,8 @@ const wasmModule = () => (compiled ??= fetch(wasmUrl).then((res) => res.arrayBuf
 
 self.onmessage = async ({ data }: MessageEvent<ExerciseWorkerRequest>) => {
   const reply = (message: ExerciseWorkerResponse) => self.postMessage(message);
+  if (data.kind === "ping") return reply({ id: data.id, pong: true });
+  if (data.kind !== "case") return;
   try {
     const testCase = ExerciseCaseInput.parse(data.testCase);
     const module = await wasmModule();

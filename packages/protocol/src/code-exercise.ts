@@ -9,10 +9,11 @@ import { z } from "zod";
  * case and reports what it produced; the server compares that with the expected results (grading is
  * deterministic, ADR-006, though the outputs come from the browser and aren't tamper-proof, ADR-016).
  *
- * The schema takes a language so Python (#120) fits; v1 accepts only JavaScript.
+ * JavaScript runs in QuickJS (code-exercise-runner.ts) and Python in Pyodide (code-exercise-python.ts), with the
+ * same case kinds, limits and comparison for both.
  */
 
-export const EXERCISE_LANGUAGES = ["javascript"] as const;
+export const EXERCISE_LANGUAGES = ["javascript", "python"] as const;
 export const ExerciseLanguage = z.enum(EXERCISE_LANGUAGES);
 export type ExerciseLanguage = z.infer<typeof ExerciseLanguage>;
 
@@ -27,9 +28,11 @@ export const MAX_CASE_OUTPUT_CHARS = 20_000;
 export const MAX_CASE_ERROR_CHARS = 2_000;
 
 /**
- * The limits one case runs under, in the browser and on the server alike: QuickJS's interrupt handler stops
- * it after `timeMs`, its WebAssembly memory can't grow past `memoryBytes` (QuickJS's own baseline included),
- * and its stack is capped below the JavaScript engine's own, so deep recursion fails cleanly.
+ * The limits one case runs under, in the browser and on the server alike. For JavaScript, QuickJS's interrupt
+ * handler stops it after `timeMs`, its WebAssembly memory can't grow past `memoryBytes` (QuickJS's own baseline
+ * included), and its stack is capped below the JavaScript engine's own, so deep recursion fails cleanly. Python
+ * gets the same time and output limits through Pyodide's interrupt check; its memory can't be capped (ADR-016),
+ * and its recursion limit is Python's default.
  */
 export const EXERCISE_LIMITS = {
   timeMs: 2_000,
@@ -40,6 +43,10 @@ export const EXERCISE_LIMITS = {
 export type ExerciseLimits = { timeMs: number; memoryBytes: number; stackBytes: number; outputChars: number };
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const PYTHON_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PYTHON_KEYWORDS = new Set(
+  "False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield".split(" "),
+);
 
 const hidden = z
   .boolean()
@@ -52,7 +59,7 @@ export const ExerciseStdioCaseInput = z
     stdin: z
       .string()
       .max(MAX_CASE_INPUT_CHARS)
-      .describe('The text the program reads, through the global `stdin` string or `readLine()`. Use "" for none.'),
+      .describe('The text the program reads: in JavaScript the global `stdin` string or `readLine()`, in Python input() or sys.stdin. Use "" for none.'),
     hidden,
   })
   .strict();
@@ -105,7 +112,10 @@ const exerciseFields = {
     .describe("The function call cases call, declared at the top level of the learner's code. Required when there are call cases."),
 };
 
-function checkCases(spec: { functionName?: string; cases: ExerciseCaseInput[] }, ctx: z.RefinementCtx) {
+function checkCases(spec: { language: ExerciseLanguage; functionName?: string; cases: ExerciseCaseInput[] }, ctx: z.RefinementCtx) {
+  if (spec.language === "python" && spec.functionName !== undefined && (!PYTHON_IDENTIFIER.test(spec.functionName) || PYTHON_KEYWORDS.has(spec.functionName))) {
+    ctx.addIssue({ code: "custom", path: ["functionName"], message: "functionName must be a Python identifier" });
+  }
   if (spec.cases.every((c) => c.hidden)) ctx.addIssue({ code: "custom", path: ["cases"], message: "at least one case must be visible" });
   const calls = spec.cases.some((c) => c.kind === "call");
   if (calls && !spec.functionName) ctx.addIssue({ code: "custom", path: ["functionName"], message: "functionName is required for call cases" });
@@ -130,7 +140,7 @@ export const CodeExerciseInput = z
       .string()
       .min(1)
       .max(MAX_EXERCISE_CODE_CHARS)
-      .describe("A complete correct solution. Mivra runs it on every case to get the expected results; it is never shown to the learner. It must be deterministic (no Math.random or Date)."),
+      .describe("A complete correct solution. Mivra runs it on every case to get the expected results; it is never shown to the learner. It must be deterministic (no random numbers or clock time)."),
   })
   .strict()
   .superRefine(checkCases);
@@ -188,7 +198,7 @@ export function toCodeExercisePublic(spec: CodeExerciseSpec): CodeExercisePublic
   };
 }
 
-/** What running one case produced. `returned` is the return value's JSON (or "undefined"), for call cases only. */
+/** What running one case produced. `returned` is the return value's JSON (or "undefined" in JavaScript), for call cases only. */
 export const ExerciseCaseRun = z
   .object({
     stdout: z.string().max(MAX_CASE_OUTPUT_CHARS),

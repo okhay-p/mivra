@@ -1,5 +1,5 @@
 // Builds the publishable `@okhay-p/mivra` package (ADR-013): the CLI with the server bundled in, the extraction and
-// exercise children, the migrations and the built web UI. Run `pnpm build` at the repo root first so web/dist exists.
+// exercise children (QuickJS and Python), the migrations and the built web UI. Run `pnpm build` at the repo root first so web/dist exists.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -29,6 +29,7 @@ await build({
     cli: here("./src/cli.ts"),
     "extract-child": here("../server/src/documents/extract-child.ts"),
     "exercise-child": here("../server/src/exercises/exercise-child.ts"),
+    "python-child": here("../server/src/exercises/python-child.ts"),
   },
   outdir: here("./dist"),
   bundle: true,

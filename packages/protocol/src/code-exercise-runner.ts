@@ -73,8 +73,8 @@ class Capped {
   }
 }
 
-const OUTPUT_EXCEEDED = (chars: number) => `Output limit exceeded (${chars.toLocaleString("en-US")} characters).`;
-const STACK_EXCEEDED = "Stack limit exceeded: the code recursed too deeply.";
+export const OUTPUT_EXCEEDED = (chars: number) => `Output limit exceeded (${chars.toLocaleString("en-US")} characters).`;
+export const STACK_EXCEEDED = "Stack limit exceeded: the code recursed too deeply.";
 const formatBytes = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
 
 /** Runs one case and reports what it printed, returned or threw. Never throws for anything the guest does. */

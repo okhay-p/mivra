@@ -24,6 +24,7 @@ export * from "./math-text.js";
 export * from "./algorithm-trace.js";
 export * from "./code-exercise.js";
 export * from "./code-exercise-runner.js";
+export * from "./code-exercise-python.js";
 export * from "./code-walkthrough.js";
 export * from "./composition.js";
 export * from "./course.js";
@@ -53,7 +54,7 @@ export const artifactKinds = {
     version: 1,
     toolName: "ask_code_exercise",
     description:
-      "Give the learner a short JavaScript coding exercise to solve in an editor in the UI, after teaching an idea they can now practise by writing code. They run the visible cases as often as they like, then submit once; their result is reported back to you on the next turn, so don't reveal or hint at a solution in your reply. Keep it to one small function or program (a few to about 30 lines), with 3-8 fast cases. Two kinds of case: a call case calls `functionName` with JSON arguments and compares its return value as JSON (key order ignored), and a stdio case runs the whole program with `stdin` and compares what it prints with console.log (trailing whitespace and trailing blank lines ignored). Prefer call cases; use stdio for programs that read input and print. The code runs in plain JavaScript with no DOM, network, modules, timers or Node APIs: only console, the global `stdin` string and `readLine()` (the next input line, or null). Write a correct, deterministic referenceSolution: Mivra runs it on every case to get the expected results, rejecting the exercise if it fails, and never shows it. Hide a case or two that check edge cases. The starter code should give the function's signature (or the program's outline) and no solution.",
+      "Give the learner a short JavaScript or Python coding exercise to solve in an editor in the UI, after teaching an idea they can now practise by writing code. Use the language they are learning. They run the visible cases as often as they like, then submit once; their result is reported back to you on the next turn, so don't reveal or hint at a solution in your reply. Keep it to one small function or program (a few to about 30 lines), with 3-8 fast cases. Two kinds of case: a call case calls `functionName` (defined at the top level) with JSON arguments and compares its return value as JSON (key order ignored; in Python, None is null and tuples are lists), and a stdio case runs the whole program with the case's stdin and compares what it prints (trailing whitespace and trailing blank lines ignored). Prefer call cases; use stdio for programs that read input and print. JavaScript runs as plain JavaScript with no DOM, network, modules, timers or Node APIs: only console, the global `stdin` string and `readLine()` (the next input line, or null). Python runs in Pyodide with the standard library only: no network, files, threads, subprocesses or packages to install; read input with input() or sys.stdin and print with print(). Write a correct, deterministic referenceSolution in the same language: Mivra runs it on every case to get the expected results, rejecting the exercise if it fails, and never shows it. Hide a case or two that check edge cases. The starter code should give the function's signature (or the program's outline) and no solution.",
     spec: CodeExerciseSpec,
     input: artifactMathInput(CodeExerciseInput, ["title"]),
   },

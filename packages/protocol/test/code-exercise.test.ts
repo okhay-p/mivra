@@ -59,7 +59,7 @@ describe("code_exercise schema", () => {
     expect(issues({ ...sumExercise, cases: [{ kind: "call", args: "{\"a\":1}" }] })).toContain("args must be a JSON array");
     expect(issues({ ...sumExercise, cases: [{ kind: "call", args: "not json" }] })).toContain("args must be a JSON array");
     expect(issues({ ...sumExercise, functionName: "sum(); fetch" })).not.toHaveLength(0);
-    expect(issues({ ...sumExercise, language: "python" })).not.toHaveLength(0);
+    expect(issues({ ...sumExercise, language: "ruby" })).not.toHaveLength(0);
     expect(issues({ ...sumExercise, cases: Array.from({ length: 21 }, () => ({ kind: "call", args: "[]" })) })).not.toHaveLength(0);
   });
 
