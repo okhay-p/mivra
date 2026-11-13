@@ -11,6 +11,7 @@ export type Command =
   | { name: "auth-login"; newAccount: boolean; open: boolean }
   | { name: "auth-logout" }
   | { name: "import-obsidian"; folder: string; importName?: string }
+  | { name: "uninstall"; deleteData: boolean | undefined }
   | { name: "help" }
   | { name: "version" };
 
@@ -33,6 +34,9 @@ Commands:
   auth logout chatgpt      Sign out of ChatGPT
   import obsidian <folder> Import an Obsidian vault's notes into a running Mivra; run it again to re-import
     --name <name>          Name the import (default: the folder's name)
+  uninstall                Stop Mivra and ask whether to delete its data, before you remove the package
+    --delete-data          Delete the data without asking
+    --keep-data            Keep the data without asking
 
 Providers: ${providerIds.join(", ")}
 Data lives in ~/.mivra, or MIVRA_DATA_DIR.`;
@@ -60,6 +64,8 @@ export function parseCommand(argv: string[]): Command {
         open: { type: "boolean", default: true },
         check: { type: "boolean", default: true },
         "new-account": { type: "boolean", default: false },
+        "delete-data": { type: "boolean", default: false },
+        "keep-data": { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
         version: { type: "boolean", short: "v", default: false },
       },
@@ -113,6 +119,10 @@ export function parseCommand(argv: string[]): Command {
       if (!arg) throw new UsageError("Give the vault's folder: `mivra import obsidian <folder>`.");
       tooMany(3);
       return { name: "import-obsidian", folder: arg, ...(values.name === undefined ? {} : { importName: values.name }) };
+    case "uninstall":
+      tooMany(1);
+      if (values["delete-data"] && values["keep-data"]) throw new UsageError("Use --delete-data or --keep-data, not both.");
+      return { name: "uninstall", deleteData: values["delete-data"] ? true : values["keep-data"] ? false : undefined };
     case "help":
       return { name: "help" };
     default:

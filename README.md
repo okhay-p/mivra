@@ -33,6 +33,7 @@ Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first tim
 | `mivra auth set <provider>` | Save an API key for `openrouter`, `anthropic` or `openai`. It asks for the key without showing it |
 | `mivra auth status` / `mivra auth remove <provider>` | See where each key comes from, or remove a saved one |
 | `mivra auth login chatgpt` / `mivra auth logout chatgpt` | Sign in with ChatGPT to use your plan, or sign out |
+| `mivra uninstall` | Stop Mivra and ask whether to delete your data. Run it before `npm uninstall -g @okhay-p/mivra`; `--delete-data` or `--keep-data` answers ahead |
 | `mivra import obsidian <folder>` | Import an Obsidian vault's notes into a running Mivra. Run it again after you've changed the vault to update it. `--name` names the import |
 
 You can also import a vault from the app: open **Imported notes** in the sidebar, choose the vault's folder, and re-import or delete it there later. On a phone or tablet that can't choose folders, upload a `.zip` of the vault instead.

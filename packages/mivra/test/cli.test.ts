@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -80,6 +80,42 @@ describe.concurrent("mivra", () => {
     const bad = await run(dir, ["auth", "set", "openai", "--no-check"], { input: "not a key\n" });
     expect(bad.code).toBe(1);
     expect(existsSync(join(dir, "credentials.json"))).toBe(false);
+  });
+
+  it("uninstalls: deletes only Mivra's data, and only when told to", async ({ expect }) => {
+    const dir = dataDir();
+    const seed = () => {
+      mkdirSync(join(dir, "backups"), { recursive: true });
+      for (const name of ["mivra.db", "mivra.db-wal", "auth-token", "credentials.json", "mivra.log", "backups/old.db"]) writeFileSync(join(dir, name), "x");
+    };
+    seed();
+    writeFileSync(join(dir, "thesis.md"), "mine");
+
+    // No answer, "n" and --keep-data all keep everything.
+    for (const [args, input] of [[["uninstall"], undefined], [["uninstall"], "n\n"], [["uninstall", "--keep-data"], "y\n"]] as const) {
+      const kept = await run(dir, [...args], { input });
+      expect(kept.code, kept.stderr).toBe(0);
+      expect(kept.stdout).toContain("Kept your data");
+      expect(kept.stdout).toContain("npm uninstall -g @okhay-p/mivra");
+      expect(existsSync(join(dir, "mivra.db"))).toBe(true);
+    }
+
+    const yes = await run(dir, ["uninstall"], { input: "y\n" });
+    expect(yes.code, yes.stderr).toBe(0);
+    expect(yes.stderr).toContain("can't be undone");
+    expect(yes.stdout).toContain("still holds files Mivra didn't create");
+    expect(readdirSync(dir)).toEqual(["thesis.md"]);
+
+    // With nothing else in it, the folder goes too; and with nothing to delete, nothing is asked.
+    rmSync(join(dir, "thesis.md"));
+    seed();
+    const flag = await run(dir, ["uninstall", "--delete-data"]);
+    expect(flag.stdout, flag.stderr).toContain(`Deleted ${dir}.`);
+    expect(existsSync(dir)).toBe(false);
+    const empty = await run(dir, ["uninstall"]);
+    expect(empty.stdout).toContain("No Mivra data");
+    expect(empty.stderr).toBe("");
+    expect(existsSync(dir)).toBe(false);
   });
 
   it("runs in the background, refuses a second copy, serves uploads, and stops", async ({ expect, onTestFinished }) => {
