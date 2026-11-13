@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { CommandError, fillPlaceholders, runProgram, splitCommand } from "../src/run-command.js";
+import { CommandError, fillPlaceholders, runProgram, splitCommand, windowsKillScript } from "../src/run-command.js";
 
 const dir = mkdtempSync(join(tmpdir(), "mivra-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -66,6 +66,28 @@ describe("running the learner's program", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
     const grandchild = Number(readFileSync(pidFile, "utf8"));
     if (process.platform !== "win32") expect(() => process.kill(grandchild, 0)).toThrow();
+  });
+
+  it("stops what a program left running after it exited", async () => {
+    const pidFile = join(dir, "orphan.pid");
+    const launcher = script(
+      "launcher.mjs",
+      `import { spawn } from "node:child_process"; import { writeFileSync } from "node:fs";
+       const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+       writeFileSync(${JSON.stringify(pidFile)}, String(child.pid)); process.exit(0);`,
+    );
+    const run = await runProgram([node, launcher], { cwd: dir, stdin: "", limits });
+    expect(run.exitCode).toBe(0);
+    const orphan = Number(readFileSync(pidFile, "utf8"));
+    await expect.poll(() => { try { process.kill(orphan, 0); return true; } catch { return false; } }, { timeout: 5_000 }).toBe(false);
+  });
+
+  it("finds a Windows program's descendants by parent pid and start time, not through a live parent", () => {
+    const script = windowsKillScript(4242, new Date("2026-11-13T10:00:00.000Z"));
+    expect(script).toContain("[datetime]::Parse('2026-11-13T10:00:00.000Z')");
+    expect(script).toContain("$c.ParentProcessId -eq $p");
+    expect(script).toContain("CreationDate.ToUniversalTime() -ge $since");
+    expect(script).toContain("Stop-Process -Id $i -Force");
   });
 
   it("stops a program that prints too much", async () => {

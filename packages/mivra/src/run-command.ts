@@ -83,11 +83,29 @@ const DRAIN_MS = 500;
 /** How long to wait for a killed program's pipes to close. */
 const KILL_WAIT_MS = 2_000;
 
+/**
+ * A PowerShell script that stops a process and every descendant started since `since`. Windows has no process groups,
+ * and `taskkill /T` only finds children through a live parent, but each process keeps its parent's pid after the parent
+ * exits. The start-time filter skips processes that reused one of those pids from before the run.
+ */
+export function windowsKillScript(pid: number, since: Date): string {
+  return [
+    `$since = [datetime]::Parse('${since.toISOString()}').ToUniversalTime().AddSeconds(-1)`,
+    "$all = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -and $_.CreationDate.ToUniversalTime() -ge $since })",
+    `$ids = @(${pid})`,
+    "$queue = [System.Collections.Generic.Queue[int]]::new(); $queue.Enqueue(" + pid + ")",
+    "while ($queue.Count -gt 0) { $p = $queue.Dequeue(); foreach ($c in $all) { if ($c.ParentProcessId -eq $p -and $ids -notcontains $c.ProcessId) { $ids += $c.ProcessId; $queue.Enqueue($c.ProcessId) } } }",
+    "foreach ($i in $ids) { if ($i -eq " + pid + " -or ($all | Where-Object ProcessId -eq $i)) { Stop-Process -Id $i -Force -ErrorAction SilentlyContinue } }",
+  ].join("; ");
+}
+
 /** Stops the program and everything it started: its process group on macOS and Linux, its process tree on Windows. */
-function killTree(child: ChildProcess) {
+function killTree(child: ChildProcess, startedAt: Date) {
   if (child.pid === undefined) return;
   if (process.platform === "win32") {
-    spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    // Even when the program has exited, so workers it left behind go too.
+    const ps = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", windowsKillScript(child.pid, startedAt)], { stdio: "ignore", windowsHide: true, timeout: 15_000 });
+    if (ps.error || ps.status !== 0) spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
     return;
   }
   try {
@@ -98,8 +116,8 @@ function killTree(child: ChildProcess) {
 }
 
 /** The running program, so Ctrl+C can stop it too. */
-let active: ChildProcess | undefined;
-export const stopCurrent = () => active && killTree(active);
+let active: { child: ChildProcess; startedAt: Date } | undefined;
+export const stopCurrent = () => active && killTree(active.child, active.startedAt);
 
 /**
  * Runs one program with the given arguments, in `cwd`, writing `stdin` to it. Starts it without a shell (cross-spawn
@@ -110,13 +128,14 @@ export function runProgram(args: readonly string[], { cwd, stdin, limits, env = 
   return new Promise((resolve) => {
     const [file, ...rest] = args;
     let child: ChildProcess;
+    const startedAt = new Date();
     try {
       const spawn = process.platform === "win32" ? crossSpawn : nodeSpawn;
       child = spawn(file!, rest, { cwd, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32" });
     } catch (error) {
       return resolve({ stdout: "", stderr: "", exitCode: null, error: "start_failed", startError: (error as Error).message });
     }
-    active = child;
+    active = { child, startedAt };
     const stdout: Buffer[] = [];
     let stderr = "";
     let bytes = 0;
@@ -129,9 +148,9 @@ export function runProgram(args: readonly string[], { cwd, stdin, limits, env = 
       if (settled) return;
       settled = true;
       for (const timer of timers) clearTimeout(timer);
-      if (active === child) active = undefined;
-      // Anything it left running, or still holding its pipes, goes too. Windows finds a tree by its live parent only.
-      if (process.platform !== "win32" || (child.exitCode === null && child.signalCode === null)) killTree(child);
+      if (active?.child === child) active = undefined;
+      // Anything it left running, or still holding its pipes, goes too, even once the program itself has exited.
+      killTree(child, startedAt);
       child.stdout?.destroy();
       child.stderr?.destroy();
       resolve({ stdout: Buffer.concat(stdout).toString("utf8"), stderr: stderr.slice(-STDERR_KEEP_CHARS), exitCode: error ? null : exitCode, ...(error ? { error } : {}), ...(startError ? { startError } : {}) });
@@ -139,7 +158,7 @@ export function runProgram(args: readonly string[], { cwd, stdin, limits, env = 
     const stop = (reason: NonNullable<ProgramRun["error"]>) => {
       if (error || settled) return;
       error = reason;
-      killTree(child);
+      killTree(child, startedAt);
       timers.push(setTimeout(finish, KILL_WAIT_MS));
     };
     const count = (chunk: Buffer) => {
