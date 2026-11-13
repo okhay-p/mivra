@@ -85,7 +85,7 @@ const OUTCOME_TEXT: Record<MilestoneView["spec"]["disputes"][number]["outcome"],
  * A learner's dispute: what's wrong, sent to the tutor, who looks again. Waits for the tutor's decision, which can
  * take a minute, then shows the milestone as it now is.
  */
-function DisputeForm({ artifactId, target, label, onDone, onCancel }: { artifactId: string; target: { target: "case"; caseIndex: number } | { target: "review" }; label: string; onDone: (view: ArtifactView) => void; onCancel: () => void }) {
+function DisputeForm({ artifactId, target, label, onDone, onCancel }: { artifactId: string; target: { target: "case"; caseIndex: number } | { target: "review" }; label: string; onDone: () => Promise<void>; onCancel: () => void }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -95,7 +95,7 @@ function DisputeForm({ artifactId, target, label, onDone, onCancel }: { artifact
     setError(undefined);
     const result = await disputeMilestone(artifactId, { ...target, reason: reason.trim() } as MilestoneDisputeRequest);
     setBusy(false);
-    if (result.ok) onDone(result.view);
+    if (result.ok) await onDone();
     else setError(result.error);
   };
   return (
@@ -169,7 +169,7 @@ function ReviewVerdict({ review, createdAt }: { review: MilestoneReview; created
  * own repository and checks it there with `mivra check`; each check replaces the result shown here. Passing needs every
  * case and the code review's approval; the learner can dispute a case or a verdict.
  */
-export function ProjectMilestone({ view, onUpdate }: ArtifactProps<"project_milestone">) {
+export function ProjectMilestone({ view, onRefresh }: ArtifactProps<"project_milestone">) {
   const { spec, latestAttempt, latestReview } = view;
   const courseId = useContext(MilestoneCourseContext);
   const titleId = useId();
@@ -181,9 +181,10 @@ export function ProjectMilestone({ view, onUpdate }: ArtifactProps<"project_mile
   // Each case's latest result, by its place in the cases: withdrawn ones don't run, so results skip them.
   const byCase = new Map((grade?.cases ?? []).map((c, i) => [c.case ?? i, { passed: c.passed, result: results?.[i] }]));
   const sent = latestAttempt?.answer.files ?? [];
-  const disputed = (done: ArtifactView) => {
+  // Reloaded rather than kept as a local copy: later checks keep arriving from the server, and must replace it.
+  const disputed = async () => {
     setDisputing(undefined);
-    onUpdate(done);
+    await onRefresh();
   };
 
   return (

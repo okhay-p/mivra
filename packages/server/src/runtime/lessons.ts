@@ -158,13 +158,18 @@ export function lessonResults(lesson: LessonRow, { store, lessons, registry }: P
 export const lessonRevision = (view: LessonView) =>
   [view.status, view.version, view.outline ? 1 : 0, view.sections.length, view.checks.answered, view.syllabusVersion, repeatedChecks(view)].join(":");
 
-/** Changes with each new result of a repeatable check (a milestone's `mivra check`), which replaces the last one. */
+/**
+ * Changes with each new result of a repeatable check (a milestone's `mivra check`), which replaces the last one, with
+ * its review, which arrives after it, and with each dispute, which may change the cases (ADR-016).
+ */
 function repeatedChecks(view: LessonView): string {
   let hash = 0;
   for (const section of view.sections) {
-    const artifact = section.kind === "artifact" ? (section.artifact as { kind?: string; latestAttempt?: { createdAt?: string } }) : undefined;
-    if (artifact?.kind !== "project_milestone" || !artifact.latestAttempt?.createdAt) continue;
-    for (const char of artifact.latestAttempt.createdAt) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
+    type Milestone = { kind?: string; latestAttempt?: { createdAt?: string }; latestReview?: { createdAt?: string }; spec?: { cases?: unknown[]; disputes?: unknown[] } };
+    const artifact = section.kind === "artifact" ? (section.artifact as Milestone) : undefined;
+    if (artifact?.kind !== "project_milestone") continue;
+    const state = [artifact.latestAttempt?.createdAt ?? "", artifact.latestReview?.createdAt ?? "", artifact.spec?.disputes?.length ?? 0, JSON.stringify(artifact.spec?.cases ?? [])].join("|");
+    for (const char of state) hash = (Math.imul(hash, 31) + char.charCodeAt(0)) | 0;
   }
   return (hash >>> 0).toString(36);
 }
