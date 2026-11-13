@@ -13,4 +13,4 @@ date: 29 October 2026
 
 **Consequences:** The server runs on Node, Bun or inside Electron unchanged. Mivra's plugin system is its own layer rather than a framework feature (ideas such as plugin isolation and lifecycle hooks can be borrowed from Fastify). If the API grows large, split it into sub-apps to keep the typed client's type checking fast.
 
-**Still open:** supporting libraries — proposals on [Foundation — Tech Stack & Deployment](https://app.notion.com/p/408fb102b9b6811b9f1ffc20fb46c928) (Notion).
+**Still open:** supporting-library choices.

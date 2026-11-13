@@ -5,12 +5,14 @@
 Decisions live in `docs/adr/`. When a task touches architecture, the stack or an open question, read `docs/adr/README.md` (the index and what's still open), then only the ADRs that touch the task.
 
 - Treat accepted ADRs as requirements. Treat anything marked proposed as a suggestion, not a requirement.
-- Don't mark a decision as accepted, change a major decision, or delete Notion pages unless a human approves it.
+- Only a human may mark a decision as accepted or change a major decision.
 
-Longer design docs and the backlog live in Notion (reach it through the Notion MCP server). Open a design page only when an ADR links to it or the task needs its detail.
+- Project issues and backlog live in GitHub Issues for `okhay-p/mivra`, managed with `gh` (see `docs/agents/issue-tracker.md`).
+- Keep long-lived project documentation in this repository. Open a design doc only when an ADR links to it or the task needs its detail.
 
-- Backlog items live in the [Mivra Work Board](https://app.notion.com/p/16b9fc4073d548139a091ac0691b7e57) database (`collection://66d64521-6e9e-4c15-8a10-713fd2c2b02a`). When you finish a task, update its item with what changed, how it was tested, and the PR link.
-- Code, tests, ADRs and executable config belong in this repo, not in Notion.
+## Implementation branches
+
+For implementation work, create a new branch in a separate Git worktree based on the current default branch. Keep each task's changes isolated in that worktree. After the branch is merged, remove its worktree and local branch.
 
 ## Development
 

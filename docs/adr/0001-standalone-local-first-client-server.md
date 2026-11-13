@@ -12,5 +12,3 @@ date: 29 October 2026
 **Consequences:** Plugins and agent execution live server-side, independent of any client. Offline multi-device sync, managed hosting and billing are out of MVP scope (wishlist only).
 
 **Still open within this decision:** packaging and process model (spawned vs embedded server), HTTP + streaming protocol and API contracts, auth and network exposure controls, plugin lifecycle, local packaging/update experience.
-
-**Detail:** [Architecture Direction — Standalone & Remote Clients](https://app.notion.com/p/408fb102b9b681cdb18bccd5a697408f) (Notion)
