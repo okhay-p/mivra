@@ -9,7 +9,7 @@ import { createApp } from "../server/src/app.js";
 import { createOAuthClient } from "../server/src/chatgpt/oauth.js";
 import { createChatGptSession, memoryChatGptStore } from "../server/src/chatgpt/session.js";
 import { memoryCredentials } from "../server/src/credentials.js";
-import { aliasingComposition, eventLoopComposition, pipelineComposition, richComposition } from "../protocol/test/composition-fixtures.js";
+import { aliasingComposition, eventLoopComposition, pipelineComposition, richComposition, twoStackQueueComposition } from "../protocol/test/composition-fixtures.js";
 import { fakeAuth } from "../server/test/support/fake-chatgpt-auth.js";
 import { createFakeCompatible } from "../server/test/support/fake-compatible.js";
 import { staticCatalog } from "../server/src/models/catalog.js";
@@ -549,6 +549,7 @@ const SCRIPTS: Record<string, Step[]> = {
   compositionpipeline: [{ tool: "show_composition", input: pipelineComposition }, { text: "Follow the stages." }],
   compositionloop: [{ tool: "show_composition", input: eventLoopComposition }, { text: "Watch the queue." }],
   compositionrich: [{ tool: "show_composition", input: richComposition }, { text: "Look at the full cards." }],
+  compositionqueue: [{ tool: "show_composition", input: twoStackQueueComposition }, { text: "Move the jobs across." }],
   compositiontwo: [
     { tool: "show_composition", input: aliasingComposition },
     { tool: "show_composition", input: eventLoopComposition },
