@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -65,7 +65,7 @@ const freePort = () =>
 /** A stand-in Mivra that answers as the real one does, with whatever milestone a test gives it, and records each check. */
 async function fakeMivra(milestone: unknown) {
   const dataDir = tempDir("mivra-fake-");
-  const checks: { results: { stdout: string; exitCode: number | null; error?: string }[] }[] = [];
+  const checks: { results: { stdout: string; exitCode: number | null; error?: string }[]; files?: { path: string; content: string }[]; skipped?: { path: string; reason: string }[]; revision?: string }[] = [];
   const read = (req: IncomingMessage) => new Promise<string>((resolve) => {
     let body = "";
     req.setEncoding("utf8").on("data", (c: string) => (body += c)).on("end", () => resolve(body));
@@ -80,7 +80,12 @@ async function fakeMivra(milestone: unknown) {
       checks.push(body);
       const cases = body.results.map((r) => ({ passed: r.exitCode === 0 && !r.error }));
       const passed = cases.filter((c) => c.passed).length;
-      return send(res, 201, { grade: { correct: passed === cases.length, passed, total: cases.length, cases }, expected: body.results.map(() => "") });
+      const correct = passed === cases.length;
+      const criterion = { passed: true, note: "Fine." };
+      const review = correct
+        ? { status: "done", review: { noHardCodedOutputs: criterion, concept: criterion, quality: criterion, summary: "Good.", suggestions: [], approved: true, judgedBy: "model", model: "fake:model" } }
+        : { status: "skipped", reason: "tests_failed" };
+      return send(res, 201, { grade: { correct, passed, total: cases.length, cases }, expected: body.results.map(() => ""), review, passed: correct });
     }
     send(res, 404, { error: "Not found" });
   });
@@ -105,6 +110,8 @@ describe.concurrent("mivra check", () => {
       position: 1,
       title: "$(touch PWNED)",
       checkType: "tests",
+      revision: "0123456789abcdef",
+      since: null,
       cases: hostile.map((input, i) => ({ name: `{input} ; touch PWNED ${i}`, input, compare: "stdout" })),
     });
     onTestFinished(fake.close);
@@ -145,6 +152,8 @@ describe.concurrent("mivra check", () => {
       position: 1,
       title: "t",
       checkType: "tests",
+      revision: "0123456789abcdef",
+      since: null,
       run: "touch PWNED",
       cases: [{ name: "n", input: "", compare: "stdout", command: "touch PWNED" }],
     });
@@ -167,13 +176,15 @@ describe.concurrent("mivra check", () => {
       position: 2,
       title: "Limits",
       checkType: "tests",
+      revision: "0123456789abcdef",
+      since: null,
       cases: ["hang", "flood", "fine"].map((input) => ({ name: input, input, compare: "stdout" })),
     });
     onTestFinished(fake.close);
     const repo = tempDir("mivra-repo-");
     writeFileSync(
       join(repo, "prog.mjs"),
-      `import { spawn } from "node:child_process"; import { readFileSync, writeFileSync } from "node:fs";
+      `import { execFileSync, spawn } from "node:child_process"; import { readFileSync, writeFileSync } from "node:fs";
        const input = readFileSync(process.argv[2], "utf8");
        if (input === "hang") {
          const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });
@@ -194,6 +205,89 @@ describe.concurrent("mivra check", () => {
     expect(fake.checks[0]!.results.map((r) => r.error ?? r.stdout)).toEqual(["timeout", "output_limit", "fine"]);
     const grandchild = Number(readFileSync(join(repo, "grandchild.pid"), "utf8"));
     if (process.platform !== "win32") await expect.poll(() => running(grandchild), { timeout: 5_000 }).toBe(false);
+  });
+
+  it("sends only the changed files git doesn't ignore, never a secret, and --dry-run sends nothing", async ({ expect, onTestFinished }) => {
+    const milestone = {
+      courseId: "course-1",
+      lessonId: "lesson-1",
+      artifactId: "artifact-1",
+      position: 2,
+      title: "Files",
+      checkType: "tests",
+      revision: "0123456789abcdef",
+      since: null as string | null,
+      cases: [{ name: "one", input: "1", compare: "stdout" }],
+    };
+    const fake = await fakeMivra(milestone);
+    onTestFinished(fake.close);
+    const repo = tempDir("mivra-repo-");
+    const outside = tempDir("mivra-outside-");
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=Learner", "-c", "user.email=learner@example.com", "-c", "commit.gpgsign=false", ...args], { cwd: repo, env: { PATH: process.env.PATH, HOME: outside } });
+    git("init", "-q");
+    const secret = "SECRET-VALUE-do-not-send";
+    const files: Record<string, string> = {
+      "main.mjs": 'console.log("1");\n',
+      ".gitignore": "build/\n",
+      "build/out.txt": "generated",
+      ".env": `API_KEY=${secret}`,
+      ".env.local": `API_KEY=${secret}`,
+      "config/.env.production": `API_KEY=${secret}`,
+      id_rsa: `-----BEGIN OPENSSH PRIVATE KEY-----\n${secret}\n-----END OPENSSH PRIVATE KEY-----\n`,
+      "keys/server.pem": secret,
+      "keys/tls.key": secret,
+      "credentials.json": `{"token":"${secret}"}`,
+      ".npmrc": `//registry.npmjs.org/:_authToken=${secret}`,
+      // A key pasted into an ordinary file is caught by what it holds.
+      "notes.txt": `my key:\n-----BEGIN RSA PRIVATE KEY-----\n${secret}\n-----END RSA PRIVATE KEY-----\n`,
+      "package-lock.json": "{}",
+    };
+    for (const [path, content] of Object.entries(files)) {
+      mkdirSync(join(repo, path, ".."), { recursive: true });
+      writeFileSync(join(repo, path), content);
+    }
+    writeFileSync(join(outside, "private.txt"), secret);
+    if (process.platform !== "win32") symlinkSync(join(outside, "private.txt"), join(repo, "linked.txt"));
+    linkFile(repo, { course: "course-1", run: `"${node}" main.mjs` });
+
+    const dry = await run(fake.dataDir, repo, ["check", "--dry-run"]);
+    expect(dry.code, dry.stderr).toBe(0);
+    expect(fake.checks).toHaveLength(0);
+    expect(dry.stdout).toContain("Nothing was run or sent.");
+    const sentList = dry.stdout.slice(dry.stdout.indexOf("would be sent"), dry.stdout.indexOf("Not sent:"));
+    expect(sentList).toContain(".gitignore");
+    expect(sentList).toContain("main.mjs");
+    expect(sentList).toContain(".mivra.json");
+    for (const hidden of [".env", "id_rsa", "server.pem", "tls.key", "credentials.json", ".npmrc", "notes.txt", "build/out.txt", "linked.txt", "package-lock.json"]) expect(sentList).not.toContain(hidden);
+    expect(dry.stdout).toMatch(/\n  \.env {2}\(looks like it holds a secret/);
+    expect(dry.stdout).toMatch(/notes\.txt {2}\(looks like it holds a secret/);
+    expect(dry.stdout).not.toContain("build/out.txt");
+
+    const checked = await run(fake.dataDir, repo, ["check"]);
+    expect(checked.code, checked.stderr).toBe(0);
+    expect(fake.checks).toHaveLength(1);
+    const sent = fake.checks[0]!;
+    expect(sent.revision).toBe("0123456789abcdef");
+    expect(sent.files!.map((f) => f.path).sort()).toEqual([".gitignore", ".mivra.json", "main.mjs"]);
+    // Neither a secret's text nor its name reaches the server; only harmless reasons are named.
+    expect(JSON.stringify(sent)).not.toContain(secret);
+    expect(JSON.stringify(sent)).not.toMatch(/\.env|id_rsa|server\.pem|tls\.key|credentials|npmrc|notes\.txt|linked/);
+    expect(sent.skipped).toEqual([{ path: "package-lock.json", reason: "lockfile" }]);
+
+    // After a passed milestone checked at a commit, only what changed since is sent.
+    git("add", "main.mjs", ".gitignore", ".mivra.json");
+    git("commit", "-q", "-m", "first");
+    milestone.since = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    writeFileSync(join(repo, "main.mjs"), 'console.log(String(1));\n');
+    writeFileSync(join(repo, "lib.mjs"), "export const one = 1;\n");
+    rmSync(join(repo, ".gitignore"));
+    writeFileSync(join(repo, ".git", "info", "exclude"), "build/\n");
+    const again = await run(fake.dataDir, repo, ["check"]);
+    expect(again.code, again.stderr).toBe(0);
+    const second = fake.checks[1]! as (typeof fake.checks)[number] & { deleted?: string[] };
+    expect(second.files!.map((f) => f.path).sort()).toEqual(["lib.mjs", "main.mjs"]);
+    expect(second.deleted).toEqual([".gitignore"]);
+    expect(JSON.stringify(second)).not.toContain(secret);
   });
 
   it("explains what's missing before it runs anything", async ({ expect }) => {
@@ -305,7 +399,9 @@ describe("a project course end to end", () => {
     expect(first.stdout).toMatch(/FAIL {2}two numbers\n\s+expected:\n\s+3\n\s+got:\n\s+1/);
     expect(first.stdout).toMatch(/pass {2}none/);
     expect(first.stdout).toContain("--run-output");
-    expect(first.stdout).toContain("1 of 3 cases passed. Recorded in Mivra.");
+    expect(first.stdout).toContain("1 of 3 cases passed.");
+    expect(first.stdout).toContain("Review: not yet, since the tests must pass first.");
+    expect(first.stdout).toContain("Not passed yet. Recorded in Mivra.");
 
     const headers = { authorization: `Bearer ${token}` };
     const lesson = async () =>
@@ -321,8 +417,11 @@ describe("a project course end to end", () => {
     const relinked = await run(dataDir, repo, ["link", courseId, "--run", `"${node}" calc.mjs {input}`, "--run-output", `"${node}" run-output.mjs {output}`]);
     expect(relinked.code, relinked.stderr).toBe(0);
     const fixed = await run(dataDir, repo, ["check"]);
-    expect(fixed.stdout).toContain("All 3 cases passed. Recorded in Mivra.");
-    expect(fixed.code, fixed.stderr).toBe(0);
+    expect(fixed.stdout).toContain("All 3 cases passed.");
+    // Passing needs the review too, and outside a git repository there's nothing to send it.
+    expect(fixed.stdout).toContain("isn't in a git repository");
+    expect(fixed.stdout).toContain("Not passed yet. Recorded in Mivra.");
+    expect(fixed.code, fixed.stderr).toBe(1);
     expect((await lesson()).sections[1]!.artifact!.latestAttempt!.grade).toMatchObject({ passed: 3, correct: true });
 
     // Finished, the milestone is frozen, and the next one hasn't started.
