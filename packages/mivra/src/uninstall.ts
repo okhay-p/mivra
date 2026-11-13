@@ -11,7 +11,22 @@ const PACKAGE = "@okhay-p/mivra";
  * Everything Mivra writes into its data folder. Only these are deleted, never the folder wholesale:
  * MIVRA_DATA_DIR can point at a folder that holds other things.
  */
-const DATA_ENTRIES = ["mivra.db", "mivra.db-wal", "mivra.db-shm", "mivra.db-journal", "backups", CREDENTIALS_FILE, CHATGPT_FILE, TOKEN_FILE, STATE_FILE, LOG_FILE];
+const DATA_FILES = ["mivra.db", "mivra.db-wal", "mivra.db-shm", "mivra.db-journal", CREDENTIALS_FILE, CHATGPT_FILE, TOKEN_FILE, STATE_FILE, LOG_FILE];
+
+const BACKUPS_DIR = "backups";
+/** The names Mivra gives its own backups (see `backupBeforeMigrating`). A copy the learner put there has another name and stays. */
+const GENERATED_BACKUP = /^mivra-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.db$/;
+
+/** Mivra's own files in the data folder, as paths relative to it. */
+function mivraFiles(dataDir: string): string[] {
+  const files = DATA_FILES.filter((name) => existsSync(join(dataDir, name)));
+  try {
+    for (const name of readdirSync(join(dataDir, BACKUPS_DIR))) if (GENERATED_BACKUP.test(name)) files.push(join(BACKUPS_DIR, name));
+  } catch {
+    // No backups folder.
+  }
+  return files;
+}
 
 export interface UninstallOptions {
   dataDir: string;
@@ -34,7 +49,7 @@ export async function uninstall({ dataDir, deleteData, stop, confirm, out, err }
     err("Nothing was deleted. Stop Mivra, then run `mivra uninstall` again.");
     return 1;
   }
-  const present = DATA_ENTRIES.filter((name) => existsSync(join(dataDir, name)));
+  const present = mivraFiles(dataDir);
   if (present.length === 0) {
     out(`No Mivra data in ${dataDir}.`);
   } else {
@@ -63,15 +78,18 @@ async function deleteDataIn(dataDir: string, entries: string[], err: (message: s
     // An unreadable sign-in file is deleted below all the same.
   }
   try {
-    for (const name of entries) rmSync(join(dataDir, name), { recursive: true, force: true });
+    for (const name of entries) rmSync(join(dataDir, name), { force: true });
   } catch (error) {
     err(`Couldn't delete everything in ${dataDir}: ${(error as Error).message}`);
     return false;
   }
-  try {
-    if (readdirSync(dataDir).length === 0) rmdirSync(dataDir);
-  } catch {
-    // The folder stays; the caller says so.
+  // Folders go only once empty: anything else in them is the learner's.
+  for (const dir of [join(dataDir, BACKUPS_DIR), dataDir]) {
+    try {
+      if (readdirSync(dir).length === 0) rmdirSync(dir);
+    } catch {
+      // The folder stays; the caller says so.
+    }
   }
   return true;
 }

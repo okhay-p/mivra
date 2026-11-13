@@ -86,10 +86,11 @@ describe.concurrent("mivra", () => {
     const dir = dataDir();
     const seed = () => {
       mkdirSync(join(dir, "backups"), { recursive: true });
-      for (const name of ["mivra.db", "mivra.db-wal", "auth-token", "credentials.json", "mivra.log", "backups/old.db"]) writeFileSync(join(dir, name), "x");
+      for (const name of ["mivra.db", "mivra.db-wal", "auth-token", "credentials.json", "mivra.log", "backups/mivra-2026-11-01T10-00-00-000Z.db"]) writeFileSync(join(dir, name), "x");
     };
     seed();
     writeFileSync(join(dir, "thesis.md"), "mine");
+    writeFileSync(join(dir, "backups", "my-copy.db"), "mine");
 
     // No answer, "n" and --keep-data all keep everything.
     for (const [args, input] of [[["uninstall"], undefined], [["uninstall"], "n\n"], [["uninstall", "--keep-data"], "y\n"]] as const) {
@@ -104,10 +105,12 @@ describe.concurrent("mivra", () => {
     expect(yes.code, yes.stderr).toBe(0);
     expect(yes.stderr).toContain("can't be undone");
     expect(yes.stdout).toContain("still holds files Mivra didn't create");
-    expect(readdirSync(dir)).toEqual(["thesis.md"]);
+    expect(readdirSync(dir).sort()).toEqual(["backups", "thesis.md"]);
+    expect(readdirSync(join(dir, "backups"))).toEqual(["my-copy.db"]);
 
     // With nothing else in it, the folder goes too; and with nothing to delete, nothing is asked.
     rmSync(join(dir, "thesis.md"));
+    rmSync(join(dir, "backups"), { recursive: true });
     seed();
     const flag = await run(dir, ["uninstall", "--delete-data"]);
     expect(flag.stdout, flag.stderr).toContain(`Deleted ${dir}.`);
