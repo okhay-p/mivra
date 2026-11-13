@@ -17,6 +17,20 @@ import { createSessionStore } from "../../server/src/store/session-store.js";
 
 const bin = fileURLToPath(new URL("../bin/mivra.js", import.meta.url));
 const node = process.execPath;
+
+/** Whether a process still runs. A killed process its new parent hasn't reaped yet (a zombie) doesn't. */
+const running = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
+  }
+};
 const dirs: string[] = [];
 afterAll(() => {
   for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
@@ -177,7 +191,7 @@ describe.concurrent("mivra check", () => {
     expect(checked.stdout).toMatch(/pass {2}fine/);
     expect(fake.checks[0]!.results.map((r) => r.error ?? r.stdout)).toEqual(["timeout", "output_limit", "fine"]);
     const grandchild = Number(readFileSync(join(repo, "grandchild.pid"), "utf8"));
-    if (process.platform !== "win32") expect(() => process.kill(grandchild, 0)).toThrow();
+    if (process.platform !== "win32") await expect.poll(() => running(grandchild), { timeout: 5_000 }).toBe(false);
   });
 
   it("explains what's missing before it runs anything", async ({ expect }) => {

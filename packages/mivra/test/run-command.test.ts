@@ -12,6 +12,20 @@ const script = (name: string, source: string) => {
   return path;
 };
 const node = process.execPath;
+
+/** Whether a process still runs. A killed process its new parent hasn't reaped yet (a zombie) doesn't. */
+const running = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
+  } catch {
+    return true;
+  }
+};
 const limits = { timeoutMs: 5_000, maxOutputBytes: 1024 * 1024 };
 
 describe("splitting the learner's command", () => {
@@ -65,7 +79,7 @@ describe("running the learner's program", () => {
     expect(run).toMatchObject({ error: "timeout", exitCode: null });
     expect(Date.now() - started).toBeLessThan(5_000);
     const grandchild = Number(readFileSync(pidFile, "utf8"));
-    if (process.platform !== "win32") expect(() => process.kill(grandchild, 0)).toThrow();
+    if (process.platform !== "win32") await expect.poll(() => running(grandchild), { timeout: 5_000 }).toBe(false);
   });
 
   it("stops what a program left running after it exited", async () => {
@@ -79,7 +93,7 @@ describe("running the learner's program", () => {
     const run = await runProgram([node, launcher], { cwd: dir, stdin: "", limits });
     expect(run.exitCode).toBe(0);
     const orphan = Number(readFileSync(pidFile, "utf8"));
-    await expect.poll(() => { try { process.kill(orphan, 0); return true; } catch { return false; } }, { timeout: 5_000 }).toBe(false);
+    await expect.poll(() => running(orphan), { timeout: 5_000 }).toBe(false);
   });
 
   it("finds a Windows program's descendants by parent pid and start time, not through a live parent", () => {
