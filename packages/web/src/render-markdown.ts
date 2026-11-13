@@ -12,6 +12,7 @@ import remarkParse from "remark-parse";
 import remarkRehype from "remark-rehype";
 import { unified, type PluggableList } from "unified";
 import { visit } from "unist-util-visit";
+import { highlightLines } from "./highlight.js";
 import { remarkDollarRule } from "./math-syntax.js";
 
 export interface RenderedBlock {
@@ -104,6 +105,23 @@ const classes = (node: Element) => {
 const isMathCode = (node: ElementContent | undefined): boolean => node?.type === "element" && node.tagName === "code" && classes(node).includes("language-math");
 const textOf = (node: Element) => node.children.map((child) => (child.type === "text" ? child.value : "")).join("");
 
+/** A fence's code as token spans, for the languages `highlightLines` knows. Text and class names only. */
+function highlightFence(code: Element) {
+  const language = classes(code)
+    .find((name) => name.startsWith("language-"))
+    ?.slice("language-".length);
+  const lines = highlightLines(textOf(code), language);
+  if (!lines) return;
+  code.children = lines.flatMap((line, i): ElementContent[] => [
+    ...(i > 0 ? [{ type: "text" as const, value: "\n" }] : []),
+    ...line.map((token): ElementContent =>
+      token.className
+        ? { type: "element", tagName: "span", properties: { className: token.className.split(" ") }, children: [{ type: "text", value: token.text }] }
+        : { type: "text", value: token.text },
+    ),
+  ]);
+}
+
 /** Parses and typesets one block. Throws if the parser does. */
 export function renderMarkdown(text: string): RenderedBlock {
   const tree = processor.runSync(processor.parse(text), text) as Root;
@@ -128,6 +146,10 @@ export function renderMarkdown(text: string): RenderedBlock {
     // `$$` blocks and ```math fences arrive as a <pre> around the inline maths' <code>.
     if (node.tagName === "pre" && node.children.length === 1 && isMathCode(node.children[0])) {
       parent.children[index] = formula(textOf(node.children[0] as Element).replace(/\n$/, ""), true);
+      return "skip";
+    }
+    if (node.tagName === "pre" && node.children.length === 1 && node.children[0]!.type === "element" && node.children[0]!.tagName === "code") {
+      highlightFence(node.children[0]!);
       return "skip";
     }
     if (isMathCode(node)) {

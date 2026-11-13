@@ -1,14 +1,17 @@
 import { codeLines, type TraceCode } from "@mivra/protocol";
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { cn } from "@/lib/utils";
+import { highlightLines, type Token } from "../highlight.js";
 
 /**
- * A trace's source code as inert text, numbered from 1, with the current step's lines highlighted. Nothing is
- * parsed or coloured, so no model text becomes markup. Long lines scroll inside the pane, which is a tab stop only
- * while it overflows; its arrow keys then scroll rather than step, like the trace's other scrolling boxes.
+ * A trace's source code, numbered from 1, with the current step's lines highlighted. JavaScript, TypeScript, JSX and
+ * Python are syntax-coloured; the colouring only adds class names to text, so no model text becomes markup. Long
+ * lines scroll inside the pane, which is a tab stop only while it overflows; its arrow keys then scroll rather than
+ * step, like the trace's other scrolling boxes.
  */
 export function CodePane({ code, lines }: { code: TraceCode; lines: readonly number[] }) {
-  const source = codeLines(code.source);
+  const source = useMemo(() => codeLines(code.source), [code.source]);
+  const coloured = useMemo(() => highlightLines(source.join("\n"), code.language), [source, code.language]);
   const current = new Set(lines);
   const box = useRef<HTMLDivElement>(null);
   const [overflows, setOverflows] = useState(false);
@@ -56,7 +59,7 @@ export function CodePane({ code, lines }: { code: TraceCode; lines: readonly num
                 >
                   <span className="text-muted-foreground w-9 shrink-0 pr-3 text-right select-none">{i + 1}</span>
                   {/* An empty line still takes its height. */}
-                  <span className="whitespace-pre">{text || " "}</span>
+                  <span className="whitespace-pre">{text ? <LineText text={text} tokens={coloured?.[i]} /> : " "}</span>
                   {active && <span className="sr-only"> (current line)</span>}
                 </span>
               );
@@ -65,5 +68,18 @@ export function CodePane({ code, lines }: { code: TraceCode; lines: readonly num
         </pre>
       </div>
     </div>
+  );
+}
+
+function LineText({ text, tokens }: { text: string; tokens: Token[] | undefined }) {
+  if (!tokens) return text;
+  return tokens.map((token, i) =>
+    token.className ? (
+      <span key={i} className={token.className}>
+        {token.text}
+      </span>
+    ) : (
+      token.text
+    ),
   );
 }
