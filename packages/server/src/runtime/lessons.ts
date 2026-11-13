@@ -32,7 +32,7 @@ export const LESSON_MAX_STEPS = MAX_LESSON_SECTIONS + 5;
 
 const LESSON_INSTRUCTIONS = [
   "You are Mivra, writing one lesson of a course for this learner. The learner reads it on a page, not in a chat: write no greetings and no questions to them outside checks.",
-  "First call outline_lesson once. Then write the sections in outline order, one tool call per section and one section per step: write_lesson_text for prose, ask_multiple_choice for a check, and the matching show_* tool for each visual. Keep each section focused, and keep the whole lesson short enough to finish in about 10-15 minutes.",
+  "First call outline_lesson once. Then write the sections in outline order, one tool call per section and one section per step: write_lesson_text for prose, ask_multiple_choice for a check, ask_code_exercise for a JavaScript exercise, and the matching show_* tool for each visual. Keep each section focused, and keep the whole lesson short enough to finish in about 10-15 minutes.",
   "A check's answer and explanation are hidden until the learner answers, so never reveal them in prose. Stop when every section is written; write no text reply.",
   "Every section is on the page as soon as it is written, so nothing waits for the learner's answer. A code prediction check is fine: put the short snippet in a fenced code block in the prose section before it and keep its answer in the check's hidden fields, but never reveal that answer in any visible section, including a walkthrough or trace of the same snippet; use a different example to illustrate with show_code_walkthrough. For a component hierarchy, use show_graph as a directed tree, as its description says. For where things are and how they move between containers (names sharing one object, values passing through stages, tasks moving between a queue and a stack), plan a composition section and write it with show_composition; keep graph sections for topology, trees and graph algorithms.",
   RENDERING_RULES,
@@ -42,6 +42,7 @@ const LESSON_INSTRUCTIONS = [
 const toolForKind: Record<LessonSectionKind, string> = {
   prose: "write_lesson_text",
   algorithm_trace: artifactKinds.algorithm_trace.toolName,
+  code_exercise: artifactKinds.code_exercise.toolName,
   code_walkthrough: artifactKinds.code_walkthrough.toolName,
   composition: artifactKinds.composition.toolName,
   graph: artifactKinds.graph.toolName,
@@ -117,14 +118,14 @@ export function lessonResults(lesson: LessonRow, { store, lessons, registry }: P
     const check = artifact && registry.artifactKind(artifact.kind)?.check;
     if (!artifact || !check) return [];
     const attempt = store.findAttempt(artifact.id);
-    const spec = artifact.spec as { concept?: string; question?: string; options?: { text: string }[]; correctOptionIndex?: number };
+    const spec = artifact.spec as { concept?: string; question?: string; title?: string; options?: { text: string }[]; correctOptionIndex?: number };
     const chosen = (attempt?.answer as { optionIndex?: number } | undefined)?.optionIndex;
     return [
       {
         sectionId: section.id,
         sectionTitle: section.title,
         concept: spec.concept,
-        question: spec.question,
+        question: spec.question ?? spec.title,
         result: attempt ? (attempt.correct ? "correct" : "missed") : "not answered",
         ...(attempt && !attempt.correct && chosen !== undefined ? { learnerChose: spec.options?.[chosen]?.text, correctAnswer: spec.options?.[spec.correctOptionIndex ?? -1]?.text } : {}),
       },
@@ -339,7 +340,9 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
             const refused = mismatch(lesson.id, name);
             if (refused) return { status: "rejected", reason: refused };
             const slot = nextSlot(lesson.id)!;
-            const output = (await original.execute!(input, options)) as { artifactId: string };
+            const output = (await original.execute!(input, options)) as { artifactId?: string };
+            // A refused artifact (an exercise whose reference failed) leaves the slot for the model's retry.
+            if (!output.artifactId) return { ...output, next: whatNext(lesson.id) };
             if (!lessons.appendSection(lesson.id, { kind: "artifact", title: slot.title, markdown: null, artifactId: output.artifactId }, slot.index)) {
               return { status: "rejected", reason: "This lesson isn't being written any more." };
             }

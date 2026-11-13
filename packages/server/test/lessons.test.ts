@@ -8,6 +8,7 @@ import { lessons as lessonsTable, runs } from "../src/db/schema.js";
 import { NOTE_EXCERPTS_LABEL } from "../src/runtime/note-context.js";
 import { createSessionStore } from "../src/store/session-store.js";
 import { aliasingComposition } from "@mivra/protocol/test/composition-fixtures";
+import { brokenReferenceExercise, sumExercise } from "@mivra/protocol/test/code-exercise-fixtures";
 
 // Whole lessons generate through the app here, which is slow when the machine is busy.
 vi.setConfig({ testTimeout: 30_000 });
@@ -176,6 +177,23 @@ describe("lessons", () => {
     expect(JSON.stringify(prompts)).toContain("Wrong tool for the next section");
     // Stepping through it is no check: only the multiple-choice section counts.
     expect(done.lesson.checks).toEqual({ total: 1, answered: 0 });
+  });
+
+  it("writes a code exercise section, retrying in its slot after a refused reference, and counts it as a check", async () => {
+    const { app, course, topics, prompts } = await setup([
+      outline([{ title: "Your turn", kind: "code_exercise" }, { title: "Check", kind: "multiple_choice" }]),
+      { toolCall: { name: "ask_code_exercise", input: brokenReferenceExercise } },
+      { toolCall: { name: "ask_code_exercise", input: sumExercise } },
+      check,
+      { text: "" },
+    ]);
+    const { lesson } = (await (await start(app, course.id, topics[0]!.id)).json()) as LessonJson;
+    const done = await until(app, lesson.id, "ready");
+    expect(done.lesson.sections.map((s) => [s.title, s.kind])).toEqual([["Your turn", "artifact"], ["Check", "artifact"]]);
+    expect(done.lesson.sections[0]!.artifact).toMatchObject({ kind: "code_exercise", spec: { title: sumExercise.title } });
+    expect(JSON.stringify(done.lesson)).not.toContain("referenceSolution");
+    expect(JSON.stringify(prompts)).toContain("referenceSolution failed");
+    expect(done.lesson.checks).toEqual({ total: 2, answered: 0 });
   });
 
   it("is written just in time: the next topic waits until the earlier lesson is finished", async () => {

@@ -38,6 +38,11 @@ export interface ArtifactKindDefinition {
    */
   toView(artifact: { id: string; createdAt: Date; spec: unknown; attempt?: AttemptRow }): ArtifactView;
   check?: CheckDefinition;
+  /**
+   * Turns validated tool input into the spec to store, e.g. by running a reference solution to compute
+   * expected results (ADR-016). A refusal goes back to the model as the tool's result, and nothing is saved.
+   */
+  prepare?(input: unknown, signal?: AbortSignal): Promise<{ ok: true; spec: unknown } | { ok: false; reason: string }>;
   /** Whether the model may create this kind in a turn; always, if omitted. Stored artifacts stay readable either way. */
   availableIn?(ctx: TurnContext): boolean;
 }
@@ -128,7 +133,13 @@ export function createCapabilityRegistry(plugins: Plugin[]) {
         tools[definition.toolName] = tool({
           description: definition.description,
           inputSchema: definition.spec as ZodType<unknown>,
-          execute: async (spec: unknown, { toolCallId }) => {
+          execute: async (input: unknown, { toolCallId, abortSignal }) => {
+            let spec = input;
+            if (definition.prepare) {
+              const prepared = await definition.prepare(input, abortSignal);
+              if (!prepared.ok) return { status: "rejected", reason: prepared.reason };
+              spec = prepared.spec;
+            }
             const row = ctx.store.createArtifact({
               sessionId: ctx.sessionId,
               runId: ctx.runId,

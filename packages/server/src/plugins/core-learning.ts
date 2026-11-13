@@ -13,13 +13,16 @@ import {
   type MultipleChoiceGrade,
 } from "@mivra/protocol";
 import type { Plugin } from "../runtime/capabilities.js";
+import type { RunCases } from "../exercises/reference-check.js";
+import { codeExerciseKindDefinition } from "./code-exercise.js";
 import { compositionKindDefinition } from "./composition.js";
 
 /**
- * First-party learning tools (ADR-006/007): the visualization kinds and the multiple_choice check,
- * registered through the same API third-party plugins will use.
+ * First-party learning tools (ADR-006/007): the visualization kinds, the multiple_choice check and code
+ * exercises, registered through the same API third-party plugins will use. `runCases` runs an exercise's
+ * reference solution; tests may pass their own.
  */
-export const coreLearning: Plugin = {
+export const createCoreLearning = ({ runCases }: { runCases?: RunCases } = {}): Plugin => ({
   name: "core-learning",
   capabilities: ["artifactKinds"],
   setup(api) {
@@ -164,5 +167,10 @@ export const coreLearning: Plugin = {
         spec: WorkedStepsSpec.parse(spec),
       }),
     });
+
+    // A check graded from what the learner's browser reports, against the reference's results (ADR-016).
+    api.registerArtifactKind(codeExerciseKindDefinition(runCases));
   },
-};
+});
+
+export const coreLearning: Plugin = createCoreLearning();

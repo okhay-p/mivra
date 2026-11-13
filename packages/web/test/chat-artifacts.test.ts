@@ -1,3 +1,4 @@
+import type { ArtifactView } from "@mivra/protocol";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vitest";
 import { artifactData, artifactViewsIn, isReplyInProgress, mergeViews } from "../src/chat-artifacts.js";
@@ -43,6 +44,16 @@ describe("mergeViews", () => {
       "art-trace": trace,
     });
     expect(mergeViews({ "art-mc": question }, { "art-mc": answered })).toEqual({ "art-mc": answered });
+  });
+
+  it("keeps a submitted code exercise too", () => {
+    const spec = { concept: "c", title: "t", instructions: "i", language: "javascript" as const, starterCode: "", cases: [{ kind: "stdio" as const, stdin: "", hidden: false }] };
+    const open: ArtifactView = { id: "art-ex", createdAt: new Date(0).toISOString(), kind: "code_exercise", version: 1, spec };
+    const submitted: ArtifactView = {
+      ...open,
+      latestAttempt: { answer: { code: "x", results: [{ stdout: "" }] }, grade: { correct: true, passed: 1, total: 1, cases: [{ passed: true }] }, createdAt: new Date(0).toISOString() },
+    };
+    expect(mergeViews({ "art-ex": submitted }, { "art-ex": open })).toEqual({ "art-ex": submitted });
   });
 });
 
