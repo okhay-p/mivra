@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -41,13 +41,15 @@ const tempDir = (prefix: string) => {
   return dir;
 };
 
-const run = (dataDir: string, cwd: string, args: string[]) =>
+/** Runs the built `mivra`; `input` is piped to it, as when a token is pasted into it. */
+const run = (dataDir: string, cwd: string, args: string[], input?: string) =>
   new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(node, [bin, ...args], { cwd, env: { PATH: process.env.PATH, HOME: dataDir, MIVRA_DATA_DIR: dataDir }, stdio: ["ignore", "pipe", "pipe"], timeout: 90_000 });
+    const child = spawn(node, [bin, ...args], { cwd, env: { PATH: process.env.PATH, HOME: dataDir, MIVRA_DATA_DIR: dataDir }, stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"], timeout: 90_000 });
+    child.stdin?.end(input);
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr!.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     child.once("error", reject);
     child.once("close", (code) => resolve({ code, stdout, stderr }));
   });
@@ -330,4 +332,145 @@ describe("a project course end to end", () => {
     expect(after.stderr).toContain("hasn't started");
     expect((await run(dataDir, dataDir, ["stop"])).stdout).toContain("Mivra stopped.");
   }, 180_000);
+});
+
+describe("a project course on another computer's Mivra", () => {
+  // A second address on loopback stands in for the home server: it isn't a loopback name, so the Mivra there only
+  // answers because it's in MIVRA_ALLOWED_HOSTS, and treats requests as remote, as behind `tailscale serve`.
+  it.skipIf(process.platform !== "linux")("links and checks with the address and token in the client's data dir, never in .mivra.json", async ({ expect, onTestFinished }) => {
+    const serverData = tempDir("mivra-home-");
+    const { courseId, lessonId } = seedProjectCourse(serverData);
+    const port = await freePort();
+    const host = "127.0.0.2";
+    const url = `http://${host}:${port}`;
+    const server = spawn(node, [bin, "start", "--no-open", "--port", String(port)], {
+      cwd: serverData,
+      env: { PATH: process.env.PATH, HOME: serverData, MIVRA_DATA_DIR: serverData, MIVRA_HOST: host, MIVRA_ALLOWED_HOSTS: host },
+      stdio: "ignore",
+    });
+    onTestFinished(() => {
+      server.kill("SIGKILL");
+    });
+    const up = Date.now() + 60_000;
+    for (;;) {
+      const ok = await fetch(`${url}/api/health`).then((r) => r.ok, () => false);
+      if (ok) break;
+      if (Date.now() > up || server.exitCode !== null) throw new Error("The home Mivra didn't start");
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    // On the server: `mivra token` prints only the token on stdout.
+    const printed = await run(serverData, serverData, ["token"]);
+    expect(printed.code, printed.stderr).toBe(0);
+    const token = printed.stdout.trim();
+    expect(token).toBe(readFileSync(join(serverData, "auth-token"), "utf8").trim());
+    expect(printed.stderr).toContain("mivra link --server");
+    // Without the token, the remote address answers nothing but health.
+    expect((await fetch(`${url}/api/courses/${courseId}`)).status).toBe(401);
+
+    // The laptop: its own data dir, with no Mivra running in it.
+    const clientData = tempDir("mivra-laptop-");
+    const repo = tempDir("mivra-repo-");
+    writeFileSync(join(repo, "calc.mjs"), `import { readFileSync } from "node:fs";
+      const nums = readFileSync(process.argv[2], "utf8").split(/\\s+/).filter(Boolean).map(Number);
+      console.log(String(nums.reduce((a, b) => a + b, 0)));`);
+    writeFileSync(join(repo, "run-output.mjs"), `import { readFileSync } from "node:fs"; console.log("ran: " + readFileSync(process.argv[2], "utf8").trim());`);
+
+    const wrong = await run(clientData, repo, ["link", "--server", url], "not-the-right-token-at-all");
+    expect(wrong.code).toBe(1);
+    expect(wrong.stderr).toContain("didn't accept the token");
+    expect(wrong.stderr).not.toContain("not-the-right-token");
+    expect(existsSync(join(clientData, "credentials.json"))).toBe(false);
+    expect((await run(clientData, repo, ["link", "--server", `http://${host}:${await freePort()}`], token)).stderr).toContain("no Mivra answering");
+
+    const connected = await run(clientData, repo, ["link", "--server", `${url}/`], `${token}\n`);
+    expect(connected.code, connected.stderr).toBe(0);
+    expect(connected.stdout).toContain(`Connected to Mivra at ${url}`);
+    expect(connected.stdout + connected.stderr).not.toContain(token);
+    const credentials = join(clientData, "credentials.json");
+    expect(statSync(credentials).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(credentials, "utf8"))).toEqual({ keys: {}, server: { url, token } });
+
+    const linked = await run(clientData, repo, ["link", courseId, "--run", `"${node}" calc.mjs {input}`, "--run-output", `"${node}" run-output.mjs {output}`]);
+    expect(linked.code, linked.stderr).toBe(0);
+    expect(linked.stdout).toContain(`on Mivra at ${url}`);
+    const linkText = readFileSync(join(repo, ".mivra.json"), "utf8");
+    expect(JSON.parse(linkText)).toEqual({ course: courseId, run: `"${node}" calc.mjs {input}`, runOutput: `"${node}" run-output.mjs {output}` });
+    expect(linkText).not.toContain(token);
+    expect(linkText).not.toContain(host);
+    expect(linkText).not.toContain(String(port));
+
+    const checked = await run(clientData, repo, ["check"]);
+    expect(checked.stdout).toContain(`Checking against Mivra at ${url}`);
+    expect(checked.stdout).toContain("All 3 cases passed. Recorded in Mivra.");
+    expect(checked.code, checked.stderr).toBe(0);
+    expect(existsSync(join(clientData, "mivra.pid"))).toBe(false);
+    const lesson = (await (await fetch(`${url}/api/lessons/${lessonId}`, { headers: { authorization: `Bearer ${token}` } })).json()) as {
+      lesson: { sections: { artifact?: { latestAttempt?: { grade: { passed: number; correct: boolean } } } }[] };
+    };
+    expect(lesson.lesson.sections[1]!.artifact!.latestAttempt!.grade).toMatchObject({ passed: 3, correct: true });
+
+    // Back to the local Mivra, which isn't running here.
+    const local = await run(clientData, repo, ["link", "--local"]);
+    expect(local.stdout).toContain("Forgot the remote Mivra");
+    expect(JSON.parse(readFileSync(credentials, "utf8"))).toEqual({ keys: {} });
+    expect((await run(clientData, repo, ["check"])).stderr).toContain("Mivra isn't running");
+  }, 180_000);
+
+  it("doesn't follow a redirect with the token, and says what to fix", async ({ expect, onTestFinished }) => {
+    const elsewhere: (string | undefined)[] = [];
+    const target = createServer((req, res) => {
+      elsewhere.push(req.headers.authorization);
+      res.writeHead(200, { "content-type": "application/json" }).end("{}");
+    });
+    const targetPort = await freePort();
+    await new Promise<void>((resolve) => target.listen(targetPort, "127.0.0.1", resolve));
+    const redirecting = createServer((req, res) => {
+      if (req.url === "/api/health") return res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true }));
+      if (req.url?.startsWith("/api/courses/")) return res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ error: "Host not allowed" }));
+      res.writeHead(302, { location: `http://127.0.0.1:${targetPort}${req.url}` }).end();
+    });
+    const port = await freePort();
+    await new Promise<void>((resolve) => redirecting.listen(port, "127.0.0.1", resolve));
+    onTestFinished(() => {
+      target.close();
+      redirecting.close();
+    });
+    const clientData = tempDir("mivra-laptop-");
+    const repo = tempDir("mivra-repo-");
+    const token = "a-token-that-must-stay-home-0123456789";
+    const linked = await run(clientData, repo, ["link", "--server", `http://127.0.0.1:${port}`], token);
+    expect(linked.code).toBe(1);
+    expect(linked.stderr).toContain("redirects to");
+    expect(elsewhere).toEqual([]);
+    expect(existsSync(join(clientData, "credentials.json"))).toBe(false);
+    // An address that redirects everything, as plain HTTP to HTTPS would.
+    const everything = createServer((req, res) => res.writeHead(301, { location: `https://127.0.0.1:${targetPort}${req.url}` }).end());
+    const everythingPort = await freePort();
+    await new Promise<void>((resolve) => everything.listen(everythingPort, "127.0.0.1", resolve));
+    onTestFinished(() => {
+      everything.close();
+    });
+    expect((await run(clientData, repo, ["link", "--server", `http://127.0.0.1:${everythingPort}`], token)).stderr).toContain(`redirects to https://127.0.0.1:${targetPort}/api/health`);
+
+    // A saved server whose Host check refuses this name.
+    writeFileSync(join(clientData, "credentials.json"), JSON.stringify({ keys: {}, server: { url: `http://127.0.0.1:${port}`, token } }));
+    const refused = await run(clientData, repo, ["link", "c1", "--run", `"${node}" -e 1`]);
+    expect(refused.code).toBe(1);
+    expect(refused.stderr).toContain("MIVRA_ALLOWED_HOSTS");
+    expect(existsSync(join(repo, ".mivra.json"))).toBe(false);
+
+    // The first `link --server` against a Mivra that doesn't list this name names the fix too.
+    const guarded = createServer((_req, res) => res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ error: "Host not allowed" })));
+    const guardedPort = await freePort();
+    await new Promise<void>((resolve) => guarded.listen(guardedPort, "127.0.0.1", resolve));
+    onTestFinished(() => {
+      guarded.close();
+    });
+    const fresh = tempDir("mivra-laptop-");
+    const first = await run(fresh, repo, ["link", "--server", `http://127.0.0.1:${guardedPort}`], token);
+    expect(first.code).toBe(1);
+    expect(first.stderr).toContain("MIVRA_ALLOWED_HOSTS");
+    expect(existsSync(join(fresh, "credentials.json"))).toBe(false);
+  });
 });

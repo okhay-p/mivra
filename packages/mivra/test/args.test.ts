@@ -45,14 +45,30 @@ describe("the command line", () => {
   });
 
   it("reads project course commands", () => {
-    expect(parseCommand(["link", "c1", "--run", " ./build/mycc {input} "])).toEqual({ name: "link", course: "c1", run: "./build/mycc {input}" });
-    expect(parseCommand(["link", "c1", "--run", "./mycc {input}", "--run-output", "./run.sh {output}"])).toEqual({ name: "link", course: "c1", run: "./mycc {input}", runOutput: "./run.sh {output}" });
+    expect(parseCommand(["link", "c1", "--run", " ./build/mycc {input} "])).toEqual({ name: "link", course: "c1", run: "./build/mycc {input}", local: false });
+    expect(parseCommand(["link", "c1", "--run", "./mycc {input}", "--run-output", "./run.sh {output}"])).toEqual({ name: "link", course: "c1", run: "./mycc {input}", runOutput: "./run.sh {output}", local: false });
     expect(() => parseCommand(["link", "--run", "./mycc"])).toThrow(/course's id/);
     expect(() => parseCommand(["link", "c1"])).toThrow(/--run/);
     expect(parseCommand(["check"])).toEqual({ name: "check", timeoutS: 10 });
     expect(parseCommand(["check", "--timeout", "2.5"])).toEqual({ name: "check", timeoutS: 2.5 });
     expect(() => parseCommand(["check", "--timeout", "0"])).toThrow(UsageError);
     expect(() => parseCommand(["check", "extra"])).toThrow(UsageError);
+  });
+
+  it("reads a remote server for link, as an origin, and never a token", () => {
+    expect(parseCommand(["link", "--server", "https://home.tail1.ts.net/"])).toEqual({ name: "link", server: "https://home.tail1.ts.net", local: false });
+    expect(parseCommand(["link", "c1", "--run", "./mycc", "--server", "http://100.64.0.1:4096"])).toEqual({ name: "link", course: "c1", run: "./mycc", server: "http://100.64.0.1:4096", local: false });
+    expect(parseCommand(["link", "--local"])).toEqual({ name: "link", local: true });
+    expect(parseCommand(["token"])).toEqual({ name: "token" });
+    expect(() => parseCommand(["link", "--server", "https://h.ts.net", "--local"])).toThrow(/not both/);
+    expect(() => parseCommand(["link", "--server", "home.ts.net"])).toThrow(/address/);
+    expect(() => parseCommand(["link", "--server", "ftp://h.ts.net"])).toThrow(/http/);
+    expect(() => parseCommand(["link", "--server", "https://me:secret@h.ts.net"])).toThrow(/user name/);
+    expect(() => parseCommand(["link", "--server", "https://h.ts.net/mivra"])).toThrow(/without a path/);
+    expect(() => parseCommand(["link", "--server", "https://h.ts.net/?token=x"])).toThrow(/without a path/);
+    expect(() => parseCommand(["link", "--server", "https://h.ts.net", "--run", "./mycc"])).toThrow(/course's id/);
+    expect(() => parseCommand(["link", "--server", "https://h.ts.net", "--token", "x"])).toThrow();
+    expect(() => parseCommand(["token", "extra"])).toThrow(/Unexpected/);
   });
 
   it("has help and version flags", () => {

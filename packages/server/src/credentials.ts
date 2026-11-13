@@ -38,7 +38,24 @@ export const ApiKey = z
   .max(500, "That's too long to be an API key")
   .regex(/^[\x21-\x7e]+$/, "An API key has no spaces or special characters");
 
-const CredentialsFile = z.object({ keys: z.record(z.string(), z.string()).default({}) });
+/**
+ * `credentials.json`. Besides API keys it can hold the Mivra server this machine's `mivra check` talks to, when that
+ * runs on another machine (ADR-016): its address and API token. Sections a store doesn't use are kept as they are.
+ */
+const CredentialsFile = z.looseObject({ keys: z.record(z.string(), z.string()).default({}) });
+type CredentialsFile = z.infer<typeof CredentialsFile>;
+
+/** A Mivra server's API token, as `mivra token` prints it: printable ASCII without spaces. Real ones are 43 characters. */
+export const ServerToken = z
+  .string()
+  .trim()
+  .min(16, "That's too short to be a Mivra token")
+  .max(500, "That's too long to be a Mivra token")
+  .regex(/^[\x21-\x7e]+$/, "A Mivra token has no spaces or special characters");
+
+/** The Mivra on another machine that `mivra link` and `mivra check` use instead of the local one (ADR-016). */
+export const RemoteServer = z.object({ url: z.string().url(), token: ServerToken });
+export type RemoteServer = z.infer<typeof RemoteServer>;
 
 export interface CredentialStore {
   /** The key each provider uses now: the environment's, else the saved one. Read fresh on every call. */
@@ -121,32 +138,44 @@ function credentialStore(envVar: (name: string) => string | undefined, saved: Sa
  * on every call, so a key saved by `mivra auth` applies to a running server from its next run.
  */
 export function createCredentialStore({ dataDir, env = process.env }: { dataDir: string; env?: NodeJS.ProcessEnv }): CredentialStore {
+  const file = credentialsFile(dataDir);
+  return credentialStore((name) => env[name]?.trim() || undefined, {
+    load: () => file.read().keys,
+    save: (keys) => file.write({ ...file.read(), keys }),
+  });
+}
+
+/**
+ * Reads and writes `credentials.json` whole. The file is written with mode 0600 and kept out of the database, so
+ * backing up or copying `mivra.db` never carries a secret.
+ */
+function credentialsFile(dataDir: string) {
   const path = join(dataDir, CREDENTIALS_FILE);
   // The file is read on every lookup; warn about a broken one once, not on every run.
   let warned = false;
-  return credentialStore((name) => env[name]?.trim() || undefined, {
-    load() {
+  return {
+    read(): CredentialsFile {
       let text: string;
       try {
         text = readFileSync(path, "utf8");
       } catch {
-        return {};
+        return { keys: {} };
       }
       try {
-        return CredentialsFile.parse(JSON.parse(text)).keys;
+        return CredentialsFile.parse(JSON.parse(text));
       } catch {
         if (!warned) console.warn(`${path} isn't valid, so its keys are ignored. Fix or delete it, or set the keys again.`);
         warned = true;
-        return {};
+        return { keys: {} };
       }
     },
-    save(keys) {
+    write(contents: CredentialsFile) {
       mkdirSync(dataDir, { recursive: true });
       // Write a private temp file and rename it over the old one, so a reader never sees half a file and the
-      // key is never readable by other users, even briefly.
+      // secrets are never readable by other users, even briefly.
       const temp = `${path}.${randomBytes(6).toString("hex")}.tmp`;
       try {
-        writeFileSync(temp, `${JSON.stringify({ keys }, null, 2)}\n`, { mode: 0o600 });
+        writeFileSync(temp, `${JSON.stringify(contents, null, 2)}\n`, { mode: 0o600 });
         chmodSync(temp, 0o600);
         renameSync(temp, path);
       } catch (error) {
@@ -154,7 +183,28 @@ export function createCredentialStore({ dataDir, env = process.env }: { dataDir:
         throw error;
       }
     },
-  });
+  };
+}
+
+/** The remote Mivra saved with `mivra link --server`, if any. One that doesn't parse counts as none. */
+export function readRemoteServer(dataDir: string): RemoteServer | undefined {
+  const parsed = RemoteServer.safeParse(credentialsFile(dataDir).read().server);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/** Saves the remote Mivra for `mivra link` and `mivra check`, beside any API keys. */
+export function saveRemoteServer(dataDir: string, server: RemoteServer) {
+  const file = credentialsFile(dataDir);
+  file.write({ ...file.read(), server: RemoteServer.parse(server) });
+}
+
+/** Forgets the remote Mivra, so the CLI uses the local one again; true if one was saved. */
+export function removeRemoteServer(dataDir: string): boolean {
+  const file = credentialsFile(dataDir);
+  const { server, ...rest } = file.read();
+  if (server === undefined) return false;
+  file.write(rest as CredentialsFile);
+  return true;
 }
 
 /**

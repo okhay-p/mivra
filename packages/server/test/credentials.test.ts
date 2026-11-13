@@ -7,7 +7,7 @@ import { serve } from "@hono/node-server";
 import { MockLanguageModelV4 } from "ai/test";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
-import { CREDENTIALS_FILE, createCredentialStore, memoryCredentials, type CredentialStore, type ProviderId } from "../src/credentials.js";
+import { CREDENTIALS_FILE, createCredentialStore, memoryCredentials, readRemoteServer, removeRemoteServer, saveRemoteServer, type CredentialStore, type ProviderId } from "../src/credentials.js";
 import { openDb } from "../src/db/client.js";
 import { createKeyedCatalog, staticCatalog } from "../src/models/catalog.js";
 import { checkProviderKey, type KeyCheck } from "../src/models/key-check.js";
@@ -74,6 +74,26 @@ describe("the credentials file", () => {
     expect(store.remove("openrouter")).toBe(true);
     expect(store.remove("openrouter")).toBe(false);
     expect(store.keys()).toEqual({ openai: "sk-openai-key-0000" });
+  });
+
+  it("keeps a remote Mivra beside the keys, and each survives the other's changes", () => {
+    const dataDir = tempDir();
+    const path = join(dataDir, CREDENTIALS_FILE);
+    const store = createCredentialStore({ dataDir, env: {} });
+    expect(readRemoteServer(dataDir)).toBeUndefined();
+    store.set("openrouter", KEY);
+    const server = { url: "https://home.tail1.ts.net", token: "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG" };
+    saveRemoteServer(dataDir, server);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readRemoteServer(dataDir)).toEqual(server);
+    store.set("openai", "sk-openai-key-0000");
+    store.remove("openrouter");
+    expect(readRemoteServer(dataDir)).toEqual(server);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ keys: { openai: "sk-openai-key-0000" }, server });
+    expect(removeRemoteServer(dataDir)).toBe(true);
+    expect(removeRemoteServer(dataDir)).toBe(false);
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ keys: { openai: "sk-openai-key-0000" } });
+    expect(() => saveRemoteServer(dataDir, { url: server.url, token: "has a space in it" })).toThrow();
   });
 
   it("refuses text that can't be a key", () => {
