@@ -10,6 +10,7 @@ import { createOAuthClient } from "../server/src/chatgpt/oauth.js";
 import { createChatGptSession, memoryChatGptStore } from "../server/src/chatgpt/session.js";
 import { memoryCredentials } from "../server/src/credentials.js";
 import { aliasingComposition, eventLoopComposition, pipelineComposition, richComposition, twoStackQueueComposition } from "../protocol/test/composition-fixtures.js";
+import { addLinesExercise, sumExercise } from "../protocol/test/code-exercise-fixtures.js";
 import { fakeAuth } from "../server/test/support/fake-chatgpt-auth.js";
 import { createFakeCompatible } from "../server/test/support/fake-compatible.js";
 import { staticCatalog } from "../server/src/models/catalog.js";
@@ -545,6 +546,8 @@ const SCRIPTS: Record<string, Step[]> = {
     { text: "The repaired proof is inline." },
   ],
   dijkstra: [{ tool: "show_graph", input: dijkstraGraph }, { text: "Follow the edges." }],
+  exercisesum: [{ tool: "ask_code_exercise", input: sumExercise }, { text: "Write sum, run it, then submit." }],
+  exerciselines: [{ tool: "ask_code_exercise", input: addLinesExercise }, { text: "Read the two lines and print their sum." }],
   compositionalias: [{ tool: "show_composition", input: aliasingComposition }, { text: "Step through the names." }],
   compositionpipeline: [{ tool: "show_composition", input: pipelineComposition }, { text: "Follow the stages." }],
   compositionloop: [{ tool: "show_composition", input: eventLoopComposition }, { text: "Watch the queue." }],

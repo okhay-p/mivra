@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { artifactMathInput, checkMathText } from "./artifact-math-input.js";
 import { AlgorithmTraceSpec } from "./algorithm-trace.js";
+import { CodeExerciseAnswer, CodeExerciseGrade, CodeExerciseInput, CodeExercisePublic, CodeExerciseSpec } from "./code-exercise.js";
 import { CodeWalkthroughSpec } from "./code-walkthrough.js";
 import { CompositionArtifactView, compositionArtifactKind } from "./composition.js";
 import {
@@ -21,6 +22,8 @@ import { WorkedStepsSpec } from "./worked-steps.js";
 export * from "./artifact-math-input.js";
 export * from "./math-text.js";
 export * from "./algorithm-trace.js";
+export * from "./code-exercise.js";
+export * from "./code-exercise-runner.js";
 export * from "./code-walkthrough.js";
 export * from "./composition.js";
 export * from "./course.js";
@@ -45,6 +48,14 @@ export const artifactKinds = {
       "Show the learner an interactive step-by-step trace of an algorithm running over a sequence (e.g. sliding window, two pointers, binary search, a simple sort). The learner steps through it with play/pause/step controls. Use it when watching state change step by step will make the idea click. Keep traces short (roughly 5-20 steps) and make each step's explanation say what changed and why. A code pane is optional: add `code` and each step's `lines` only when the code itself is the point, such as how an implementation's lines move the state, and leave it out when the idea matters more than any code. Write that code in the programming language the learner has shown proficiency in according to <learner_memories>; if they show none, use Python or pseudocode. Keep the code short, and highlight the lines each step is running. For code that doesn't move over a sequence, such as a plain function or a React render, use show_code_walkthrough instead of inventing an array.",
     spec: AlgorithmTraceSpec,
     input: artifactMathInput(AlgorithmTraceSpec, ["title", "steps.*.explanation"]),
+  },
+  code_exercise: {
+    version: 1,
+    toolName: "ask_code_exercise",
+    description:
+      "Give the learner a short JavaScript coding exercise to solve in an editor in the UI, after teaching an idea they can now practise by writing code. They run the visible cases as often as they like, then submit once; their result is reported back to you on the next turn, so don't reveal or hint at a solution in your reply. Keep it to one small function or program (a few to about 30 lines), with 3-8 fast cases. Two kinds of case: a call case calls `functionName` with JSON arguments and compares its return value as JSON (key order ignored), and a stdio case runs the whole program with `stdin` and compares what it prints with console.log (trailing whitespace and trailing blank lines ignored). Prefer call cases; use stdio for programs that read input and print. The code runs in plain JavaScript with no DOM, network, modules, timers or Node APIs: only console, the global `stdin` string and `readLine()` (the next input line, or null). Write a correct, deterministic referenceSolution: Mivra runs it on every case to get the expected results, rejecting the exercise if it fails, and never shows it. Hide a case or two that check edge cases. The starter code should give the function's signature (or the program's outline) and no solution.",
+    spec: CodeExerciseSpec,
+    input: artifactMathInput(CodeExerciseInput, ["title"]),
   },
   code_walkthrough: {
     version: 1,
@@ -132,6 +143,11 @@ export const MultipleChoiceAttempt = z
   .strict();
 export type MultipleChoiceAttempt = z.infer<typeof MultipleChoiceAttempt>;
 
+export const CodeExerciseAttempt = z
+  .object({ answer: CodeExerciseAnswer, grade: CodeExerciseGrade, createdAt: z.string().datetime() })
+  .strict();
+export type CodeExerciseAttempt = z.infer<typeof CodeExerciseAttempt>;
+
 export const InterviewContextAttempt = z
   .object({ answer: InterviewContextAnswer, grade: InterviewContextGrade, createdAt: z.string().datetime() })
   .strict();
@@ -147,6 +163,15 @@ export type PlacementAttempt = z.infer<typeof PlacementAttempt>;
 export const ArtifactView = z.discriminatedUnion("kind", [
   z
     .object({ ...ArtifactBase, kind: z.literal("algorithm_trace"), version: z.literal(1), spec: AlgorithmTraceSpec })
+    .strict(),
+  z
+    .object({
+      ...ArtifactBase,
+      kind: z.literal("code_exercise"),
+      version: z.literal(1),
+      spec: CodeExercisePublic,
+      latestAttempt: CodeExerciseAttempt.optional(),
+    })
     .strict(),
   z
     .object({ ...ArtifactBase, kind: z.literal("code_walkthrough"), version: z.literal(1), spec: CodeWalkthroughSpec })

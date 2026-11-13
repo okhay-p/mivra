@@ -24,7 +24,8 @@ export function artifactViewsIn(messages: UIMessage[]): Record<string, ArtifactV
   return views;
 }
 
-const isGraded = (view: ArtifactView | undefined) => view?.kind === "multiple_choice" && view.latestAttempt !== undefined;
+/** Whether a check (multiple choice, code exercise, …) has its learner's attempt. */
+const isGraded = (view: ArtifactView | undefined) => view !== undefined && "latestAttempt" in view && view.latestAttempt !== undefined;
 
 /**
  * Merges views into the local overrides. Grading is one-way, so a graded view is never replaced by

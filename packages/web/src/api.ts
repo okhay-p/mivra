@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type InterviewContextAnswer, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type InterviewContextAnswer, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -32,6 +32,9 @@ export const submitPlacement = (artifactId: string, answer: PlacementAnswer) => 
 
 /** Submits the interview's free-text answer, or a skip. */
 export const submitInterviewContext = (artifactId: string, answer: InterviewContextAnswer) => submitAnswer(artifactId, answer);
+
+/** Submits a code exercise: the learner's code and what it produced on every case. The server grades the results. */
+export const submitCodeExercise = (artifactId: string, answer: CodeExerciseAnswer) => submitAnswer(artifactId, answer);
 
 async function submitAnswer(artifactId: string, answer: unknown): Promise<AttemptResult> {
   try {

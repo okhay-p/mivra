@@ -7,7 +7,7 @@ import { z } from "zod";
  */
 
 /** Section kinds the outline can plan: prose, or an existing artifact kind by its tool's purpose. */
-export const LessonSectionKind = z.enum(["prose", "algorithm_trace", "code_walkthrough", "composition", "graph", "multiple_choice", "set_diagram", "table", "worked_steps"]);
+export const LessonSectionKind = z.enum(["prose", "algorithm_trace", "code_exercise", "code_walkthrough", "composition", "graph", "multiple_choice", "set_diagram", "table", "worked_steps"]);
 export type LessonSectionKind = z.infer<typeof LessonSectionKind>;
 
 export const MAX_LESSON_SECTIONS = 10;
@@ -20,7 +20,7 @@ export const LessonOutlineInput = z
         z
           .object({
             title: z.string().trim().min(1).max(120),
-            kind: LessonSectionKind.describe("prose = write_lesson_text; multiple_choice = ask_multiple_choice (a check); the others = the matching show_* tool."),
+            kind: LessonSectionKind.describe("prose = write_lesson_text; multiple_choice = ask_multiple_choice (a check); code_exercise = ask_code_exercise (a JavaScript exercise the learner solves and submits); the others = the matching show_* tool."),
             purpose: z.string().trim().min(1).max(300).describe("What this section does for the learner, in one sentence."),
           })
           .strict(),
