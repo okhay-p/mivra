@@ -1,5 +1,5 @@
 import { render } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CodePane } from "../src/artifacts/CodePane.js";
 import { dialectOf, highlightLines, PARSE_BUDGET_MS } from "../src/highlight.js";
 import { MathText } from "../src/MathText.js";
@@ -68,9 +68,9 @@ describe("highlighted code on the page", () => {
 
 describe("highlightLines on pathological input", () => {
   it("gives up on a parse that runs past its budget and shows the code plain", () => {
-    const start = performance.now();
-    const result = highlightLines("<".repeat(4000), "jsx");
-    expect(performance.now() - start).toBeLessThan(PARSE_BUDGET_MS + 300);
-    expect(result).toBeUndefined();
+    // A clock that jumps past the budget on every reading, so the outcome doesn't depend on the machine's speed.
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => (now += PARSE_BUDGET_MS + 1));
+    expect(highlightLines("<".repeat(4000), "jsx")).toBeUndefined();
   });
 });
