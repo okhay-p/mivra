@@ -41,6 +41,12 @@
   --sidebar-accent-foreground: oklch(0.22 0.01 60);
   --sidebar-border: oklch(0.9 0.012 78);
   --sidebar-ring: oklch(0.62 0.16 52);
+  /* Syntax colours: kept off the brand's amber and the grading greens and reds. */
+  --code-keyword: oklch(0.48 0.16 300);
+  --code-string: oklch(0.5 0.09 200);
+  --code-number: oklch(0.52 0.15 350);
+  --code-type: oklch(0.5 0.13 255);
+  --code-comment: oklch(0.5 0.012 70);
 }
 
 .dark {
@@ -75,6 +81,11 @@
   --sidebar-accent-foreground: oklch(0.955 0.008 80);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.75 0.15 62);
+  --code-keyword: oklch(0.76 0.12 305);
+  --code-string: oklch(0.78 0.09 195);
+  --code-number: oklch(0.76 0.12 355);
+  --code-type: oklch(0.76 0.11 250);
+  --code-comment: oklch(0.7 0.012 70);
 }
 
 @theme inline {
@@ -213,6 +224,28 @@ div.math-text > * + *,
 .math-text pre code {
   background: none;
   padding: 0;
+}
+/* Syntax highlighting (see highlight.ts). Names, operators and punctuation keep the text colour. */
+.tok-keyword,
+.tok-bool,
+.tok-atom {
+  color: var(--code-keyword);
+}
+.tok-string,
+.tok-string2 {
+  color: var(--code-string);
+}
+.tok-number {
+  color: var(--code-number);
+}
+.tok-typeName,
+.tok-className,
+.tok-definition {
+  color: var(--code-type);
+}
+.tok-comment {
+  color: var(--code-comment);
+  font-style: italic;
 }
 .math-text-scroll {
   overflow-x: auto;
