@@ -10,6 +10,10 @@ export type Navigation = "step" | "seek";
 
 const CARD = '[data-testid="composition-entity"]';
 const OBSTACLE = "[data-composition-obstacle]";
+const FOCUSABLE = "[tabindex], a[href], button, input, select, textarea";
+
+/** The card holding an id, found by comparing data rather than by building a selector from the id. */
+const cardFor = (grid: HTMLElement, id: string) => [...grid.querySelectorAll<HTMLElement>(CARD)].find((card) => card.dataset.entity === id);
 
 const reducedMotion = () => typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -45,6 +49,9 @@ const sameLayout = (a: ConnectorLayout, b: ConnectorLayout) =>
  * interrupted glide, and every glide is cancelled before the next step lays out, so the cards always end where
  * the selected step puts them. A width change mid-glide cancels it too.
  *
+ * A card that moves to another group is a new element, so focus inside it would fall to the page. It goes back
+ * to the same place in the card's new element, or to the artifact if that place can't take it or the card is gone.
+ *
  * The connectors are routed from where layout puts the cards, so a glide doesn't move them; they're hidden while
  * cards glide and drawn again when they land. They're measured on every render, when the grid or a card changes
  * size and when fonts load.
@@ -55,6 +62,7 @@ export function useCompositionStage(grid: RefObject<HTMLDivElement | null>, inde
   const running = useRef<Animation[]>([]);
   const generation = useRef(0);
   const width = useRef(0);
+  const focus = useRef<{ entity: string; at: number } | null>(null);
   const [moving, setMoving] = useState(false);
   const [layout, setLayout] = useState<ConnectorLayout>({ narrow: false, connectors: [] });
   const requests = useRef(connections);
@@ -70,6 +78,14 @@ export function useCompositionStage(grid: RefObject<HTMLDivElement | null>, inde
     const to = Math.max(0, Math.min(next, last));
     const el = grid.current;
     pending.current = null;
+    const active = document.activeElement;
+    const holder = el && active instanceof HTMLElement && el.contains(active) ? active.closest<HTMLElement>(CARD) : null;
+    focus.current = holder ? { entity: holder.dataset.entity!, at: [...holder.querySelectorAll(FOCUSABLE)].indexOf(active!) } : null;
+    // A seek or reset to the step already chosen changes nothing, so no effect would cut a glide still landing.
+    if (to === committed.current && how === "seek" && running.current.length) {
+      stop();
+      setMoving(false);
+    }
     if (el && how === "step" && Math.abs(to - committed.current) === 1 && !reducedMotion()) {
       const origin = el.getBoundingClientRect();
       pending.current = { to, from: new Map([...el.querySelectorAll<HTMLElement>(CARD)].map((card) => [card.dataset.entity!, visualBox(card, origin)])) };
@@ -108,6 +124,22 @@ export function useCompositionStage(grid: RefObject<HTMLDivElement | null>, inde
       },
       () => {}, // Cancelled: whoever cancelled it has already settled what's shown.
     );
+  }, [index]);
+
+  // A task later, after the re-render in which a scroll box in the new card measures whether it's a tab stop.
+  useEffect(() => {
+    const keep = focus.current;
+    focus.current = null;
+    if (!keep) return;
+    const timer = setTimeout(() => {
+      const el = grid.current;
+      const active = document.activeElement;
+      if (!el || (active && active !== document.body && active.isConnected)) return;
+      const target = cardFor(el, keep.entity)?.querySelectorAll<HTMLElement>(FOCUSABLE)[keep.at];
+      target?.focus({ preventScroll: true });
+      if (!target || document.activeElement !== target) el.closest<HTMLElement>('[data-testid="composition"]')?.focus({ preventScroll: true });
+    });
+    return () => clearTimeout(timer);
   }, [index]);
 
   // Routing reads layout only, so it's cheap to redo after every render; an unchanged result doesn't re-render.

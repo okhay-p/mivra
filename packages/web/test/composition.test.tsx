@@ -178,6 +178,50 @@ describe("Composition motion", () => {
     expect(live().length).toBeGreaterThan(0);
   });
 
+  it("a reset or seek to the step already shown still stops a glide that's landing", () => {
+    show(eventLoopComposition);
+    seek(1);
+    prev(); // Back to step 1, gliding.
+    expect(live().length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Restart" }));
+    expect(live()).toEqual([]);
+    expect(grid().dataset.moving).toBeUndefined();
+    seek(1);
+    prev();
+    fireEvent.keyDown(card(), { key: "Home" });
+    expect(live()).toEqual([]);
+    expect(grid().dataset.moving).toBeUndefined();
+    expect(ids("queue")).toEqual(["timer", "click", "fetch"]);
+  });
+
+  it("keeps focus that was inside a card when the card moves group, or gives it to the artifact when it's gone", async () => {
+    // Every scroll box overflows, so each is a tab stop.
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
+      return this.dataset.testid === "step-scroll" ? 500 : 0;
+    });
+    show(eventLoopComposition);
+    seek(2);
+    const scrollBox = () => grid().querySelector<HTMLElement>('[data-entity="click"] [data-testid="step-scroll"]')!;
+    const before = scrollBox();
+    before.focus();
+    expect(before.tabIndex).toBe(0);
+    // Home from inside the stacked card: it moves back to the queue as a new element.
+    await act(async () => {
+      fireEvent.keyDown(before, { key: "Home" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(ids("queue")).toEqual(["timer", "click", "fetch"]);
+    expect(scrollBox()).not.toBe(before);
+    expect(document.activeElement).toBe(scrollBox());
+    // End hides the card: focus goes to the artifact, not the page.
+    await act(async () => {
+      fireEvent.keyDown(scrollBox(), { key: "End" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(grid().querySelector('[data-entity="click"]')).toBeNull();
+    expect(document.activeElement).toBe(card());
+  });
+
   it("cuts when the learner prefers reduced motion, with the same summary", () => {
     Object.defineProperty(window, "matchMedia", { configurable: true, value: (query: string) => ({ matches: query.includes("reduce") }) });
     show(eventLoopComposition);
