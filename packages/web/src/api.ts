@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type CourseKind, type InterviewContextAnswer, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type CourseKind, type InterviewContextAnswer, type MilestoneDisputeRequest, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -41,6 +41,18 @@ async function submitAnswer(artifactId: string, answer: unknown): Promise<Attemp
     const res = await api.artifacts[":id"].attempts.$post({ param: { id: artifactId }, json: { answer } });
     if (!res.ok) return { ok: false, error: await errorMessage(res) };
     const view = ArtifactView.safeParse(await res.json());
+    return view.success ? { ok: true, view: view.data } : { ok: false, error: "The server sent a reply this page can't display." };
+  } catch {
+    return { ok: false, error: "Can't reach the Mivra server." };
+  }
+}
+
+/** Disputes a project milestone's case or its latest review verdict; answers once the tutor has decided (ADR-016). */
+export async function disputeMilestone(artifactId: string, dispute: MilestoneDisputeRequest): Promise<AttemptResult> {
+  try {
+    const res = await api.artifacts[":id"].disputes.$post({ param: { id: artifactId }, json: dispute });
+    if (!res.ok) return { ok: false, error: await errorMessage(res) };
+    const view = ArtifactView.safeParse(((await res.json()) as { view: unknown }).view);
     return view.success ? { ok: true, view: view.data } : { ok: false, error: "The server sent a reply this page can't display." };
   } catch {
     return { ok: false, error: "Can't reach the Mivra server." };

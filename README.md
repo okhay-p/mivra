@@ -36,7 +36,7 @@ Mivra starts and opens in your browser at <http://127.0.0.1:4096>. The first tim
 | `mivra uninstall` | Stop Mivra and ask whether to delete your data. Run it before `npm uninstall -g @okhay-p/mivra`; `--delete-data` or `--keep-data` answers ahead |
 | `mivra import obsidian <folder>` | Import an Obsidian vault's notes into a running Mivra. Run it again after you've changed the vault to update it. `--name` names the import |
 | `mivra link <course> --run "<command>"` | In your project's folder, link it to a project course, saved in `.mivra.json` (no secrets, safe to commit). `{input}` in the command becomes the path to a file holding a test's input, which also comes on stdin |
-| `mivra check` | Run your program on the current milestone's tests and record the result in a running Mivra. `--timeout <seconds>` sets each run's limit (default 10) |
+| `mivra check` | Run your program on the current milestone's tests, send the files changed since your last passed milestone for a code review, and record the result in a running Mivra. Follows `.gitignore` and never sends `.env` files or keys; `--dry-run` lists exactly what it would send. `--timeout <seconds>` sets each run's limit (default 10) |
 | `mivra link --server <url>` | Use a Mivra on another computer for `link` and `check`, such as one in Docker on a home server. It asks for that Mivra's token and saves both on this computer, never in `.mivra.json`. `mivra link --local` goes back to the Mivra on this computer |
 | `mivra token` | Print this Mivra's token, to paste into `mivra link --server` on another computer. It's also under **Settings → Connect a CLI** |
 

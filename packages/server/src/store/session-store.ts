@@ -10,7 +10,7 @@ export type { RunStatus };
 export type SessionRow = typeof sessions.$inferSelect;
 export type ArtifactRow = typeof artifacts.$inferSelect;
 export type AttemptRow = typeof attempts.$inferSelect;
-export type EvidenceRow = Pick<AttemptRow, "id" | "concept" | "correct" | "createdAt">;
+export type EvidenceRow = Pick<AttemptRow, "id" | "concept" | "correct" | "createdAt"> & Partial<Pick<AttemptRow, "judge">>;
 export type MemoryRow = typeof memories.$inferSelect;
 /** The imported note a memory was drawn from. */
 export type MemorySource = { noteId: string; importId: string; importName: string; path: string; title: string };
@@ -82,6 +82,25 @@ function ownedSessionIds(db: Pick<Db, "select">, id: string): string[] {
     .all()
     .map((row) => row.id);
   return [id, ...lessonSessions];
+}
+
+type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
+
+/** Inserts or replaces an artifact's attempt by one judge, keeping its id. */
+function replaceIn(
+  tx: Tx,
+  input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string | null; judge: AttemptRow["judge"] },
+  createdAt = new Date(),
+): AttemptRow {
+  const existing = tx.select({ id: attempts.id }).from(attempts).where(and(eq(attempts.artifactId, input.artifactId), eq(attempts.judge, input.judge))).get();
+  const values = { answer: input.answer, grade: input.grade, correct: input.correct, concept: input.concept ?? null, createdAt };
+  if (existing) {
+    tx.update(attempts).set(values).where(eq(attempts.id, existing.id)).run();
+    return { id: existing.id, artifactId: input.artifactId, sessionId: input.sessionId, judge: input.judge, ...values };
+  }
+  const row = { id: randomUUID(), artifactId: input.artifactId, sessionId: input.sessionId, judge: input.judge, ...values };
+  tx.insert(attempts).values(row).run();
+  return row;
 }
 
 export function createSessionStore(db: Db, clock: () => Date = () => new Date()) {
@@ -588,14 +607,32 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       return row && { ...row.artifact, runStatus: row.runStatus };
     },
 
+    /** The learner's attempt as the deterministic grader judged it (for a milestone, its latest check). */
     findAttempt(artifactId: string): AttemptRow | undefined {
-      return db.select().from(attempts).where(eq(attempts.artifactId, artifactId)).get();
+      return db.select().from(attempts).where(and(eq(attempts.artifactId, artifactId), eq(attempts.judge, "grader"))).get();
+    },
+
+    /** A project milestone's latest review verdict: the attempt a model judged (ADR-016). */
+    findReview(artifactId: string): AttemptRow | undefined {
+      return db.select().from(attempts).where(and(eq(attempts.artifactId, artifactId), eq(attempts.judge, "model"))).get();
+    },
+
+    /**
+     * Replaces an artifact's stored spec, as a dispute's outcome does to a milestone (ADR-016). With `dropEvidence`,
+     * its attempts stop counting as evidence (their concept is cleared) but stay to be shown: they judged a spec that
+     * no longer stands (ADR-009).
+     */
+    updateArtifactSpec(id: string, spec: unknown, { dropEvidence = false }: { dropEvidence?: boolean } = {}) {
+      db.transaction((tx) => {
+        tx.update(artifacts).set({ spec }).where(eq(artifacts.id, id)).run();
+        if (dropEvidence) tx.update(attempts).set({ concept: null }).where(eq(attempts.artifactId, id)).run();
+      });
     },
 
     /** The learner's most recent graded attempts across all sessions, newest first. Rowid breaks timestamp ties. */
     listRecentEvidence(limit: number): EvidenceRow[] {
       return db
-        .select({ id: attempts.id, concept: attempts.concept, correct: attempts.correct, createdAt: attempts.createdAt })
+        .select({ id: attempts.id, concept: attempts.concept, correct: attempts.correct, createdAt: attempts.createdAt, judge: attempts.judge })
         .from(attempts)
         .orderBy(desc(attempts.createdAt), desc(sql`rowid`))
         .limit(limit)
@@ -794,10 +831,10 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
     /** Records the learner's single graded attempt. Throws Conflict if one already exists. */
     createAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string | null }): AttemptRow {
       return db.transaction((tx) => {
-        if (tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, input.artifactId)).get()) {
+        if (tx.select({ id: attempts.id }).from(attempts).where(and(eq(attempts.artifactId, input.artifactId), eq(attempts.judge, "grader"))).get()) {
           throw new Conflict("This check has already been answered");
         }
-        const row = { id: randomUUID(), ...input, concept: input.concept ?? null, createdAt: new Date() };
+        const row = { id: randomUUID(), ...input, concept: input.concept ?? null, judge: "grader" as const, createdAt: new Date() };
         tx.insert(attempts).values(row).run();
         return row;
       });
@@ -805,19 +842,29 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
 
     /**
      * Records a repeatable check's latest result (a project milestone's `mivra check`, ADR-016), replacing the one
-     * before it, so the attempt and its evidence are always the latest check.
+     * before it, so the attempt and its evidence are always the latest check. The last check's review goes with it:
+     * a review belongs to the check it read.
      */
     replaceAttempt(input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string | null }): AttemptRow {
       return db.transaction((tx) => {
-        const existing = tx.select({ id: attempts.id }).from(attempts).where(eq(attempts.artifactId, input.artifactId)).get();
-        const values = { answer: input.answer, grade: input.grade, correct: input.correct, concept: input.concept ?? null, createdAt: clock() };
-        if (existing) {
-          tx.update(attempts).set(values).where(eq(attempts.id, existing.id)).run();
-          return { id: existing.id, artifactId: input.artifactId, sessionId: input.sessionId, ...values };
-        }
-        const row = { id: randomUUID(), artifactId: input.artifactId, sessionId: input.sessionId, ...values };
-        tx.insert(attempts).values(row).run();
-        return row;
+        tx.delete(attempts).where(and(eq(attempts.artifactId, input.artifactId), eq(attempts.judge, "model"))).run();
+        return replaceIn(tx, { ...input, judge: "grader" }, clock());
+      });
+    },
+
+    /**
+     * Records a review verdict as the milestone's model-judged attempt, replacing the last, but only while `current`
+     * says the check it read is still the latest (a newer check may have arrived while the model read this one).
+     * Returns undefined if not.
+     */
+    saveReview(
+      input: { artifactId: string; sessionId: string; answer: unknown; grade: unknown; correct: boolean; concept?: string | null },
+      current: (check: AttemptRow | undefined) => boolean,
+    ): AttemptRow | undefined {
+      return db.transaction((tx) => {
+        const check = tx.select().from(attempts).where(and(eq(attempts.artifactId, input.artifactId), eq(attempts.judge, "grader"))).get();
+        if (!current(check)) return undefined;
+        return replaceIn(tx, { ...input, judge: "model" }, clock());
       });
     },
   };

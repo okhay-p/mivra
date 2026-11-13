@@ -10,6 +10,7 @@ const attempt = (concept: string | null, correct: boolean, day = 1): AttemptRow 
   answer: {},
   grade: {},
   correct,
+  judge: "grader",
   concept,
   createdAt: new Date(Date.UTC(2026, 9, day)),
 });

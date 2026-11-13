@@ -49,8 +49,9 @@ describe("the command line", () => {
     expect(parseCommand(["link", "c1", "--run", "./mycc {input}", "--run-output", "./run.sh {output}"])).toEqual({ name: "link", course: "c1", run: "./mycc {input}", runOutput: "./run.sh {output}", local: false });
     expect(() => parseCommand(["link", "--run", "./mycc"])).toThrow(/course's id/);
     expect(() => parseCommand(["link", "c1"])).toThrow(/--run/);
-    expect(parseCommand(["check"])).toEqual({ name: "check", timeoutS: 10 });
-    expect(parseCommand(["check", "--timeout", "2.5"])).toEqual({ name: "check", timeoutS: 2.5 });
+    expect(parseCommand(["check"])).toEqual({ name: "check", timeoutS: 10, dryRun: false });
+    expect(parseCommand(["check", "--timeout", "2.5"])).toEqual({ name: "check", timeoutS: 2.5, dryRun: false });
+    expect(parseCommand(["check", "--dry-run"])).toEqual({ name: "check", timeoutS: 10, dryRun: true });
     expect(() => parseCommand(["check", "--timeout", "0"])).toThrow(UsageError);
     expect(() => parseCommand(["check", "extra"])).toThrow(UsageError);
   });

@@ -56,4 +56,37 @@ test("a project course plans milestones, shows how to check one, and updates whe
   await expect(milestone.getByTestId("milestone-case").nth(1)).toContainText("words: 1");
   // Checked once, so the lesson can be finished even though a case fails (ADR-011: scores never block).
   await expect(lesson.getByRole("button", { name: "Finish lesson" })).toBeEnabled();
+  await expect(milestone.getByTestId("milestone-review-missing")).toContainText("once every case passes");
+
+  // Every case passes with canned answers: the review, a model's verdict shown as one, doesn't approve.
+  const post = (files: { path: string; content: string }[]) =>
+    page.evaluate(
+      async ({ id, files }) => {
+        const token = document.querySelector<HTMLMetaElement>('meta[name="mivra-token"]')!.content;
+        const res = await fetch(`/api/artifacts/${id}/checks`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+          body: JSON.stringify({ results: [{ stdout: "words: 2", exitCode: 0 }, { stdout: "words: 0", exitCode: 0 }], files, source: "git" }),
+        });
+        return res.status;
+      },
+      { id: artifactId, files },
+    );
+  expect(await post([{ path: "main.py", content: "# hardcoded\nimport sys\nprint('words: 2' if sys.stdin.read() else 'words: 0')\n" }])).toBe(201);
+  const review = milestone.getByTestId("milestone-review");
+  await expect(review).toHaveAttribute("data-approved", "false");
+  await expect(review).toContainText("Judged by a model");
+  await expect(milestone.getByTestId("milestone-status")).toContainText("Not yet.");
+  await expect(milestone).toContainText("Sent for review: main.py");
+
+  // The learner disputes the verdict; the tutor looks again (here, it doesn't change its mind).
+  await milestone.getByRole("button", { name: "Dispute this verdict" }).click();
+  await milestone.getByLabel("Why is the verdict wrong?").fill("It reads the input.");
+  await milestone.getByRole("button", { name: "Send dispute" }).click();
+  await expect(milestone.getByTestId("milestone-disputes")).toContainText("Review verdict: upheld");
+
+  // A real solution passes the tests and the review.
+  expect(await post([{ path: "main.py", content: "import sys\nprint(f'words: {len(sys.stdin.read().split())}')\n" }])).toBe(201);
+  await expect(milestone.getByTestId("milestone-status")).toContainText("Milestone passed.");
+  await expect(milestone.getByTestId("milestone-review")).toHaveAttribute("data-approved", "true");
 });

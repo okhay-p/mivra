@@ -95,10 +95,14 @@ export const artifacts = sqliteTable(
   (t) => [index("artifacts_session_idx").on(t.sessionId, t.createdAt), uniqueIndex("artifacts_tool_call_idx").on(t.runId, t.toolCallId)],
 );
 
+export const attemptJudges = ["grader", "model"] as const;
+
 /**
  * A learner's graded answer to a check artifact. One attempt per artifact (the grade reveals the
  * answer). `concept` and `correct` double as the first progress evidence (ADR-006). A project milestone is
  * checked as often as the learner likes: each `mivra check` replaces its attempt, until its lesson is finished.
+ * `judge` says who graded it: the deterministic `grader`, or a `model` reviewing a milestone's code (ADR-016), whose
+ * verdict is a second attempt on the same artifact, so it counts as separate evidence.
  */
 export const attempts = sqliteTable(
   "attempts",
@@ -114,9 +118,10 @@ export const attempts = sqliteTable(
     grade: text("grade", { mode: "json" }).notNull(),
     correct: integer("correct", { mode: "boolean" }).notNull(),
     concept: text("concept"),
+    judge: text("judge", { enum: attemptJudges }).notNull().default("grader"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   },
-  (t) => [uniqueIndex("attempts_one_per_artifact_idx").on(t.artifactId), index("attempts_session_idx").on(t.sessionId, t.createdAt), index("attempts_created_idx").on(t.createdAt)],
+  (t) => [uniqueIndex("attempts_one_per_artifact_idx").on(t.artifactId, t.judge), index("attempts_session_idx").on(t.sessionId, t.createdAt), index("attempts_created_idx").on(t.createdAt)],
 );
 
 export const memoryStatuses = ["pending", "active", "superseded"] as const;
@@ -406,7 +411,7 @@ export const noteTags = sqliteTable(
   (t) => [primaryKey({ columns: [t.noteId, t.tag] }), index("note_tags_tag_idx").on(t.tag)],
 );
 
-export const usageKinds = ["chat", "continuation", "lesson", "distillation", "test"] as const;
+export const usageKinds = ["chat", "continuation", "lesson", "distillation", "review", "test"] as const;
 export const usageStatuses = ["completed", "failed", "cancelled"] as const;
 export const usageBillings = ["api", "subscription"] as const;
 

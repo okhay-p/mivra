@@ -13,7 +13,7 @@ export type Command =
   | { name: "import-obsidian"; folder: string; importName?: string }
   | { name: "link"; course?: string; run?: string; runOutput?: string; server?: string; local: boolean }
   | { name: "token" }
-  | { name: "check"; timeoutS: number }
+  | { name: "check"; timeoutS: number; dryRun: boolean }
   | { name: "uninstall"; deleteData: boolean | undefined }
   | { name: "help" }
   | { name: "version" };
@@ -47,6 +47,7 @@ Commands:
   token                    Print this Mivra's token, for \`mivra link --server\` on another computer
   check                    Run your program on the current milestone's cases and record the result in Mivra
     --timeout <seconds>    Time limit for each run (default: 10)
+    --dry-run              List exactly what would be sent for review, without running or sending anything
   uninstall                Stop Mivra and ask whether to delete its data, before you remove the package
     --delete-data          Delete the data without asking
     --keep-data            Keep the data without asking
@@ -95,6 +96,7 @@ export function parseCommand(argv: string[]): Command {
         server: { type: "string" },
         local: { type: "boolean", default: false },
         timeout: { type: "string" },
+        "dry-run": { type: "boolean", default: false },
         detach: { type: "boolean", default: false },
         open: { type: "boolean", default: true },
         check: { type: "boolean", default: true },
@@ -179,7 +181,7 @@ export function parseCommand(argv: string[]): Command {
         timeoutS = Number(values.timeout);
         if (!Number.isFinite(timeoutS) || timeoutS < 1 || timeoutS > 600) throw new UsageError(`--timeout needs a number of seconds from 1 to 600, not "${values.timeout}".`);
       }
-      return { name: "check", timeoutS };
+      return { name: "check", timeoutS, dryRun: values["dry-run"] };
     }
     case "uninstall":
       tooMany(1);

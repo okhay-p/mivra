@@ -22,8 +22,8 @@ export interface CheckDefinition {
   grade(spec: unknown, answer: unknown): { correct: boolean; grade: unknown };
   /** Progress label for this attempt, if it counts as evidence. A skipped question returns undefined. */
   concept?(spec: unknown, answer: unknown): string | undefined;
-  /** What the model sees about the learner's attempt (or its absence) on later turns. */
-  describeAttempt(spec: unknown, attempt: AttemptRow | undefined): unknown;
+  /** What the model sees about the learner's attempt (or its absence) on later turns, and a milestone's review. */
+  describeAttempt(spec: unknown, attempt: AttemptRow | undefined, review?: AttemptRow): unknown;
   /**
    * Answered as often as the learner likes, each answer replacing the last, through the kind's own route rather than
    * POST /artifacts/{id}/attempts: a project milestone, checked with `mivra check` (ADR-016).
@@ -43,7 +43,7 @@ export interface ArtifactKindDefinition {
    * The client's view of an artifact. Must leave out private fields (e.g. a check's answer key);
    * the registry also validates every view against the strict protocol ArtifactView schema.
    */
-  toView(artifact: { id: string; createdAt: Date; spec: unknown; attempt?: AttemptRow }): ArtifactView;
+  toView(artifact: { id: string; createdAt: Date; spec: unknown; attempt?: AttemptRow; review?: AttemptRow }): ArtifactView;
   check?: CheckDefinition;
   /**
    * Turns validated tool input into the spec to store, e.g. by running a reference solution to compute

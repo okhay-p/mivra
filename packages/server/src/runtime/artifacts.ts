@@ -89,7 +89,7 @@ export function artifactView(artifactId: string, registry: CapabilityRegistry, s
   const row = store.findArtifact(artifactId);
   const definition = row && registry.artifactKind(row.kind);
   if (!row || !definition) return undefined;
-  return registry.viewOf(definition, { id: row.id, createdAt: row.createdAt, spec: row.spec, attempt: store.findAttempt(row.id) });
+  return registry.viewOf(definition, { id: row.id, createdAt: row.createdAt, spec: row.spec, attempt: store.findAttempt(row.id), review: store.findReview(row.id) });
 }
 
 /**
@@ -163,7 +163,7 @@ export function withAttemptResults(conversation: UIMessage[], registry: Capabili
       if (!artifactPart?.artifactId || !check) return part;
       const row = store.findArtifact(artifactPart.artifactId);
       if (!row) return part;
-      const result = check.describeAttempt(row.spec, store.findAttempt(row.id));
+      const result = check.describeAttempt(row.spec, store.findAttempt(row.id), store.findReview(row.id));
       return { ...artifactPart.part, output: { ...(artifactPart.part.output as object), ...(result as object) } } as Part;
     }),
   }));
