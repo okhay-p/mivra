@@ -48,8 +48,8 @@ const run = (dataDir: string, cwd: string, args: string[], input?: string) =>
     child.stdin?.end(input);
     let stdout = "";
     let stderr = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr!.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
     child.once("error", reject);
     child.once("close", (code) => resolve({ code, stdout, stderr }));
   });
@@ -444,6 +444,14 @@ describe("a project course on another computer's Mivra", () => {
     expect(linked.stderr).toContain("redirects to");
     expect(elsewhere).toEqual([]);
     expect(existsSync(join(clientData, "credentials.json"))).toBe(false);
+    // An address that redirects everything, as plain HTTP to HTTPS would.
+    const everything = createServer((req, res) => res.writeHead(301, { location: `https://127.0.0.1:${targetPort}${req.url}` }).end());
+    const everythingPort = await freePort();
+    await new Promise<void>((resolve) => everything.listen(everythingPort, "127.0.0.1", resolve));
+    onTestFinished(() => {
+      everything.close();
+    });
+    expect((await run(clientData, repo, ["link", "--server", `http://127.0.0.1:${everythingPort}`], token)).stderr).toContain(`redirects to https://127.0.0.1:${targetPort}/api/health`);
 
     // A saved server whose Host check refuses this name.
     writeFileSync(join(clientData, "credentials.json"), JSON.stringify({ keys: {}, server: { url: `http://127.0.0.1:${port}`, token } }));

@@ -71,10 +71,7 @@ function client({ url, token, remote }: { url: string; token: string; remote: bo
       throw new ProjectError(remote ? `Couldn't reach Mivra at ${url}. Check it's running and that this computer can reach it.` : `Couldn't reach Mivra at ${url}.`);
     }
     if (res.ok) return res.json() as Promise<unknown>;
-    if (res.status >= 300 && res.status < 400) {
-      const location = res.headers.get("location");
-      throw new ProjectError(`${url} redirects${location ? ` to ${location}` : ""}, which Mivra doesn't follow. Use Mivra's own address: \`mivra link --server <url>\`.`);
-    }
+    if (res.status >= 300 && res.status < 400) throw redirected(url, res);
     const message = ((await res.json().catch(() => ({}))) as { error?: unknown }).error;
     if (remote && res.status === 401) throw new ProjectError(`Mivra at ${url} didn't accept the token. ${relink}`);
     if (remote && res.status === 403 && message === "Host not allowed") {
@@ -89,14 +86,22 @@ async function connect(dataDir: string) {
   return { url: found.url, remote: found.remote, call: client(found) };
 }
 
+/** A redirect isn't followed with the token, so name where it goes instead. */
+const redirected = (url: string, res: Response) => {
+  const location = res.headers.get("location");
+  return new ProjectError(`${url} redirects${location ? ` to ${location}` : ""}, which Mivra doesn't follow. Use Mivra's own address: \`mivra link --server <url>\`.`);
+};
+
 /** Says whether there's a Mivra at the address, without the token, so a wrong address isn't mistaken for a wrong token. */
 async function isMivra(url: string): Promise<boolean> {
+  let res: Response;
   try {
-    const res = await fetch(`${url}/api/health`, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
-    return res.ok && ((await res.json()) as { ok?: unknown }).ok === true;
+    res = await fetch(`${url}/api/health`, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
   } catch {
     return false;
   }
+  if (res.status >= 300 && res.status < 400) throw redirected(url, res);
+  return res.ok && ((await res.json().catch(() => ({}))) as { ok?: unknown }).ok === true;
 }
 
 /**
