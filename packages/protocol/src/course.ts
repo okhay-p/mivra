@@ -200,7 +200,7 @@ export const SyllabusInput = z
       .max(COURSE_TITLE_MAX)
       .optional()
       .catch(undefined)
-      .describe('A short name for the course, 2-5 words, shown in the sidebar, e.g. "Discrete Math: Induction". Name what the syllabus covers, not the request.'),
+      .describe('A short name for the course, 2-5 words, shown in the sidebar, e.g. "Discrete Math: Induction". Name the scope of the whole syllabus, every topic in it, rather than one part of it or the learner\'s request word for word.'),
     icon: CourseIcon.optional()
       .catch(undefined)
       .describe("The subject icon that best fits the course: sigma = maths, calculator = arithmetic or accounting, code/terminal = programming, cpu = hardware, flask-conical = chemistry, atom = physics, dna = biology, leaf = ecology, telescope = astronomy, globe = geography, landmark = history, book-open = literature, pen-tool = writing, languages = languages, palette = art, brain = psychology, users = sociology, chart-line = economics or statistics, briefcase = business, scale = law, stethoscope/heart-pulse = medicine, wrench = engineering, dumbbell = sport."),

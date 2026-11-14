@@ -51,6 +51,9 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(titled.locator('svg[data-icon="sigma"]')).toBeVisible();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Calculus for ML");
   await expect(page.locator("[data-session-id]").filter({ hasText: goal.slice(0, 60) })).toHaveCount(0);
+  // The title is the only title: the goal shows once, labelled, inside the syllabus, not in the course bar (#133).
+  await expect(course.getByText(goal)).toHaveCount(1);
+  await expect(course.getByRole("region", { name: "Syllabus" })).toContainText(`Your goal: ${goal}`);
 
   // The first lesson is written when the learner reaches it, and becomes the page.
   await course.getByRole("button", { name: "Start lesson 1" }).click();
@@ -60,13 +63,13 @@ test("a course starts from the first screen, runs the placement interview and wr
   await expect(check).toBeVisible();
   await expect(lesson.getByRole("button", { name: "Finish lesson" })).toBeDisabled();
 
-  // On desktop the goal truncates beside its status and actions instead of pushing them onto a second row.
+  // On desktop the status and the actions share one row.
   const top = async (box: Promise<{ y: number; height: number } | null>) => {
     const b = await box;
     return b ? b.y + b.height / 2 : -100;
   };
   await expect
-    .poll(async () => Math.abs((await top(course.getByText(goal).first().boundingBox())) - (await top(course.getByRole("button", { name: "Tutor" }).boundingBox()))))
+    .poll(async () => Math.abs((await top(course.getByText("In progress").boundingBox())) - (await top(course.getByRole("button", { name: "Tutor" }).boundingBox()))))
     .toBeLessThan(8);
 
   // Ctrl+K opens the tutor. The interview is folded away, and its replies can't be added to the lesson.
@@ -153,8 +156,9 @@ test("a course starts from the first screen, runs the placement interview and wr
   // An earlier lesson isn't the end of the course, and there's always a way back (also on a phone).
   await expect(earlier.getByText("You've reached the end of the syllabus.")).toHaveCount(0);
   await page.setViewportSize({ width: 390, height: 800 });
-  // On a phone the goal keeps a readable width; the course bar's actions wrap below it.
-  await expect.poll(async () => (await course.getByText(goal).first().boundingBox())?.width ?? 0).toBeGreaterThan(150);
+  // On a phone the course bar still shows its status and actions.
+  await expect(course.getByText("In progress")).toBeInViewport();
+  await expect(course.getByRole("button", { name: "Tutor" })).toBeInViewport();
   await page.getByRole("button", { name: "Back to lesson 2: Chain rule" }).click();
   await expect(page.getByRole("article", { name: "The chain rule" })).toBeVisible();
   await expect(page.getByText("You're looking at an earlier lesson.")).toHaveCount(0);

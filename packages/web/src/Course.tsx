@@ -101,7 +101,10 @@ export function StartCourseForm({ onStarted, onFreeChat }: { onStarted: (started
 
 const sourceLabel: Record<KnownSource, string> = { memory: "From memory", test: "From the test", guess: "Guessed" };
 
-/** The course's goal, where it stands, and its syllabus once written. */
+/**
+ * Where the course stands, and its syllabus once written. The page header carries the course's title; the goal the
+ * learner typed shows only inside the syllabus, labelled as such, so it never reads as a second title (#133).
+ */
 export function CourseBar({ course, children, onUndo }: { course: CourseView; children?: ReactNode; onUndo?: () => Promise<string | undefined> }) {
   const [open, setOpen] = useState(false);
   const [undoing, setUndoing] = useState(false);
@@ -112,8 +115,6 @@ export function CourseBar({ course, children, onUndo }: { course: CourseView; ch
     <Collapsible open={open} onOpenChange={setOpen} className="bg-sunken/60 shrink-0 border-b" aria-label="Course" role="region">
       <div className="mx-auto flex max-w-3xl items-center gap-x-2 gap-y-1 px-4 py-2 text-sm max-sm:flex-wrap">
         <GraduationCap className="text-muted-foreground size-4 shrink-0" aria-hidden />
-        {/* On a phone the goal keeps a readable width and the actions wrap below it; wider screens truncate the goal instead. */}
-        <span className="min-w-0 truncate font-medium max-sm:min-w-48">{course.goal}</span>
         <Badge variant="outline" className="border-border-strong bg-card shrink-0 font-mono text-[0.6875rem] font-medium tracking-[0.06em] uppercase">
           {course.status === "interviewing" ? "Placement interview" : course.status === "complete" ? "Complete" : "In progress"}
         </Badge>
@@ -166,6 +167,9 @@ export function CourseBar({ course, children, onUndo }: { course: CourseView; ch
               // It scrolls, so the keyboard can reach it.
               tabIndex={0}
             >
+              <p className="text-muted-foreground wrap-anywhere">
+                <span className="text-foreground font-medium">Your goal:</span> {course.goal}
+              </p>
               {syllabus.reason && syllabus.version > 1 && (
                 <p className="text-muted-foreground" role="status">
                   Version {syllabus.version}
