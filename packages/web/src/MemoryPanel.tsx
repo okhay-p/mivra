@@ -1,4 +1,4 @@
-import type { MemoryKind, MemoryView } from "@mivra/protocol";
+import type { CourseSummaryView, MemoryKind, MemoryView } from "@mivra/protocol";
 import { useEffect, useId, useState, type FormEvent } from "react";
 import { Brain } from "lucide-react";
 import { Empty, EmptyContent, EmptyHeader, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
@@ -9,7 +9,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
-import { deleteImportedMemories, deleteMemory, editMemory, listMemories } from "./api.js";
+import { deleteImportedMemories, deleteMemory, editMemory, listCourses, listMemories } from "./api.js";
+import { CourseIcon } from "./CourseIcon.js";
 import { ExportVault } from "./ExportVault.js";
 import { EYEBROW, PAPER_SHEET, PAPER_SHEET_HEADER, PAPER_SHEET_TITLE, SEGMENTED, segment } from "./paper.js";
 
@@ -31,9 +32,13 @@ const matches = (filter: Filter, memory: MemoryView) => filter === "all" || (fil
 const basisLabel = (memory: MemoryView) =>
   memory.basis === "import" ? (memory.source ? `From your note ${memory.source.title}` : "From your notes") : memory.basis === "wrong_answer" ? "From a wrong answer" : "From chat";
 
-/** Everything Mivra has inferred about the learner, for them to check, correct or delete (ADR-009). */
-export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+/**
+ * Everything Mivra has inferred about the learner, for them to check, correct or delete (ADR-009), and their courses,
+ * which come from the courses themselves rather than from memories (issue #135).
+ */
+export function MemoryPanel({ open, onOpenChange, onOpenCourse }: { open: boolean; onOpenChange: (open: boolean) => void; onOpenCourse: (sessionId: string) => void }) {
   const [memories, setMemories] = useState<MemoryView[]>();
+  const [courses, setCourses] = useState<CourseSummaryView[]>();
   const [error, setError] = useState<string>();
   const [filter, setFilter] = useState<Filter>("all");
   const fromNotes = memories?.filter((m) => m.basis === "import").length ?? 0;
@@ -43,13 +48,16 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
     if (!open) return;
     let stale = false;
     setMemories(undefined);
+    setCourses(undefined);
     setFilter("all");
     const load = () => {
       setError(undefined);
-      void listMemories().then((result) => {
+      void Promise.all([listMemories(), listCourses()]).then(([memoryResult, courseResult]) => {
         if (stale) return;
-        if (result.ok) setMemories(result.value);
-        else setError(result.error);
+        if (memoryResult.ok && courseResult.ok) {
+          setMemories(memoryResult.value);
+          setCourses(courseResult.value);
+        } else setError(memoryResult.ok ? (courseResult.ok ? undefined : courseResult.error) : memoryResult.error);
       });
     };
     load();
@@ -79,7 +87,27 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
         <div className="flex flex-col gap-5 px-5 py-5" aria-live="polite">
           {error && <p className="text-destructive text-sm">{error}</p>}
           {!memories && !error && <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status"><Spinner aria-hidden="true" /> Loading memories…</p>}
-          {memories?.length === 0 && (
+          {memories && courses && courses.length > 0 && (
+            <section aria-labelledby="memory-courses" className="flex flex-col gap-1.5">
+              <h2 id="memory-courses" className={EYEBROW}>Courses</h2>
+              <ul className="flex flex-col gap-0.5">
+                {courses.map((course) => (
+                  <CourseEntry
+                    key={course.id}
+                    course={course}
+                    onOpen={() => {
+                      onOpenCourse(course.sessionId);
+                      onOpenChange(false);
+                    }}
+                  />
+                ))}
+              </ul>
+              {memories.length === 0 && (
+                <p className="text-muted-foreground border-t pt-4 text-sm">No memories yet. As you learn, Mivra can remember your goals, preferences and concepts to revisit.</p>
+              )}
+            </section>
+          )}
+          {memories?.length === 0 && courses?.length === 0 && (
             <Empty className="bg-sunken/50 border border-dashed p-6 md:p-6">
               <EmptyHeader>
                 <EmptyMedia variant="icon"><Brain aria-hidden="true" /></EmptyMedia>
@@ -104,7 +132,7 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
             SECTIONS.map(({ kind, title }) => {
               const entries = shown.filter((m) => m.kind === kind);
               return entries.length > 0 ? (
-                <section key={kind} className="flex flex-col gap-1.5 [section+&]:border-t [section+&]:pt-4">
+                <section key={kind} className="flex flex-col gap-1.5 [section+&]:border-t [section+&]:pt-4 [section+div+&]:border-t [section+div+&]:pt-4">
                   <h2 className={EYEBROW}>{title}</h2>
                   <ul className="flex flex-col gap-0.5">
                     {entries.map((memory) => (
@@ -127,6 +155,40 @@ export function MemoryPanel({ open, onOpenChange }: { open: boolean; onOpenChang
         </div>
       </SheetContent>
     </Sheet>
+  );
+}
+
+const STATUS_LABEL = { interviewing: "Setting up", active: "In progress", complete: "Complete" } as const;
+
+/** One course: where it stands, and a way back into it. */
+function CourseEntry({ course, onOpen }: { course: CourseSummaryView; onOpen: () => void }) {
+  const unit = course.kind === "project" ? "milestones" : "lessons";
+  return (
+    <li className="hover:bg-sunken focus-within:bg-sunken -mx-2.5 flex items-start gap-3 rounded-lg px-2.5 py-2.5 text-[0.95rem] leading-snug transition-colors">
+      <CourseIcon icon={course.icon} className="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden="true" />
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <p className="wrap-anywhere">{course.title}</p>
+        <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1 text-[0.8125rem]">
+          <Badge variant="outline">{STATUS_LABEL[course.status]}</Badge>
+          {course.status !== "interviewing" && (
+            <span>
+              {course.lessonsFinished} of {course.topicCount} {unit} finished
+            </span>
+          )}
+          {course.completedAt && <span className="font-mono text-[0.72rem]">{new Date(course.completedAt).toLocaleDateString()}</span>}
+        </div>
+      </div>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="h-7 shrink-0 bg-card dark:bg-card border-border-strong dark:border-border-strong hover:bg-sunken dark:hover:bg-sunken"
+        aria-label={`${course.status === "interviewing" ? "Continue setting up" : "Open"} ${course.title}`}
+        onClick={onOpen}
+      >
+        {course.status === "interviewing" ? "Continue" : "Open"}
+      </Button>
+    </li>
   );
 }
 

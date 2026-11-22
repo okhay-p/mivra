@@ -23,7 +23,8 @@ import { Conflict, type ReplyMetadata, type RunStatus, type SessionStore } from 
 import { redactForClient, withAttemptResults } from "./artifacts.js";
 import type { CapabilityRegistry } from "./capabilities.js";
 import { createContinuationStream } from "./continuation-stream.js";
-import { MAX_PLACEMENT_QUESTIONS, courseContext } from "./course-context.js";
+import { MAX_PLACEMENT_QUESTIONS, courseContext, rememberNudge } from "./course-context.js";
+import { courseSummaries } from "./course-summaries.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_EVIDENCE, MAX_IMPORTED_MEMORIES, MAX_MEMORIES, learnerContext } from "./learner-context.js";
@@ -37,6 +38,7 @@ export const INSTRUCTIONS = [
   "You have tools that show the learner interactive artifacts inline in the chat. Refer to them as inline cards, not as a panel. After teaching an idea, use ask_multiple_choice to check understanding, or ask_code_exercise when the learner should practise writing a little JavaScript or Python. Use show_algorithm_trace to watch an algorithm's state change over a sequence, show_code_walkthrough to step through code that isn't about a sequence (a plain function, a React render and its updates), show_graph for graphs, trees, component hierarchies and algorithms that move over them, show_composition for where things are and how they move between containers (names sharing one object, values passing through pipeline stages, tasks moving between a queue and a stack), show_set_diagram for operations on up to 3 sets, show_table for truth tables, relation matrices and other tabular working, and show_worked_steps for proofs, induction and combinatorics working.",
   "When you ask a check, don't reveal or hint at the answer in your reply; the learner answers in the UI. Once the reply finishes and all its checks are answered, Mivra invokes you automatically with the graded tool results. Briefly acknowledge the result and carry the lesson forward; do not repeat the explanation already shown on the graded card.",
   "Code prediction is the one exception to teaching before you check, and only when predicting will help; most teaching needn't start with one. Show a short snippet in a fenced code block, then ask one ask_multiple_choice check on what it returns, prints or displays, and end the reply there: don't explain the answer, show a walkthrough or trace of the snippet, or give its output. The answer, explanation and option feedback go only in the check's own fields. When the graded result comes back, acknowledge it briefly, then explain the same snippet with show_code_walkthrough (or show_algorithm_trace if it moves over a sequence) rather than repeating the card's explanation or asking the same check again. Keep the walkthrough's code the same as the snippet; if you must correct the snippet, say what you changed and why.",
+  "Memory: Mivra remembers the learner across sessions only through what you save with remember, so save as you go rather than leaving it for later. Save a memory when the learner states a goal, deadline or exam; when they say how they like to learn (pace, more examples, less notation); when they get the same concept wrong more than once (a misconception, named by the check's concept so it links to the wrong answer); and when a lesson or course ends with a takeaway worth keeping. Keep each to one sentence about the learner. Don't save what Mivra already knows (their record, memories and courses), small talk, or anything that gives away an unanswered check; to correct or update a memory, pass its id as replaces.",
   RENDERING_RULES,
 ].join("\n\n");
 
@@ -129,8 +131,17 @@ const defaultAssembleContext =
         documents?.excerpts,
       ),
       instructions: [
-        learnerContext(store.listRecentEvidence(MAX_EVIDENCE), store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES), imported ? notes.listImports() : [], undefined, store.listImportedMemoriesForModel(MAX_IMPORTED_MEMORIES)),
+        learnerContext(
+          store.listRecentEvidence(MAX_EVIDENCE),
+          store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES),
+          imported ? notes.listImports() : [],
+          undefined,
+          store.listImportedMemoriesForModel(MAX_IMPORTED_MEMORIES),
+          // This session's own course is in its course context.
+          lessons ? courseSummaries(store, lessons).filter((c) => c.sessionId !== sessionId) : [],
+        ),
         courseContext(store, sessionId, lessons && lessonId ? { lessons, lessonId, registry } : undefined),
+        lessons && rememberNudge(store, lessons, sessionId),
         imported?.rules,
         documents?.rules,
       ]

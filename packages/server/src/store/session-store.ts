@@ -227,6 +227,27 @@ export function createSessionStore(db: Db, clock: () => Date = () => new Date())
       return db.select().from(courses).where(eq(courses.sessionId, sessionId)).get();
     },
 
+    /** Every course with its session's title, most recently created first. */
+    listCourses(): (CourseRow & { title: string })[] {
+      return db
+        .select({ course: courses, title: sessions.title })
+        .from(courses)
+        .innerJoin(sessions, eq(sessions.id, courses.sessionId))
+        .orderBy(desc(courses.createdAt), desc(sql`${courses}.rowid`))
+        .all()
+        .map((row) => ({ ...row.course, title: row.title }));
+    },
+
+    /** When the session's latest completed reply started, if it has one. */
+    lastCompletedRunStartedAt(sessionId: string): Date | undefined {
+      return db
+        .select({ startedAt: runs.startedAt })
+        .from(runs)
+        .where(and(eq(runs.sessionId, sessionId), eq(runs.status, "completed")))
+        .orderBy(desc(runs.startedAt))
+        .get()?.startedAt;
+    },
+
     /** The course's newest syllabus version, if one has been written. */
     latestSyllabus(courseId: string): SyllabusVersion | undefined {
       const row = db.select().from(syllabusVersions).where(eq(syllabusVersions.courseId, courseId)).orderBy(desc(syllabusVersions.version)).get();

@@ -64,6 +64,9 @@ const syllabus = {
   known: [{ concept: "derivative", source: "test", note: "Answered correctly." }],
 };
 
+/** A one-topic plan, for a course whose goal says onetopic: finishing its first lesson completes it (issue #135). */
+const oneTopicSyllabus = { ...syllabus, title: "Limits in one go", topics: syllabus.topics.slice(0, 1) };
+
 /** A project course's plan (ADR-016): each topic is a milestone. */
 const projectSyllabus = {
   title: "A word counter",
@@ -823,7 +826,7 @@ function nextStep(prompt: PromptMessage[], effort?: string): Step {
     if (history.includes("placementcourse")) {
       return prompt.slice(lastUser).some((m) => m.role === "tool")
         ? { text: "Your syllabus is ready." }
-        : { tool: "write_syllabus", input: history.includes("longsyllabus") ? longSyllabus : syllabus };
+        : { tool: "write_syllabus", input: history.includes("longsyllabus") ? longSyllabus : history.includes("onetopic") ? oneTopicSyllabus : syllabus };
     }
     const result = /learnerResult\\*":\\*"([a-z ]+)/.exec(JSON.stringify(prompt))?.[1];
     return { text: `Lesson continued after ${result ?? "unknown"}.` };
