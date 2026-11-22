@@ -16,7 +16,7 @@ export const coreMemory: Plugin = {
       ({ sessionId, runId, store }) =>
         tool({
           description:
-            "Save something lasting about the learner for future sessions: a goal, a preference, or a misconception. Only save what will still matter later, and not what is already known. To correct a known memory, pass its id as replaces.",
+            "Save something about the learner for future sessions, as soon as you learn it: a goal, deadline or exam; a preference for how they learn; a misconception they showed more than once; or a takeaway from a finished lesson or course, saved as a goal or preference. Don't repeat what Mivra already knows about them. To correct or update a known memory, pass its id as replaces.",
           inputSchema: RememberInput,
           execute: async (input) => {
             // The server, not the model, decides what supports a misconception.

@@ -264,3 +264,24 @@ export const CourseView = z
   })
   .strict();
 export type CourseView = z.infer<typeof CourseView>;
+
+/**
+ * A course as the memory panel lists it (issue #135): derived from the course, its syllabus and lessons, never stored
+ * as a memory (ADR-009). `title` is the course session's title, which the tutor or the learner set.
+ */
+export const CourseSummaryView = z
+  .object({
+    id: z.string(),
+    sessionId: z.string(),
+    title: z.string(),
+    icon: CourseIcon.nullable(),
+    kind: CourseKind,
+    status: CourseStatus,
+    /** Topics in the latest syllabus with a finished lesson; 0 while there is no syllabus. */
+    lessonsFinished: z.number().int().nonnegative(),
+    topicCount: z.number().int().nonnegative(),
+    /** When the course was completed; null unless it is complete. */
+    completedAt: z.string().datetime().nullable(),
+  })
+  .strict();
+export type CourseSummaryView = z.infer<typeof CourseSummaryView>;

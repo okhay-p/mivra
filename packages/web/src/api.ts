@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type CourseKind, type InterviewContextAnswer, type MilestoneDisputeRequest, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, CourseLessonsView, CourseSummaryView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type CourseKind, type InterviewContextAnswer, type MilestoneDisputeRequest, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -102,6 +102,13 @@ export const listMemories = () =>
   request(
     () => api.memories.$get(),
     async (res) => MemoryView.array().parse(await res.json()),
+  );
+
+/** Every course, for the memory panel (issue #135). */
+export const listCourses = () =>
+  request(
+    () => api.courses.$get(),
+    async (res) => CourseSummaryView.array().parse(await res.json()),
   );
 
 export const editMemory = (id: string, text: string) =>

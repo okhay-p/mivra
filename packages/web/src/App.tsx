@@ -180,7 +180,7 @@ export function App() {
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenUsage={() => setUsageOpen(true)}
       />
-      <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} />
+      <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} onOpenCourse={(id) => showPane({ kind: "session", id })} />
       <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} onOpenGraph={setGraphImportId} />
       <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
       <SettingsPanel open={settingsOpen} onOpenChange={setSettingsOpen} />

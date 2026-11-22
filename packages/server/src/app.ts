@@ -8,6 +8,7 @@ import {
   ConceptGraph,
   CourseLessonsView,
   CourseIcon,
+  CourseSummaryView,
   DistillationView,
   CourseView,
   DocumentView,
@@ -50,6 +51,7 @@ import { coreMemory } from "./plugins/core-memory.js";
 import { presentMessages } from "./runtime/artifacts.js";
 import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
+import { courseSummaries, type CourseSummary } from "./runtime/course-summaries.js";
 import { courseLessons, createLessonGenerator, lessonRevision, lessonView, reconcileCompletion } from "./runtime/lessons.js";
 import { createMilestoneReviewer } from "./runtime/milestone-review.js";
 import { currentMilestone, disputeMilestone, recordMilestoneCheck } from "./runtime/milestones.js";
@@ -231,6 +233,15 @@ const startCourse = createRoute({
       content: { "application/json": { schema: z.object({ course: CourseView, session: Session }) } },
     },
     400: errorResponse("Invalid goal"),
+  },
+});
+
+const listCourses = createRoute({
+  method: "get",
+  path: "/courses",
+  description: "Every course, most recently started first, as the memory panel lists it (issue #135): derived from the courses, their syllabuses and lessons, not stored as memories.",
+  responses: {
+    200: { description: "The learner's courses", content: { "application/json": { schema: z.array(CourseSummaryView) } } },
   },
 });
 
@@ -1200,6 +1211,21 @@ function toCourseJson(row: CourseRow, store: SessionStore, lessons: LessonStore)
   };
 }
 
+function toCourseSummaryJson(summary: CourseSummary): CourseSummaryView {
+  return {
+    id: summary.id,
+    sessionId: summary.sessionId,
+    title: summary.title,
+    // Only a name from the fixed list leaves the server, whatever the column holds.
+    icon: CourseIcon.safeParse(summary.icon).data ?? null,
+    kind: summary.kind,
+    status: summary.status,
+    lessonsFinished: summary.topics.filter((t) => t.finished).length,
+    topicCount: summary.topics.length,
+    completedAt: summary.completedAt?.toISOString() ?? null,
+  };
+}
+
 /** Leaves out everything a held memory says: it could give away an unanswered check. */
 function toMemoryJson(row: MemoryRow & { held: boolean; source: MemorySource | null }): MemoryView {
   return {
@@ -1463,6 +1489,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       const { course, session } = store.createCourse(goal, kind);
       return c.json({ course: toCourseJson(course, store, lessons), session: toSessionJson({ ...session, courseId: course.id }) }, 201);
     })
+    .openapi(listCourses, (c) => c.json(courseSummaries(store, lessons).map(toCourseSummaryJson), 200))
     .openapi(getCourse, (c) => {
       const course = store.findCourseBySession(c.req.valid("param").id);
       if (!course) return c.json({ error: "This session isn't a course" }, 404);
