@@ -302,6 +302,49 @@ function matchedConceptKeys(knowledge: KnowledgeStore, terms: string[], hintConc
   return matched.sort((a, b) => b.words - a.words).map((m) => m.key);
 }
 
+const CONCEPT_BOUNDARY = /[\p{L}\p{N}_+#]/u;
+
+/** Whether `needle` (a `conceptKey`) appears in `haystack` (NFKC-lowercased, single-spaced) on token boundaries. */
+function containsConceptPhrase(haystack: string, needle: string): boolean {
+  if (!needle) return false;
+  let from = 0;
+  while (from <= haystack.length - needle.length) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx < 0) return false;
+    const before = idx > 0 ? haystack[idx - 1]! : "";
+    const after = idx + needle.length < haystack.length ? haystack[idx + needle.length]! : "";
+    if ((!before || !CONCEPT_BOUNDARY.test(before)) && (!after || !CONCEPT_BOUNDARY.test(after))) return true;
+    from = idx + 1;
+  }
+  return false;
+}
+
+/**
+ * Concept keys that appear in at least one of `texts`, multi-word concepts first. Matches either by exact
+ * boundary-delimited concept phrase (preserving short/symbol names such as "Go", "C++", "C#", "R") or when all
+ * topic words of a concept appear in one text. Reads `knowledge.conceptNodes()` once across all texts without
+ * letting words from separate strings combine.
+ */
+export function matchConceptKeysInText(knowledge: KnowledgeStore, ...texts: string[]): string[] {
+  const entries = texts
+    .map((text) => ({
+      normalized: conceptKey(text),
+      termSet: new Set(queryTerms(text, isTopicWord)),
+    }))
+    .filter((entry) => entry.normalized.length > 0);
+  if (entries.length === 0) return [];
+  const matched: { key: string; words: number }[] = [];
+  for (const node of knowledge.conceptNodes()) {
+    const words = queryTerms(node.key, isTopicWord);
+    const hit = entries.some(
+      ({ normalized, termSet }) =>
+        containsConceptPhrase(normalized, node.key) || (words.length > 0 && words.every((w) => termSet.has(w))),
+    );
+    if (hit) matched.push({ key: node.key, words: words.length || node.key.split(" ").length });
+  }
+  return matched.sort((a, b) => b.words - a.words).map((m) => m.key);
+}
+
 /**
  * The excerpts that match `text`, best notes first; empty without a real match. When FTS5 matches fewer than
  * CONCEPT_FALLBACK_THRESHOLD chunks and a KnowledgeStore is provided, supplements with lead chunks of notes

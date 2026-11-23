@@ -23,7 +23,7 @@ import type { CapabilityRegistry } from "./capabilities.js";
 import { errorText } from "./errors.js";
 import { withDocumentExcerpts } from "./document-context.js";
 import { MAX_CONCEPTS, MAX_CONCEPT_EDGES, MAX_EVIDENCE, MAX_IMPORTED_MEMORIES, MAX_MEMORIES, dataRows, deriveConceptState, learnerContext } from "./learner-context.js";
-import { lessonNoteContext, type NoteContext } from "./note-context.js";
+import { lessonNoteContext, matchConceptKeysInText, type NoteContext } from "./note-context.js";
 import { RENDERING_RULES, containStreamErrors } from "./turn-runner.js";
 
 /**
@@ -236,7 +236,9 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
           [
             ...(imported?.noteIds.length ? knowledge.conceptsForNotes(imported.noteIds).map((c) => c.key) : []),
             ...deriveConceptState(evidence).slice(0, MAX_CONCEPTS).map((c) => c.concept),
-            ...(topic ? [topic.title, ...topic.concepts] : [lesson.topicTitle]),
+            ...(topic
+              ? [topic.title, ...matchConceptKeysInText(knowledge, topic.title), ...topic.concepts]
+              : [lesson.topicTitle, ...matchConceptKeysInText(knowledge, lesson.topicTitle)]),
           ],
           MAX_CONCEPT_EDGES,
         )

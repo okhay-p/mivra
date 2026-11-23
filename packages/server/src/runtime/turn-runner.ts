@@ -29,7 +29,7 @@ import { courseSummaries } from "./course-summaries.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
 import { MAX_CONCEPTS, MAX_CONCEPT_EDGES, MAX_EVIDENCE, MAX_IMPORTED_MEMORIES, MAX_MEMORIES, deriveConceptState, learnerContext } from "./learner-context.js";
-import { noteContext } from "./note-context.js";
+import { matchConceptKeysInText, noteContext } from "./note-context.js";
 
 // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
 /** How replies and artifact fields render; shared with lesson generation. */
@@ -130,20 +130,32 @@ const defaultAssembleContext =
     if (knowledge) {
       const course = store.findCourseBySession(sessionId);
       const courseSeeds: string[] = [];
+      const textsToMatch: string[] = [learnerText];
       if (course) {
         courseSeeds.push(course.goal);
+        textsToMatch.push(course.goal);
         const syllabus = store.latestSyllabus(course.id);
         const openLesson = lessons && lessonId ? lessons.findLesson(lessonId) : undefined;
         if (openLesson) {
           const topic = syllabus?.topics.find((t) => t.id === openLesson.topicId);
-          courseSeeds.push(...(topic ? [topic.title, ...topic.concepts] : [openLesson.topicTitle]));
+          if (topic) {
+            courseSeeds.push(topic.title, ...topic.concepts);
+            textsToMatch.push(topic.title);
+          } else {
+            courseSeeds.push(openLesson.topicTitle);
+            textsToMatch.push(openLesson.topicTitle);
+          }
         } else if (syllabus) {
-          courseSeeds.push(...syllabus.topics.flatMap((t) => [t.title, ...t.concepts]));
+          for (const topic of syllabus.topics) {
+            courseSeeds.push(topic.title, ...topic.concepts);
+            textsToMatch.push(topic.title);
+          }
         }
       }
       const noteConcepts = imported?.noteIds.length ? knowledge.conceptsForNotes(imported.noteIds).map((c) => c.key) : [];
+      const textConcepts = matchConceptKeysInText(knowledge, ...textsToMatch);
       const practised = deriveConceptState(evidence).slice(0, MAX_CONCEPTS).map((c) => c.concept);
-      conceptEdges = knowledge.conceptNeighborhood([...noteConcepts, ...practised, ...courseSeeds], MAX_CONCEPT_EDGES);
+      conceptEdges = knowledge.conceptNeighborhood([...noteConcepts, ...textConcepts, ...practised, ...courseSeeds], MAX_CONCEPT_EDGES);
     }
     // Each goes just before the learner's latest message, so notes come first, then the session's documents.
     return {
