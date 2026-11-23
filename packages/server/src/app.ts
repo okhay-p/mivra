@@ -1364,8 +1364,9 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     return { ...facts, price: own ? { ...own, source: "custom" } : listed?.price ? { ...listed.price, source: "catalog" } : null };
   };
   const usage = createUsageTracker({ store: usageStore, describe: describeModel });
-  const turns = createTurnRunner({ store, registry, model: resolveModel, models: runModels, lessons, notes: noteStore, usage });
-  const generator = createLessonGenerator({ store, lessons, registry, model: resolveModel, models: runModels, notes: noteStore, usage });
+  const knowledge = createKnowledgeStore(db);
+  const turns = createTurnRunner({ store, registry, model: resolveModel, models: runModels, lessons, notes: noteStore, knowledge, usage });
+  const generator = createLessonGenerator({ store, lessons, registry, model: resolveModel, models: runModels, notes: noteStore, knowledge, usage });
   const reviewer = createMilestoneReviewer({ model: resolveModel, models: runModels, usage });
   /** A session's name on the Usage page, read now: usage records keep no titles, and a deleted chat has none. */
   const sessionLabel = (id: string) => {
@@ -1416,7 +1417,6 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       }),
     };
   };
-  const knowledge = createKnowledgeStore(db);
   const distiller = createDistiller({ notes: noteStore, knowledge, model: resolveModel, models: runModels, usage });
   /** After every import: distil its changed notes in the background, and describe where that stands. */
   const afterImport = (importId: string) => {

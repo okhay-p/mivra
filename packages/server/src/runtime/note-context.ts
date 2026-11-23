@@ -140,6 +140,8 @@ function linkedTitles(store: NoteStore, notes: { noteId: string; importId: strin
 /** Trusted handling rules for the instructions, and the untrusted text for a message of its own. */
 export interface NoteContext {
   rules: string;
+  /** Ids of the notes whose excerpts matched, in relevance order; empty when nothing matched. */
+  noteIds: string[];
   /** Undefined when nothing matched: no excerpt is sent, not even the start of a note. */
   excerpts?: string;
 }
@@ -199,12 +201,13 @@ function notesFor(store: NoteStore, text: string, use: NoteUse): NoteContext | u
   if (store.countNotes() === 0) return undefined;
   const rules = rulesFor(use);
   const excerpts = matchingExcerpts(store, text);
-  if (excerpts.length === 0) return { rules };
+  if (excerpts.length === 0) return { rules, noteIds: [] };
 
   const notes = [...new Map(excerpts.map((e) => [e.noteId, { noteId: e.noteId, importId: e.importId, title: e.title }])).values()];
   const links = linkedTitles(store, notes);
   return {
     rules,
+    noteIds: notes.map((n) => n.noteId),
     excerpts: [
       NOTE_EXCERPTS_LABEL,
       `Below are excerpts of the learner's own notes that match ${use.matching}, at most ${MAX_EXCERPTS_PER_NOTE} per note. Each gives the note's title and the heading it sits under.`,

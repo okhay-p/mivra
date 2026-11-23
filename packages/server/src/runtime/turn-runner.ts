@@ -14,6 +14,7 @@ import {
   type UIMessageChunk,
   type UIMessageStreamOutcome,
 } from "ai";
+import type { KnowledgeStore } from "../store/knowledge-store.js";
 import type { LessonStore } from "../store/lesson-store.js";
 import type { NoteStore } from "../store/note-store.js";
 import { callOptionsFor, type ModelSelection } from "../model.js";
@@ -27,7 +28,7 @@ import { MAX_PLACEMENT_QUESTIONS, courseContext, rememberNudge } from "./course-
 import { courseSummaries } from "./course-summaries.js";
 import { documentContext, latestLearnerText, withDocumentExcerpts } from "./document-context.js";
 import { errorText, publicErrorText } from "./errors.js";
-import { MAX_EVIDENCE, MAX_IMPORTED_MEMORIES, MAX_MEMORIES, learnerContext } from "./learner-context.js";
+import { MAX_CONCEPTS, MAX_CONCEPT_EDGES, MAX_EVIDENCE, MAX_IMPORTED_MEMORIES, MAX_MEMORIES, deriveConceptState, learnerContext } from "./learner-context.js";
 import { noteContext } from "./note-context.js";
 
 // The UI treats a dollar as ordinary text when it can't be maths ("costs $5 and $10"), so \\$ is only needed for a rare ambiguous case.
@@ -119,11 +120,31 @@ export type AssembleContext = (
 
 /** The whole transcript, plus the learner's record across sessions, their imported notes and the session's documents. Summaries will plug in here. */
 const defaultAssembleContext =
-  (store: SessionStore, registry: CapabilityRegistry, lessons?: LessonStore, notes?: NoteStore): AssembleContext =>
+  (store: SessionStore, registry: CapabilityRegistry, lessons?: LessonStore, notes?: NoteStore, knowledge?: KnowledgeStore): AssembleContext =>
   async (conversation, { sessionId, lessonId, selection }) => {
     const learnerText = latestLearnerText(conversation.filter(m => m.id !== "mivra-continuation-event"));
     const documents = documentContext(store, sessionId, learnerText);
     const imported = notes && noteContext(notes, learnerText);
+    const evidence = store.listRecentEvidence(MAX_EVIDENCE);
+    let conceptEdges: ReturnType<KnowledgeStore["conceptNeighborhood"]> = [];
+    if (knowledge) {
+      const course = store.findCourseBySession(sessionId);
+      const courseSeeds: string[] = [];
+      if (course) {
+        courseSeeds.push(course.goal);
+        const syllabus = store.latestSyllabus(course.id);
+        const openLesson = lessons && lessonId ? lessons.findLesson(lessonId) : undefined;
+        if (openLesson) {
+          const topic = syllabus?.topics.find((t) => t.id === openLesson.topicId);
+          courseSeeds.push(...(topic ? [topic.title, ...topic.concepts] : [openLesson.topicTitle]));
+        } else if (syllabus) {
+          courseSeeds.push(...syllabus.topics.flatMap((t) => [t.title, ...t.concepts]));
+        }
+      }
+      const noteConcepts = imported?.noteIds.length ? knowledge.conceptsForNotes(imported.noteIds).map((c) => c.key) : [];
+      const practised = deriveConceptState(evidence).slice(0, MAX_CONCEPTS).map((c) => c.concept);
+      conceptEdges = knowledge.conceptNeighborhood([...noteConcepts, ...practised, ...courseSeeds], MAX_CONCEPT_EDGES);
+    }
     // Each goes just before the learner's latest message, so notes come first, then the session's documents.
     return {
       messages: withDocumentExcerpts(
@@ -132,13 +153,14 @@ const defaultAssembleContext =
       ),
       instructions: [
         learnerContext(
-          store.listRecentEvidence(MAX_EVIDENCE),
+          evidence,
           store.listMemoriesForModel(registry.checkKinds(), MAX_MEMORIES),
           imported ? notes.listImports() : [],
           undefined,
           store.listImportedMemoriesForModel(MAX_IMPORTED_MEMORIES),
           // This session's own course is in its course context.
           lessons ? courseSummaries(store, lessons).filter((c) => c.sessionId !== sessionId) : [],
+          conceptEdges,
         ),
         courseContext(store, sessionId, lessons && lessonId ? { lessons, lessonId, registry } : undefined),
         lessons && rememberNudge(store, lessons, sessionId),
@@ -159,6 +181,8 @@ export interface TurnRunnerDeps {
   lessons?: LessonStore;
   /** The learner's imported notes (ADR-014), searched each turn by the default context. */
   notes?: NoteStore;
+  /** The distilled concept graph (ADR-014), queried each turn by the default context. */
+  knowledge?: KnowledgeStore;
   assembleContext?: AssembleContext;
   /** Records each model call's token usage (issue #70). */
   usage?: Pick<UsageTracker, "middleware">;
@@ -245,7 +269,7 @@ function continuationEvent(): UIMessage {
  * stream the model's reply, and record how the run ended. Returns the reply as an AI SDK UI message
  * stream (SSE) response.
  */
-export function createTurnRunner({ store, registry, model, models, lessons, notes, usage, assembleContext = defaultAssembleContext(store, registry, lessons, notes) }: TurnRunnerDeps) {
+export function createTurnRunner({ store, registry, model, models, lessons, notes, knowledge, usage, assembleContext = defaultAssembleContext(store, registry, lessons, notes, knowledge) }: TurnRunnerDeps) {
   type ActiveTurn = {
     controller: AbortController;
     stopId: string;
