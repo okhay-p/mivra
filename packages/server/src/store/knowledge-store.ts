@@ -293,6 +293,46 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
         .map(([key, name]) => ({ key, name }));
     },
 
+    /** Source notes supporting any of the given concept keys, ranked by how many matched concepts they support, then path. */
+    notesForConcepts(conceptKeys: string[], limit = MAX_CONCEPT_NODES): { id: string; importId: string; path: string; title: string }[] {
+      const keys = [...new Set(conceptKeys.map(conceptKey).filter(Boolean))];
+      const max = Math.floor(limit);
+      if (keys.length === 0 || !Number.isFinite(max) || max <= 0) return [];
+      const keyBatches = batches(keys);
+      const found = new Map<string, { id: string; importId: string; path: string; title: string; matched: number }>();
+      for (const batch of keyBatches) {
+        const keyList = sql.join(batch.map((key) => sql`${key}`), sql`, `);
+        const rows = db.all<{ id: string; importId: string; path: string; title: string; matched: number }>(
+          keyBatches.length === 1
+            ? sql`
+                select n.id, n.import_id as importId, n.path, n.title, count(distinct s.concept_id) as matched
+                from concepts c
+                join concept_sources s on s.concept_id = c.id
+                join notes n on n.id = s.note_id
+                where c.key in (${keyList})
+                group by n.id
+                order by matched desc, n.path asc
+                limit ${max}`
+            : sql`
+                select n.id, n.import_id as importId, n.path, n.title, count(distinct s.concept_id) as matched
+                from concepts c
+                join concept_sources s on s.concept_id = c.id
+                join notes n on n.id = s.note_id
+                where c.key in (${keyList})
+                group by n.id`,
+        );
+        for (const row of rows) {
+          const existing = found.get(row.id);
+          if (existing) existing.matched += row.matched;
+          else found.set(row.id, { ...row });
+        }
+      }
+      return [...found.values()]
+        .sort((a, b) => b.matched - a.matched || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+        .slice(0, max)
+        .map(({ id, importId, path, title }) => ({ id, importId, path, title }));
+    },
+
     /**
      * Bounded 1-hop edges (`prerequisite` and `related`) touching any of the seed concept keys.
      * Prioritises edges between two seed concepts, then `prerequisite` over `related`, then edges

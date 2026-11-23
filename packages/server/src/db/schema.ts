@@ -394,9 +394,11 @@ export const noteLinks = sqliteTable(
       .notNull()
       .references(() => notes.id, { onDelete: "cascade" }),
     target: text("target").notNull(),
+    /** Normalised target (`noteKey(target)`) for fast, Unicode- and whitespace-aware backlink lookup. */
+    targetKey: text("target_key").notNull().default(""),
     kind: text("kind", { enum: ["link", "embed"] }).notNull(),
   },
-  (t) => [primaryKey({ columns: [t.noteId, t.target, t.kind] })],
+  (t) => [primaryKey({ columns: [t.noteId, t.target, t.kind] }), index("note_links_target_key_idx").on(t.targetKey)],
 );
 
 /** A tag from a note's text or frontmatter, lower-cased and without its `#`. */

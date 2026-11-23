@@ -418,7 +418,7 @@ export function createLessonGenerator({ store, lessons, registry, model, models,
       const languageModel = model(selection);
       // Searched before the run starts, so the excerpts and the rules describing them come from one search.
       const topic = topicOf(lesson);
-      const imported = notes && lessonNoteContext(notes, topic ?? { title: lesson.topicTitle });
+      const imported = notes && lessonNoteContext(notes, topic ?? { title: lesson.topicTitle }, knowledge);
       runId = store.startRun(session, message, selection);
       let streamError: unknown;
       const result = streamText({

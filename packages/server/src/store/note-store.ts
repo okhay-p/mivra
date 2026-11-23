@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { asc, count, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { noteChunks, noteLinks, noteTags, notes, vaultImports } from "../db/schema.js";
-import type { ParsedNote } from "../notes/parse.js";
+import { noteKey, type ParsedNote } from "../notes/parse.js";
+import { pathSuffixKeys, resolveGraph } from "../notes/resolve.js";
 import { clearDistilled, detachMemories, dropUnsupportedConcepts } from "./knowledge-store.js";
 
 export type VaultImportRow = typeof vaultImports.$inferSelect & { noteCount: number };
 export type NoteRow = typeof notes.$inferSelect;
-export type NoteLinkRow = typeof noteLinks.$inferSelect;
+export type NoteLinkRow = Pick<typeof noteLinks.$inferSelect, "noteId" | "target" | "kind">;
 /** A chunk of a note matched by search, with what's needed to cite it. */
 /** A matching chunk. `rank` is its FTS5 bm25 score for the query: negative, and lower is a better match. */
 export type NoteExcerpt = { chunkId: number; noteId: string; importId: string; path: string; title: string; heading: string | null; seq: number; text: string; rank: number };
@@ -45,8 +46,24 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
     "insert into notes (id, import_id, path, title, title_key, aliases, body, hash, created_at, updated_at) values (@id, @importId, @path, @title, @titleKey, @aliases, @body, @hash, @now, @now)",
   );
   const insertChunk = db.$client.prepare("insert into note_chunks (note_id, seq, heading, text) values (@noteId, @seq, @heading, @text)");
-  const insertLink = db.$client.prepare("insert into note_links (note_id, target, kind) values (@noteId, @target, @kind)");
+  const insertLink = db.$client.prepare("insert into note_links (note_id, target, target_key, kind) values (@noteId, @target, @targetKey, @kind)");
   const insertTag = db.$client.prepare("insert into note_tags (note_id, tag) values (@noteId, @tag)");
+
+  // Backfill target_key for links written before the target_key column existed. Uses note_links_target_key_idx.
+  const missingTargetKeys = db.all<{ noteId: string; target: string; kind: string }>(
+    sql`select note_id as noteId, target, kind from note_links where target_key = ''`,
+  );
+  if (missingTargetKeys.length > 0) {
+    const updateTargetKey = db.$client.prepare(
+      "update note_links set target_key = @targetKey where note_id = @noteId and target = @target and kind = @kind",
+    );
+    db.transaction(() => {
+      for (const row of missingTargetKeys) {
+        const key = noteKey(row.target);
+        if (key) updateTargetKey.run({ ...row, targetKey: key });
+      }
+    });
+  }
 
   const withCount = (tx: Db | Tx, row: typeof vaultImports.$inferSelect): VaultImportRow => ({
     ...row,
@@ -83,12 +100,22 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
     for (const { note, id, isNew } of written) {
       if (isNew) insertNote.run({ id, importId, path: note.path, title: note.parsed.title, titleKey: note.titleKey, aliases: JSON.stringify(note.aliasKeys), body: note.body, hash: note.hash, now: now.getTime() });
       for (const chunk of note.parsed.chunks) insertChunk.run({ noteId: id, seq: chunk.seq, heading: chunk.heading, text: chunk.text });
-      for (const link of note.parsed.links) insertLink.run({ noteId: id, target: link.target, kind: link.kind });
+      for (const link of note.parsed.links) insertLink.run({ noteId: id, target: link.target, targetKey: noteKey(link.target), kind: link.kind });
       for (const tag of note.parsed.tags) insertTag.run({ noteId: id, tag });
     }
 
     tx.update(vaultImports).set({ updatedAt: now }).where(eq(vaultImports.id, importId)).run();
     return { removed: gone.length, added: written.length - rewritten.length, updated: rewritten.length };
+  };
+
+  const linkCandidates = (importId: string, nameKeys: string[]) => {
+    if (nameKeys.length === 0) return [];
+    const keys = sql.join(nameKeys.map((key) => sql`${key}`), sql`, `);
+    return db.all<{ id: string; path: string; title: string; titleKey: string; aliases: string }>(sql`
+      select id, path, title, title_key as titleKey, aliases from notes
+      where import_id = ${importId}
+        and (title_key in (${keys}) or (aliases != '[]' and exists (select 1 from json_each(aliases) where value in (${keys}))))`)
+      .map((n) => ({ ...n, aliases: JSON.parse(n.aliases) as string[], tags: [] as string[] }));
   };
 
   return {
@@ -216,14 +243,81 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
      * alias. A note's title is its file name, so a link with a folder needs only its last part here. Passing these
      * to resolveGraph resolves the links exactly as the whole import would, without reading every note.
      */
-    linkCandidates(importId: string, nameKeys: string[]) {
-      if (nameKeys.length === 0) return [];
-      const keys = sql.join(nameKeys.map((key) => sql`${key}`), sql`, `);
-      return db.all<{ id: string; path: string; title: string; titleKey: string; aliases: string }>(sql`
-        select id, path, title, title_key as titleKey, aliases from notes
-        where import_id = ${importId}
-          and (title_key in (${keys}) or (aliases != '[]' and exists (select 1 from json_each(aliases) where value in (${keys}))))`)
-        .map((n) => ({ ...n, aliases: JSON.parse(n.aliases) as string[], tags: [] as string[] }));
+    linkCandidates,
+
+    /**
+     * Up to `limit` notes in `importId` that link to `note` (by title, alias, or folder path), resolved with the
+     * same Obsidian rules as `resolveGraph`, in path order. Self-links and cross-import links are excluded.
+     */
+    backlinks(
+      importId: string,
+      note: { id: string; path: string; titleKey?: string; aliases?: string[] },
+      limit: number,
+    ): { id: string; title: string; path: string }[] {
+      const max = Math.floor(limit);
+      if (!Number.isFinite(max) || max <= 0) return [];
+      let titleKey = note.titleKey;
+      let aliases = note.aliases;
+      if (titleKey === undefined || aliases === undefined) {
+        const row = db
+          .select({ titleKey: notes.titleKey, aliases: notes.aliases })
+          .from(notes)
+          .where(and(eq(notes.id, note.id), eq(notes.importId, importId)))
+          .get();
+        if (!row) return [];
+        titleKey = row.titleKey;
+        aliases = row.aliases;
+      }
+      const { pathKey, suffixes } = pathSuffixKeys(note.path);
+      const targetKeys = [...new Set([pathKey, ...suffixes, titleKey, ...aliases].filter(Boolean))];
+      if (targetKeys.length === 0) return [];
+      const keys = sql.join(targetKeys.map((key) => sql`${key}`), sql`, `);
+      // Fetch extra candidates in case ambiguous bare links resolve to another note with a shorter path.
+      const scanLimit = Math.min(Math.max(max * 4, 100), 1000);
+      const raw = db.all<{ noteId: string; target: string; kind: NoteLinkRow["kind"]; title: string; path: string }>(sql`
+        select l.note_id as noteId, l.target, l.kind, n.title, n.path
+        from note_links l
+        join notes n on n.id = l.note_id
+        where n.import_id = ${importId}
+          and l.note_id != ${note.id}
+          and l.target_key in (${keys})
+        order by n.path asc, l.rowid asc
+        limit ${scanLimit}`);
+      if (raw.length === 0) return [];
+      const nameKeys = [...new Set([...raw.map((r) => noteKey(r.target.split("/").at(-1) ?? "")), titleKey, ...aliases].filter(Boolean))];
+      const candidates = linkCandidates(importId, nameKeys);
+      const resolved = resolveGraph({ notes: candidates, links: raw });
+      const byId = new Map(raw.map((r) => [r.noteId, { id: r.noteId, title: r.title, path: r.path }]));
+      const seen = new Set<string>();
+      const out: { id: string; title: string; path: string }[] = [];
+      for (const link of resolved.links) {
+        if (link.to !== note.id || seen.has(link.from)) continue;
+        seen.add(link.from);
+        const info = byId.get(link.from);
+        if (info) out.push(info);
+        if (out.length >= max) break;
+      }
+      return out;
+    },
+
+    /** First chunk (`seq = 0`) of each note in `noteIds`, preserving input order and skipping notes with no chunks. */
+    leadChunks(noteIds: string[]): NoteExcerpt[] {
+      const unique = [...new Set(noteIds)];
+      if (unique.length === 0) return [];
+      const byNote = new Map<string, NoteExcerpt>();
+      for (const batch of batches(unique)) {
+        const ids = sql.join(batch.map((id) => sql`${id}`), sql`, `);
+        const rows = db.all<NoteExcerpt>(sql`
+          select c.id as chunkId, n.id as noteId, n.import_id as importId, n.path, n.title, c.heading, c.seq, c.text, 0 as rank
+          from note_chunks c
+          join notes n on n.id = c.note_id
+          where c.note_id in (${ids}) and c.seq = 0`);
+        for (const row of rows) byNote.set(row.noteId, row);
+      }
+      return unique.flatMap((id) => {
+        const row = byNote.get(id);
+        return row ? [row] : [];
+      });
     },
   };
 }

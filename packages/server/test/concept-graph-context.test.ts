@@ -84,6 +84,33 @@ describe("KnowledgeStore concept lookups", () => {
     ]);
   });
 
+  it("notesForConcepts ranks notes by matched concept count then path and respects limit", async () => {
+    const db = openDb(":memory:");
+    const knowledge = createKnowledgeStore(db);
+    const { byPath, read } = await seedNotes(db, "Vault", [
+      { path: "a.md", text: "Recursion only." },
+      { path: "b.md", text: "Recursion and Stack." },
+      { path: "c.md", text: "Stack only." },
+    ]);
+    const a = byPath.get("a.md")!.id;
+    const b = byPath.get("b.md")!.id;
+    const c = byPath.get("c.md")!.id;
+    knowledge.saveDistilled(read, {
+      concepts: [
+        { key: "recursion", name: "Recursion", noteIds: [a, b] },
+        { key: "stack", name: "Stack", noteIds: [b, c] },
+      ],
+      edges: [],
+      memories: [],
+    });
+
+    expect(knowledge.notesForConcepts([], 10)).toEqual([]);
+    expect(knowledge.notesForConcepts(["unknown"], 10)).toEqual([]);
+    expect(knowledge.notesForConcepts(["recursion"], 0)).toEqual([]);
+    expect(knowledge.notesForConcepts(["  RECURSION ", "Stack"], 10).map((n) => n.path)).toEqual(["b.md", "a.md", "c.md"]);
+    expect(knowledge.notesForConcepts(["recursion", "stack"], 2).map((n) => n.path)).toEqual(["b.md", "a.md"]);
+  });
+
   it("conceptNeighborhood returns bounded, deterministic 1-hop edges with priority ordering", async () => {
     const db = openDb(":memory:");
     const knowledge = createKnowledgeStore(db);

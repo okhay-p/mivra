@@ -124,7 +124,7 @@ const defaultAssembleContext =
   async (conversation, { sessionId, lessonId, selection }) => {
     const learnerText = latestLearnerText(conversation.filter(m => m.id !== "mivra-continuation-event"));
     const documents = documentContext(store, sessionId, learnerText);
-    const imported = notes && noteContext(notes, learnerText);
+    const imported = notes && noteContext(notes, learnerText, knowledge);
     const evidence = store.listRecentEvidence(MAX_EVIDENCE);
     let conceptEdges: ReturnType<KnowledgeStore["conceptNeighborhood"]> = [];
     if (knowledge) {
