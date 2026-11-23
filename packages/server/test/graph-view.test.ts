@@ -292,14 +292,15 @@ describe("conceptGraphView & global concept graph API", () => {
     const session = sessions.createSession("Live session");
     knowledge.saveSessionEdge({ sessionId: session.id, from: "Functions", to: "Closures", kind: "prerequisite" });
     knowledge.saveSessionEdge({ sessionId: session.id, from: "100% coverage", to: "Testing", kind: "related" });
+    knowledge.saveSessionEdge({ sessionId: session.id, from: "Énergie", to: "Thermodynamique", kind: "related" });
 
     const app = createApp({ db, model: () => { throw new Error("no model"); }, security: { token: "t", allowedHosts: [] } });
     const res = await app.request("/api/concepts/graph/view", { headers: { Authorization: "Bearer t" } });
     expect(res.status).toBe(200);
     const v = NoteGraphView.parse(await res.json());
-    expect(v.totalConcepts).toBe(4);
-    expect(v.nodes.map((n) => n.label)).toEqual(["100% coverage", "Closures", "Functions", "Testing"]);
-    expect(v.edges).toHaveLength(2);
+    expect(v.totalConcepts).toBe(6);
+    expect(v.nodes.map((n) => n.label)).toEqual(["100% coverage", "Closures", "Functions", "Testing", "Thermodynamique", "Énergie"]);
+    expect(v.edges).toHaveLength(3);
     expect((await app.request("/api/concepts/graph/view?depth=9", { headers: { Authorization: "Bearer t" } })).status).toBe(400);
 
     const search = async (q: string) =>
@@ -307,6 +308,9 @@ describe("conceptGraphView & global concept graph API", () => {
     expect((await search("clos")).map((c) => c.name)).toEqual(["Closures"]);
     expect((await search("100%")).map((c) => c.name)).toEqual(["100% coverage"]);
     expect(await search("1%c")).toEqual([]);
+    expect((await search("Énergie")).map((c) => c.name)).toEqual(["Énergie"]);
+    expect((await search("énergie")).map((c) => c.name)).toEqual(["Énergie"]);
+    expect((await search("ÉNERGIE")).map((c) => c.name)).toEqual(["Énergie"]);
     expect((await app.request("/api/concepts/search?q=", { headers: { Authorization: "Bearer t" } })).status).toBe(400);
   });
 

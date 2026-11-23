@@ -149,15 +149,17 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
     },
 
     /**
-     * Up to `limit` concepts whose name contains `text`, ignoring case: names starting with it first, then
-     * shorter names, then alphabetical order. `%`, `_` and `\` in `text` are matched literally.
+     * Up to `limit` concepts whose normalized `key` (`conceptKey`, Unicode NFKC + lowercase) contains `text`:
+     * prefix matches first, then shorter keys, then name order. `%`, `_` and `\` in `text` are matched literally.
      */
     findConcepts(text: string, limit: number): { id: string; name: string }[] {
-      const escaped = text.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+      const query = conceptKey(text);
+      if (!query) return [];
+      const escaped = query.replace(/[\\%_]/g, (c) => `\\${c}`);
       return db.all<{ id: string; name: string }>(sql`
         select id, name from concepts
-        where lower(name) like ${`%${escaped}%`} escape '\\'
-        order by lower(name) like ${`${escaped}%`} escape '\\' desc, length(name), name
+        where key like ${`%${escaped}%`} escape '\\'
+        order by key like ${`${escaped}%`} escape '\\' desc, length(key), name
         limit ${limit}`);
     },
 
