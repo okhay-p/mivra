@@ -4,7 +4,7 @@ import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, type UIMessage } from "ai";
 import type { ArtifactView, CourseLessonsView, CourseView, LessonView } from "@mivra/protocol";
 import { CHATGPT_USAGE_LIMIT_ERROR } from "@mivra/protocol";
-import { BarChart3, Brain, GraduationCap, KeyRound, Library, MessageSquare, MessagesSquare, Plus, Settings, SquarePlus } from "lucide-react";
+import { BarChart3, Brain, GraduationCap, KeyRound, Library, MessageSquare, MessagesSquare, Plus, Settings, SquarePlus, Waypoints } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
 import { OPEN_SETTINGS, OPEN_USAGE, addToLesson, undoSyllabusChange, api, authHeaders, createSession, errorMessage, type Session, getCourse, getProviderKeys, listCourseLessons, loadMessages, startLesson, token } from "./api.js";
 import { ArtifactPart } from "./artifacts/ArtifactPart.js";
@@ -18,7 +18,7 @@ import { MathText } from "./MathText.js";
 import { ImportsPanel } from "./ImportsPanel.js";
 import { MemoryPanel } from "./MemoryPanel.js";
 import { ModelPicker, modelLabel, useModelPicker, type ModelPickerState } from "./ModelPicker.js";
-import { NotesGraph } from "./NotesGraph.js";
+import { ALL_CONCEPTS, NotesGraph } from "./NotesGraph.js";
 import { ProvidersPanel, hasAnyKey } from "./ProvidersPanel.js";
 import { SettingsPanel } from "./SettingsPanel.js";
 import { UsagePanel } from "./UsagePanel.js";
@@ -109,10 +109,10 @@ export function App() {
     openStarted(session, begin);
   };
 
-  // An import's notes graph, shown in place of the pane until something else is chosen (ADR-014 step 4).
-  const [graphImportId, setGraphImportId] = useState<string>();
+  // Either the global concept graph (ALL_CONCEPTS) or an import's notes graph, shown in place of the pane (ADR-014).
+  const [graphScope, setGraphScope] = useState<string>();
   const showPane = (next: Pane) => {
-    setGraphImportId(undefined);
+    setGraphScope(undefined);
     setPane(next);
   };
 
@@ -162,26 +162,28 @@ export function App() {
     <SidebarProvider>
       <SessionSidebar
         sessions={sessions}
-        activeId={activeId}
+        activeId={graphScope ? undefined : activeId}
         theme={theme}
         onThemeChange={setTheme}
-        drafting={pane.kind === "draft"}
+        drafting={!graphScope && pane.kind === "draft"}
+        conceptGraphOpen={graphScope === ALL_CONCEPTS}
         onSelect={(id) => showPane({ kind: "session", id })}
         onDelete={setDeleting}
         onRenamed={(renamed) => setSessions((prev) => prev.map((s) => (s.id === renamed.id ? { ...s, title: renamed.title } : s)))}
         onNew={() => {
-          setGraphImportId(undefined);
+          setGraphScope(undefined);
           openDraft();
         }}
         onNewCourse={() => showPane({ kind: "start" })}
         onOpenMemory={() => setMemoryOpen(true)}
+        onOpenConceptGraph={() => setGraphScope(ALL_CONCEPTS)}
         onOpenImports={() => setImportsOpen(true)}
         onOpenProviders={() => setProvidersOpen(true)}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenUsage={() => setUsageOpen(true)}
       />
       <MemoryPanel open={memoryOpen} onOpenChange={setMemoryOpen} onOpenCourse={(id) => showPane({ kind: "session", id })} />
-      <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} onOpenGraph={setGraphImportId} />
+      <ImportsPanel open={importsOpen} onOpenChange={setImportsOpen} onOpenGraph={setGraphScope} />
       <ProvidersPanel open={providersOpen} onOpenChange={setProvidersOpen} firstRun={firstRun} />
       <SettingsPanel open={settingsOpen} onOpenChange={setSettingsOpen} />
       <UsagePanel open={usageOpen} onOpenChange={setUsageOpen} />
@@ -191,14 +193,14 @@ export function App() {
         <header className="flex h-13 shrink-0 items-center gap-2 border-b px-3">
           <SidebarTrigger />
           <Separator orientation="vertical" className="mr-1 data-[orientation=vertical]:h-4" />
-          <h1 className="truncate text-base font-medium outline-none" tabIndex={graphImportId ? -1 : undefined} data-notes-graph-start={graphImportId ? "" : undefined}>
-            {graphImportId ? "Notes graph" : (active?.title ?? (pane.kind === "draft" ? "New session" : "Mivra"))}
+          <h1 className="truncate text-base font-medium outline-none" tabIndex={graphScope ? -1 : undefined} data-notes-graph-start={graphScope ? "" : undefined}>
+            {graphScope === ALL_CONCEPTS ? "Concept graph" : graphScope ? "Notes graph" : (active?.title ?? (pane.kind === "draft" ? "New session" : "Mivra"))}
           </h1>
         </header>
         {!token ? (
           <Notice error>No API token found. Start the server, then reload this page.</Notice>
-        ) : graphImportId ? (
-          <NotesGraph importId={graphImportId} />
+        ) : graphScope ? (
+          <NotesGraph importId={graphScope} onScopeChange={setGraphScope} />
         ) : error ? (
           <Notice error>{error}</Notice>
         ) : activeId ? (
@@ -228,6 +230,7 @@ function SessionSidebar({
   sessions,
   activeId,
   drafting,
+  conceptGraphOpen,
   theme,
   onThemeChange,
   onSelect,
@@ -236,6 +239,7 @@ function SessionSidebar({
   onNew,
   onNewCourse,
   onOpenMemory,
+  onOpenConceptGraph,
   onOpenImports,
   onOpenProviders,
   onOpenSettings,
@@ -245,6 +249,7 @@ function SessionSidebar({
   activeId: string | undefined;
   /** A draft is open, which New session stands for until it's saved. */
   drafting: boolean;
+  conceptGraphOpen: boolean;
   theme: ThemeChoice;
   onThemeChange: (theme: ThemeChoice) => void;
   onSelect: (id: string) => void;
@@ -254,6 +259,7 @@ function SessionSidebar({
   onNew: () => void;
   onNewCourse: () => void;
   onOpenMemory: () => void;
+  onOpenConceptGraph: () => void;
   onOpenImports: () => void;
   onOpenProviders: () => void;
   onOpenSettings: () => void;
@@ -355,6 +361,20 @@ function SessionSidebar({
             >
               <Brain />
               <span>Memory</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              tooltip="Concept graph"
+              data-concept-graph-trigger
+              isActive={conceptGraphOpen}
+              onClick={() => {
+                onOpenConceptGraph();
+                closeOnMobile();
+              }}
+            >
+              <Waypoints />
+              <span>Concept graph</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>

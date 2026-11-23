@@ -1,4 +1,4 @@
-import { ArtifactView, CourseLessonsView, CourseSummaryView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type CourseKind, type InterviewContextAnswer, type MilestoneDisputeRequest, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
+import { ArtifactView, ConceptSummary, CourseLessonsView, CourseSummaryView, CourseView, DistillationView, DocumentView, LessonView, MAX_VAULT_BYTES, MemoryView, NoteGraphView, NoteSummary, NoteView, VaultImportResult, VaultImportView, type CodeExerciseAnswer, type CourseKind, type InterviewContextAnswer, type MilestoneDisputeRequest, type PlacementAnswer, type VaultFile } from "@mivra/protocol";
 import type { AppType } from "@mivra/server";
 import type { UIMessage } from "ai";
 import { hc, type InferResponseType } from "hono/client";
@@ -193,6 +193,28 @@ export const getGraphView = (id: string, { mode, focus, depth, tag, folder }: Gr
         query: { mode, depth: String(depth), ...(focus ? { focus } : {}), ...(tag ? { tag } : {}), ...(folder ? { folder } : {}) },
       }),
     async (res) => NoteGraphView.parse(await res.json()),
+  );
+
+/** What the global concept graph draws (ADR-014, issue #140). */
+export interface ConceptGraphViewFilters {
+  mode: "auto" | "local";
+  focus?: string;
+  depth: number;
+}
+
+export const getConceptGraphView = ({ mode, focus, depth }: ConceptGraphViewFilters) =>
+  request(
+    () =>
+      api.concepts.graph.view.$get({
+        query: { mode, depth: String(depth), ...(focus ? { focus } : {}) },
+      }),
+    async (res) => NoteGraphView.parse(await res.json()),
+  );
+
+export const findConcepts = (q: string) =>
+  request(
+    () => api.concepts.search.$get({ query: { q } }),
+    async (res) => ConceptSummary.array().parse(await res.json()),
   );
 
 export const findNotes = (id: string, q: string) =>

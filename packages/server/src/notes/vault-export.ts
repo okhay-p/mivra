@@ -270,7 +270,7 @@ function* vaultSteps(input: ExportInput): Generator<ExportFile | typeof PAUSE> {
         ["name", yamlString(concept.name)],
         ["tags", "[mivra/concept]"],
       ]) +
-      `\n# ${escapeInline(concept.name)}\n\nA concept Mivra drew from your notes.\n` +
+      `\n# ${escapeInline(concept.name)}\n\n${concept.notes.length > 0 ? "A concept Mivra drew from your notes." : "A concept from your learning in Mivra."}\n` +
       sections
         .filter(([, lines]) => lines.length > 0)
         .map(([heading, lines]) => `\n## ${heading}\n\n${lines.join("\n")}\n`)

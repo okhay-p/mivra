@@ -1,11 +1,12 @@
-import { RememberInput } from "@mivra/protocol";
+import { LinkConceptsInput, RememberInput } from "@mivra/protocol";
 import { tool } from "ai";
 import type { Plugin } from "../runtime/capabilities.js";
 import { conceptKey } from "../runtime/learner-context.js";
 
 /**
- * The remember tool (ADR-009). Saved memories take effect only if the reply completes, and stay hidden while a check is unanswered. The call is
- * left out of the stored conversation, so editing or deleting a memory really removes what it said.
+ * The remember and link_concepts tools (ADR-009, ADR-014). Saved memories take effect only if the reply completes,
+ * and stay hidden while a check is unanswered. Both calls are left out of the stored conversation, so editing or
+ * deleting a memory or updating the concept graph stays decoupled from chat history.
  */
 export const coreMemory: Plugin = {
   name: "core-memory",
@@ -36,6 +37,24 @@ export const coreMemory: Plugin = {
           },
         }),
       { keepInTranscript: false },
+    );
+
+    api.registerTool(
+      "link_concepts",
+      ({ sessionId, knowledge }) =>
+        tool({
+          description:
+            "Record a relationship between two concepts in the learner's concept graph (prerequisite: `from` must be understood before `to`; related: closely linked concepts). Use this when teaching or connecting key ideas so the learner's concept graph grows from live sessions too. Reuse existing concept names from <learner_concepts> or <learner_concept_graph> when one fits.",
+          inputSchema: LinkConceptsInput,
+          execute: async (input) => {
+            if (!knowledge) return { status: "rejected" as const, reason: "Concept graph is unavailable." };
+            const saved = knowledge.saveSessionEdge({ sessionId, from: input.from, to: input.to, kind: input.kind });
+            return saved.ok
+              ? { status: "saved" as const, from: saved.from, to: saved.to, kind: saved.kind, created: saved.created }
+              : { status: "rejected" as const, reason: saved.reason };
+          },
+        }),
+      { keepInTranscript: false, availableIn: ({ knowledge }) => Boolean(knowledge) },
     );
   },
 };

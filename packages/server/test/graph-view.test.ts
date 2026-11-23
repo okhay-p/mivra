@@ -1,4 +1,6 @@
 import {
+  ConceptGraphViewQuery,
+  ConceptSummary,
   MAX_GRAPH_FACETS,
   MAX_GRAPH_VIEW_EDGES,
   MAX_GRAPH_VIEW_NODES,
@@ -14,7 +16,9 @@ import {
 import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 import { openDb } from "../src/db/client.js";
-import { noteGraphView } from "../src/notes/graph-view.js";
+import { conceptGraphView, noteGraphView } from "../src/notes/graph-view.js";
+import { createKnowledgeStore } from "../src/store/knowledge-store.js";
+import { createSessionStore } from "../src/store/session-store.js";
 
 type Note = NoteGraph["notes"][number];
 const note = (id: string, tags: string[] = [], path = `${id}.md`): Note => ({ id, path, title: id, tags });
@@ -226,5 +230,110 @@ describe("graph view API", () => {
     expect(await find("1%r")).toEqual([]);
     expect((await get(`/imports/${id}/notes?q=`)).status).toBe(400);
     expect((await get("/imports/nope/notes?q=x")).status).toBe(404);
+  });
+});
+
+describe("conceptGraphView & global concept graph API", () => {
+  const cView = (concepts: ConceptGraph, query: Partial<ConceptGraphViewQuery> = {}) =>
+    NoteGraphView.parse(conceptGraphView(concepts, ConceptGraphViewQuery.parse(query)));
+
+  it("draws concepts from sessions and notes whole, and supports local focus mode", () => {
+    const concepts: ConceptGraph = {
+      concepts: [
+        { id: "c1", name: "Recursion", notes: ["n1"] },
+        { id: "c2", name: "Call stack", notes: [] },
+        { id: "c3", name: "Trees", notes: [] },
+      ],
+      edges: [
+        { from: "c2", to: "c1", kind: "prerequisite", notes: [] },
+        { from: "c1", to: "c3", kind: "related", notes: [] },
+      ],
+    };
+
+    const whole = cView(concepts);
+    expect(whole.mode).toBe("whole");
+    expect(whole.totalConcepts).toBe(3);
+    expect(whole.nodes).toEqual([
+      { id: "concept:c2", kind: "concept", label: "Call stack", notes: 0 },
+      { id: "concept:c1", kind: "concept", label: "Recursion", notes: 1 },
+      { id: "concept:c3", kind: "concept", label: "Trees", notes: 0 },
+    ]);
+    expect(whole.edges).toEqual([
+      { from: "concept:c2", to: "concept:c1", kind: "prerequisite" },
+      { from: "concept:c1", to: "concept:c3", kind: "related" },
+    ]);
+
+    const local = cView(concepts, { mode: "local", focus: "concept:c2", depth: 1 });
+    expect(local.mode).toBe("local");
+    expect(local.focus).toBe("concept:c2");
+    expect(local.nodes.map((n) => [n.id, n.hops])).toEqual([
+      ["concept:c2", 0],
+      ["concept:c1", 1],
+    ]);
+  });
+
+  it("switches to local mode above WHOLE_GRAPH_NOTES concepts and stays within limits", () => {
+    const total = WHOLE_GRAPH_NOTES + 5;
+    const concepts: ConceptGraph = {
+      concepts: Array.from({ length: total }, (_, i) => ({ id: `k${i}`, name: `Concept ${String(i).padStart(4, "0")}`, notes: [] })),
+      edges: Array.from({ length: total - 1 }, (_, i) => ({ from: `k${i}`, to: `k${i + 1}`, kind: "related" as const, notes: [] })),
+    };
+    const v = cView(concepts, { focus: "k10", depth: 1 });
+    expect(v.mode).toBe("local");
+    expect(v.focus).toBe("concept:k10");
+    expect(v.totalConcepts).toBe(total);
+    expect(v.nodes.map((n) => n.id)).toEqual(["concept:k9", "concept:k10", "concept:k11"]);
+  });
+
+  it("serves GET /api/concepts/graph/view and /api/concepts/search without any vault import", async () => {
+    const db = openDb(":memory:");
+    const sessions = createSessionStore(db);
+    const knowledge = createKnowledgeStore(db);
+    const session = sessions.createSession("Live session");
+    knowledge.saveSessionEdge({ sessionId: session.id, from: "Functions", to: "Closures", kind: "prerequisite" });
+    knowledge.saveSessionEdge({ sessionId: session.id, from: "100% coverage", to: "Testing", kind: "related" });
+    knowledge.saveSessionEdge({ sessionId: session.id, from: "Énergie", to: "Thermodynamique", kind: "related" });
+
+    const app = createApp({ db, model: () => { throw new Error("no model"); }, security: { token: "t", allowedHosts: [] } });
+    const res = await app.request("/api/concepts/graph/view", { headers: { Authorization: "Bearer t" } });
+    expect(res.status).toBe(200);
+    const v = NoteGraphView.parse(await res.json());
+    expect(v.totalConcepts).toBe(6);
+    expect(v.nodes.map((n) => n.label)).toEqual(["100% coverage", "Closures", "Functions", "Testing", "Thermodynamique", "Énergie"]);
+    expect(v.edges).toHaveLength(3);
+    expect((await app.request("/api/concepts/graph/view?depth=9", { headers: { Authorization: "Bearer t" } })).status).toBe(400);
+
+    const search = async (q: string) =>
+      ConceptSummary.array().parse(await (await app.request(`/api/concepts/search?q=${encodeURIComponent(q)}`, { headers: { Authorization: "Bearer t" } })).json());
+    expect((await search("clos")).map((c) => c.name)).toEqual(["Closures"]);
+    expect((await search("100%")).map((c) => c.name)).toEqual(["100% coverage"]);
+    expect(await search("1%c")).toEqual([]);
+    expect((await search("Énergie")).map((c) => c.name)).toEqual(["Énergie"]);
+    expect((await search("énergie")).map((c) => c.name)).toEqual(["Énergie"]);
+    expect((await search("ÉNERGIE")).map((c) => c.name)).toEqual(["Énergie"]);
+    expect((await app.request("/api/concepts/search?q=", { headers: { Authorization: "Bearer t" } })).status).toBe(400);
+  });
+
+  it("navigates between disconnected clusters above WHOLE_GRAPH_NOTES concepts by changing focus", () => {
+    // Cluster A: 500 concepts in a chain; Cluster B: 2 disconnected concepts.
+    const concepts: ConceptGraph = {
+      concepts: [
+        ...Array.from({ length: WHOLE_GRAPH_NOTES }, (_, i) => ({ id: `a${i}`, name: `Alpha ${String(i).padStart(3, "0")}`, notes: [] })),
+        { id: "b0", name: "Beta root", notes: [] },
+        { id: "b1", name: "Beta leaf", notes: [] },
+      ],
+      edges: [
+        ...Array.from({ length: WHOLE_GRAPH_NOTES - 1 }, (_, i) => ({ from: `a${i}`, to: `a${i + 1}`, kind: "related" as const, notes: [] })),
+        { from: "b0", to: "b1", kind: "prerequisite" as const, notes: [] },
+      ],
+    };
+    const initial = cView(concepts);
+    expect(initial.mode).toBe("local");
+    expect(initial.nodes.some((n) => n.id === "concept:b0")).toBe(false);
+
+    const refocused = cView(concepts, { mode: "local", focus: "concept:b0", depth: 1 });
+    expect(refocused.mode).toBe("local");
+    expect(refocused.focus).toBe("concept:b0");
+    expect(refocused.nodes.map((n) => n.id)).toEqual(["concept:b1", "concept:b0"]);
   });
 });

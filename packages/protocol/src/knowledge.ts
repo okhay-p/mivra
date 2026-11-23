@@ -18,6 +18,23 @@ export const MAX_PROPOSED_MEMORIES = 30;
 export const ConceptEdgeKind = z.enum(["prerequisite", "related"]);
 export type ConceptEdgeKind = z.infer<typeof ConceptEdgeKind>;
 
+/**
+ * The input of the `link_concepts` tutor tool (ADR-014, issue #140). Every field is required with no defaults,
+ * so `{}` is rejected (ADR-006). Source session and timestamps are attached by the server.
+ */
+export const LinkConceptsInput = z
+  .object({
+    from: ConceptName.describe(
+      "The first concept name. For `prerequisite`, the concept that must be understood before `to`. Reuse an existing concept name from <learner_concepts> or <learner_concept_graph> when one fits.",
+    ),
+    to: ConceptName.describe(
+      "The second concept name. For `prerequisite`, the concept that builds on `from`. Reuse an existing concept name from <learner_concepts> or <learner_concept_graph> when one fits.",
+    ),
+    kind: ConceptEdgeKind.describe("prerequisite = `from` must be understood before `to`; related = the two concepts are closely linked."),
+  })
+  .strict();
+export type LinkConceptsInput = z.infer<typeof LinkConceptsInput>;
+
 /** The input of the record_from_notes tool. Every list is required, so an empty call is rejected. */
 export const RecordFromNotesInput = z
   .object({
@@ -89,3 +106,7 @@ export const ConceptGraph = z
   })
   .strict();
 export type ConceptGraph = z.infer<typeof ConceptGraph>;
+
+/** A concept found by name, for picking one to centre the global concept graph on (issue #140). */
+export const ConceptSummary = z.object({ id: z.string(), name: z.string() }).strict();
+export type ConceptSummary = z.infer<typeof ConceptSummary>;

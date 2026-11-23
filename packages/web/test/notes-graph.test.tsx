@@ -1,7 +1,7 @@
 import type { NoteGraphView, NoteView, VaultImportView } from "@mivra/protocol";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { nodeInDirection, NotesGraph } from "../src/NotesGraph.js";
+import { ALL_CONCEPTS, nodeInDirection, NotesGraph } from "../src/NotesGraph.js";
 import { layoutNotesGraph } from "../src/notes-graph-layout.js";
 
 vi.setConfig({ testTimeout: 20_000 });
@@ -156,6 +156,147 @@ describe("notes graph", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => (String(input).includes("graph") ? json({ error: "Import not found" }, 404) : json([])));
     render(<NotesGraph importId="i1" />);
     await waitFor(() => expect(status().textContent).toContain("Import not found"));
+  });
+
+  it("renders the global concept graph without vault imports, including session-only concepts", async () => {
+    const conceptQueries: URLSearchParams[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/imports") return json([]);
+      if (url.pathname === "/api/concepts/graph/view") {
+        conceptQueries.push(url.searchParams);
+        return json({
+          mode: "whole",
+          focus: null,
+          depth: 2,
+          totalNotes: 0,
+          matchingNotes: 0,
+          totalConcepts: 2,
+          truncated: false,
+          nodes: [
+            { id: "concept:c1", kind: "concept", label: "Functions", notes: 0 },
+            { id: "concept:c2", kind: "concept", label: "Closures", notes: 1 },
+          ],
+          edges: [{ from: "concept:c1", to: "concept:c2", kind: "prerequisite" }],
+          tags: [],
+          folders: [],
+        } satisfies NoteGraphView);
+      }
+      return json({ error: "nope" }, 404);
+    });
+
+    render(<NotesGraph importId={ALL_CONCEPTS} />);
+    await waitFor(() => expect(status().textContent).toContain("Whole concept graph: 2 concepts, 1 connection."));
+    const group = await screen.findByRole("group", { name: /^Notes graph/ });
+    expect(within(group).getByRole("button", { name: "Functions, concept, 1 connection" })).toBeTruthy();
+    expect(within(group).getByRole("button", { name: "Closures, concept from 1 note" })).toBeTruthy();
+    // Vault-only filters are hidden in the global concept graph.
+    expect(screen.queryByRole("combobox", { name: "Tag" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Folder" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Find a note" })).toBeNull();
+    expect(conceptQueries).toHaveLength(1);
+  });
+
+  it("shows an empty state when the global concept graph has no concepts yet", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/imports") return json([]);
+      if (url.pathname === "/api/concepts/graph/view") {
+        return json({
+          mode: "whole",
+          focus: null,
+          depth: 2,
+          totalNotes: 0,
+          matchingNotes: 0,
+          totalConcepts: 0,
+          truncated: false,
+          nodes: [],
+          edges: [],
+          tags: [],
+          folders: [],
+        } satisfies NoteGraphView);
+      }
+      return json({ error: "nope" }, 404);
+    });
+
+    render(<NotesGraph importId={ALL_CONCEPTS} />);
+    await waitFor(() => expect(status().textContent).toContain("No concepts yet."));
+  });
+
+  it("navigates disconnected clusters above 500 concepts via concept finder and explicit centre button", async () => {
+    const queries: URLSearchParams[] = [];
+    const clusterA: NoteGraphView = {
+      mode: "local",
+      focus: "concept:a0",
+      depth: 2,
+      totalNotes: 0,
+      matchingNotes: 0,
+      totalConcepts: 502,
+      truncated: true,
+      nodes: [
+        { id: "concept:a0", kind: "concept", label: "Alpha root", notes: 0, hops: 0 },
+        { id: "concept:a1", kind: "concept", label: "Alpha child", notes: 0, hops: 1 },
+      ],
+      edges: [{ from: "concept:a0", to: "concept:a1", kind: "prerequisite" }],
+      tags: [],
+      folders: [],
+    };
+    const clusterB: NoteGraphView = {
+      mode: "local",
+      focus: "concept:b0",
+      depth: 2,
+      totalNotes: 0,
+      matchingNotes: 0,
+      totalConcepts: 502,
+      truncated: false,
+      nodes: [
+        { id: "concept:b0", kind: "concept", label: "Beta root", notes: 0, hops: 0 },
+        { id: "concept:b1", kind: "concept", label: "Beta leaf", notes: 0, hops: 1 },
+      ],
+      edges: [{ from: "concept:b0", to: "concept:b1", kind: "prerequisite" }],
+      tags: [],
+      folders: [],
+    };
+    const aroundB1: NoteGraphView = {
+      ...clusterB,
+      focus: "concept:b1",
+      nodes: [
+        { id: "concept:b0", kind: "concept", label: "Beta root", notes: 0, hops: 1 },
+        { id: "concept:b1", kind: "concept", label: "Beta leaf", notes: 0, hops: 0 },
+      ],
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/imports") return json([]);
+      if (url.pathname === "/api/concepts/search") return json([{ id: "b0", name: "Beta root" }]);
+      if (url.pathname === "/api/concepts/graph/view") {
+        queries.push(url.searchParams);
+        const focus = url.searchParams.get("focus");
+        if (focus === "concept:b0") return json(clusterB);
+        if (focus === "concept:b1") return json(aroundB1);
+        return json(clusterA);
+      }
+      return json({ error: "nope" }, 404);
+    });
+
+    render(<NotesGraph importId={ALL_CONCEPTS} />);
+    await waitFor(() => expect(status().textContent).toContain("Around Alpha root, within 2 hops: 2 concepts, 1 connection, of 502 concepts."));
+
+    // Reach disconnected cluster B via Find a concept.
+    fireEvent.click(screen.getByRole("button", { name: "Find a concept" }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Find a concept by name" }), { target: { value: "Beta" } });
+    fireEvent.click(await screen.findByRole("option", { name: "Beta root" }));
+    await waitFor(() => expect(queries.at(-1)?.get("focus")).toBe("concept:b0"));
+    expect(queries.at(-1)?.get("mode")).toBe("local");
+    await waitFor(() => expect(status().textContent).toContain("Around Beta root, within 2 hops"));
+
+    // Select a drawn neighbour concept and explicitly centre on it.
+    fireEvent.click(await screen.findByRole("button", { name: "Beta leaf, concept, 1 connection" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Centre on Beta leaf" }));
+    await waitFor(() => expect(queries.at(-1)?.get("focus")).toBe("concept:b1"));
+    expect(queries.at(-1)?.get("mode")).toBe("local");
+    await waitFor(() => expect(status().textContent).toContain("Around Beta leaf, within 2 hops"));
   });
 });
 

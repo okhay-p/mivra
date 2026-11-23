@@ -123,6 +123,19 @@ export const NoteGraphViewQuery = z
   .strict();
 export type NoteGraphViewQuery = z.infer<typeof NoteGraphViewQuery>;
 
+/** Query for the global concept graph view (`GET /api/concepts/graph/view`, issue #140). */
+export const ConceptGraphViewQuery = z
+  .object({
+    /** `auto` draws the whole concept graph when at most WHOLE_GRAPH_NOTES concepts exist, and the local graph otherwise. */
+    mode: z.enum(["auto", "local"]).default("auto"),
+    /** The concept node (`concept:<id>` or `<id>`) the local graph is drawn around. Defaults to the best-connected concept. */
+    focus: z.string().max(80).optional(),
+    /** How many hops from the focus the local graph reaches along concept edges. */
+    depth: z.coerce.number().int().min(1).max(3).default(2),
+  })
+  .strict();
+export type ConceptGraphViewQuery = z.infer<typeof ConceptGraphViewQuery>;
+
 export const NoteGraphNodeKind = z.enum(["note", "ghost", "tag", "concept"]);
 export type NoteGraphNodeKind = z.infer<typeof NoteGraphNodeKind>;
 export const NoteGraphEdgeKind = z.enum(["link", "tag", "concept", "prerequisite", "related"]);
@@ -141,6 +154,8 @@ export const NoteGraphView = z
     totalNotes: z.number().int(),
     /** Notes matching the filters, drawn or not. */
     matchingNotes: z.number().int(),
+    /** Total concepts in the global concept graph view (omitted on per-import note graph views). */
+    totalConcepts: z.number().int().optional(),
     /** Whether the limits left matching nodes or edges out of the drawing. */
     truncated: z.boolean(),
     nodes: z.array(
