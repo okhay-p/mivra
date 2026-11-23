@@ -463,8 +463,9 @@ export const usageRecords = sqliteTable(
 );
 
 /**
- * A node of the knowledge graph (ADR-014), drawn from imported notes. `key` is the name's `conceptKey` (ADR-009), so
- * one concept has one node however its name is written. A concept lives as long as at least one note supports it.
+ * A node of the knowledge graph (ADR-014), drawn from imported notes or live tutoring sessions (issue #140).
+ * `key` is the name's `conceptKey` (ADR-009), so one concept has one node however its name is written.
+ * A concept lives as long as at least one note, session, or edge supports it.
  */
 export const concepts = sqliteTable(
   "concepts",
@@ -491,6 +492,29 @@ export const conceptSources = sqliteTable(
   (t) => [primaryKey({ columns: [t.conceptId, t.noteId] }), index("concept_sources_note_idx").on(t.noteId)],
 );
 
+/**
+ * Which tutoring sessions introduced or linked a concept (issue #140). Kept when a vault is deleted or
+ * re-imported, and kept when its session is deleted (`session_id` becomes null, as for memories).
+ */
+export const conceptSessionSources = sqliteTable(
+  "concept_session_sources",
+  {
+    id: text("id").primaryKey(),
+    conceptId: text("concept_id")
+      .notNull()
+      .references(() => concepts.id, { onDelete: "cascade" }),
+    sessionId: text("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("concept_session_sources_concept_session_idx")
+      .on(t.conceptId, t.sessionId)
+      .where(sql`${t.sessionId} is not null`),
+    index("concept_session_sources_concept_idx").on(t.conceptId),
+    index("concept_session_sources_session_idx").on(t.sessionId),
+  ],
+);
+
 export const conceptEdgeKinds = ["prerequisite", "related"] as const;
 
 /**
@@ -512,6 +536,34 @@ export const conceptEdges = sqliteTable(
       .references(() => notes.id, { onDelete: "cascade" }),
   },
   (t) => [primaryKey({ columns: [t.fromId, t.toId, t.kind, t.noteId] }), index("concept_edges_note_idx").on(t.noteId), index("concept_edges_to_idx").on(t.toId)],
+);
+
+/**
+ * An edge between two concepts recorded during a live tutoring session (issue #140). Kept across vault deletions
+ * and re-imports, and kept if the originating session is deleted (`session_id` becomes null).
+ */
+export const conceptSessionEdges = sqliteTable(
+  "concept_session_edges",
+  {
+    id: text("id").primaryKey(),
+    fromId: text("from_id")
+      .notNull()
+      .references(() => concepts.id, { onDelete: "cascade" }),
+    toId: text("to_id")
+      .notNull()
+      .references(() => concepts.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: conceptEdgeKinds }).notNull(),
+    sessionId: text("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("concept_session_edges_edge_session_idx")
+      .on(t.fromId, t.toId, t.kind, t.sessionId)
+      .where(sql`${t.sessionId} is not null`),
+    index("concept_session_edges_from_to_idx").on(t.fromId, t.toId, t.kind),
+    index("concept_session_edges_to_idx").on(t.toId),
+    index("concept_session_edges_session_idx").on(t.sessionId),
+  ],
 );
 
 /**

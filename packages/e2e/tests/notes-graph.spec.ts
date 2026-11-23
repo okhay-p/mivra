@@ -141,4 +141,13 @@ test.describe("notes graph", () => {
     await pick(page, "Folder", /^Folder 3 \(/);
     await expect(status).toContainText(/of 100 matching notes \(2,000 notes in all\)/);
   });
+
+  test("opens the global concept graph from the sidebar without needing a vault", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Concept graph" }).click();
+    await expect(page.getByRole("heading", { name: "Concept graph" })).toBeVisible();
+    const graph = page.getByTestId("notes-graph");
+    await expect(graph.getByTestId("notes-graph-status")).toContainText(/No concepts yet\.|Whole concept graph:/);
+    await expect(page.getByRole("toolbar", { name: "Graph filters" }).getByRole("combobox", { name: "Tag" })).toHaveCount(0);
+  });
 });

@@ -1,6 +1,7 @@
 import { ArtifactView, type CourseKind } from "@mivra/protocol";
 import { tool, type Tool, type ToolSet } from "ai";
 import type { ZodType } from "zod";
+import type { KnowledgeStore } from "../store/knowledge-store.js";
 import type { LessonStore } from "../store/lesson-store.js";
 import type { NoteStore } from "../store/note-store.js";
 import type { AttemptRow, SessionStore } from "../store/session-store.js";
@@ -13,6 +14,8 @@ export interface TurnContext {
   lessons?: LessonStore;
   /** The learner's imported notes (ADR-014), when available for on-demand inspection. */
   notes?: NoteStore;
+  /** The knowledge graph store (ADR-014), when available for recording concept relationships. */
+  knowledge?: KnowledgeStore;
   /** The lesson the learner had open when they sent this turn, in a course session. */
   lessonId?: string;
   /** Set only while a lesson is being generated: the kind of course it belongs to. */

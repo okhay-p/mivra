@@ -5,6 +5,7 @@ import {
   MAX_GRAPH_VIEW_NOTES,
   WHOLE_GRAPH_NOTES,
   type ConceptGraph,
+  type ConceptGraphViewQuery,
   type NoteGraph,
   type NoteGraphView,
   type NoteGraphViewQuery,
@@ -202,6 +203,107 @@ export function noteGraphView(graph: NoteGraph, concepts: ConceptGraph, query: N
     nodes,
     edges,
     ...facets,
+  };
+}
+
+/**
+ * Global concept graph view across imported notes and live tutoring sessions (ADR-014, issue #140).
+ * Under WHOLE_GRAPH_NOTES concepts the whole graph is drawn; above that, or in local mode, the neighbourhood
+ * around a focus concept is drawn breadth-first within `depth` hops. Bounded by the MAX_GRAPH_VIEW_* limits.
+ */
+export function conceptGraphView(concepts: ConceptGraph, query: ConceptGraphViewQuery): NoteGraphView {
+  const list = [...concepts.concepts].sort((a, b) => compare(a.name, b.name) || compare(a.id, b.id));
+  const indexOf = new Map(list.map((c, i) => [c.id, i]));
+
+  const adjacent = list.map(() => new Set<number>());
+  const rawEdges: { from: number; to: number; kind: "prerequisite" | "related" }[] = [];
+  const seenEdges = new Set<string>();
+  for (const e of concepts.edges) {
+    let from = indexOf.get(e.from);
+    let to = indexOf.get(e.to);
+    if (from === undefined || to === undefined || from === to) continue;
+    if (e.kind === "related" && from > to) [from, to] = [to, from];
+    const key = `${from}|${to}|${e.kind}`;
+    if (seenEdges.has(key)) continue;
+    seenEdges.add(key);
+    adjacent[from]!.add(to);
+    adjacent[to]!.add(from);
+    rawEdges.push({ from, to, kind: e.kind });
+  }
+  rawEdges.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "prerequisite" ? -1 : 1) || a.from - b.from || a.to - b.to);
+
+  const byConnections = () => {
+    let best = -1;
+    list.forEach((_, i) => {
+      if (best < 0 || adjacent[i]!.size > adjacent[best]!.size) best = i;
+    });
+    return best;
+  };
+  const focusRaw = query.focus?.replace(/^concept:/, "");
+  const requested = focusRaw === undefined ? undefined : indexOf.get(focusRaw);
+  const whole = query.mode === "auto" && list.length <= WHOLE_GRAPH_NOTES;
+  const focus = whole ? requested : (requested ?? byConnections());
+  let truncated = false;
+
+  const hops = new Map<number, number>();
+  if (whole) {
+    list.forEach((_, i) => hops.set(i, 0));
+  } else if (focus !== undefined && focus >= 0) {
+    hops.set(focus, 0);
+    let frontier = [focus];
+    for (let hop = 1; hop <= query.depth && frontier.length > 0 && !truncated; hop++) {
+      const next: number[] = [];
+      for (const i of frontier) {
+        for (const j of [...adjacent[i]!].sort((a, b) => a - b)) {
+          if (hops.has(j)) continue;
+          if (hops.size >= MAX_GRAPH_VIEW_NOTES) {
+            truncated = true;
+            break;
+          }
+          hops.set(j, hop);
+          next.push(j);
+        }
+        if (truncated) break;
+      }
+      frontier = next;
+    }
+  }
+
+  const nodes: ViewNode[] = [];
+  const drawn = new Set<string>();
+  const shown = [...hops.keys()].sort((a, b) => a - b).slice(0, MAX_GRAPH_VIEW_NODES);
+  if (shown.length < hops.size) truncated = true;
+  for (const i of shown) {
+    const c = list[i]!;
+    const id = `concept:${c.id}`;
+    nodes.push({ id, kind: "concept", label: c.name, notes: c.notes.length, ...(whole ? {} : { hops: hops.get(i)! }) });
+    drawn.add(id);
+  }
+
+  const edges: ViewEdge[] = [];
+  for (const e of rawEdges) {
+    const from = `concept:${list[e.from]!.id}`;
+    const to = `concept:${list[e.to]!.id}`;
+    if (!drawn.has(from) || !drawn.has(to)) continue;
+    if (edges.length >= MAX_GRAPH_VIEW_EDGES) {
+      truncated = true;
+      break;
+    }
+    edges.push({ from, to, kind: e.kind });
+  }
+
+  return {
+    mode: whole ? "whole" : "local",
+    focus: focus === undefined || focus < 0 ? null : `concept:${list[focus]!.id}`,
+    depth: query.depth,
+    totalNotes: 0,
+    matchingNotes: 0,
+    totalConcepts: list.length,
+    truncated,
+    nodes,
+    edges,
+    tags: [],
+    folders: [],
   };
 }
 

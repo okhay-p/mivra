@@ -9,12 +9,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
-import { findNotes, getGraphView, getNote, listImports, type GraphViewFilters } from "./api.js";
+import { findNotes, getConceptGraphView, getGraphView, getNote, listImports, type GraphViewFilters } from "./api.js";
 import { layoutNotesGraph, type NotesGraphLayout } from "./notes-graph-layout.js";
 
 type GraphNode = NoteGraphView["nodes"][number];
 
 const ALL = "__all";
+/** Sentinel scope for the global concept graph across notes and live tutoring sessions (issue #140). */
+export const ALL_CONCEPTS = "__concepts";
 const ZOOM_STEP = 1.25;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3;
@@ -38,7 +40,9 @@ function nodeName(node: GraphNode, connections: number) {
     case "tag":
       return `${node.label}, tag on ${plural(node.notes ?? 0, "note")}`;
     case "concept":
-      return `${node.label}, concept from ${plural(node.notes ?? 0, "note")}`;
+      return (node.notes ?? 0) > 0
+        ? `${node.label}, concept from ${plural(node.notes!, "note")}`
+        : `${node.label}, concept, ${links}`;
     case "ghost":
       return `${node.label}, unresolved link, no such note`;
   }
@@ -97,8 +101,11 @@ export function useNotesGraphLayout(view: NoteGraphView | undefined) {
   return { drawn, pending: Boolean(view && drawn?.view !== view) };
 }
 
-/** The graph of an imported vault's notes, tags and concepts (ADR-014 step 4). Read-only: a note opens to be read. */
-export function NotesGraph({ importId: initialImport }: { importId: string }) {
+/**
+ * The knowledge graph: either the global concept graph across imported notes and tutoring sessions (issue #140),
+ * or one imported vault's notes, tags and concepts (ADR-014 step 4). Read-only: a note opens to be read.
+ */
+export function NotesGraph({ importId: initialImport = ALL_CONCEPTS, onScopeChange }: { importId?: string; onScopeChange?: (scope: string) => void }) {
   const [importId, setImportId] = useState(initialImport);
   useEffect(() => setImportId(initialImport), [initialImport]);
   const [imports, setImports] = useState<VaultImportView[]>([]);
@@ -106,19 +113,23 @@ export function NotesGraph({ importId: initialImport }: { importId: string }) {
     void listImports().then((result) => result.ok && setImports(result.value));
   }, []);
 
+  const isGlobal = importId === ALL_CONCEPTS;
   const [filters, setFilters] = useState<GraphViewFilters>({ mode: "auto", depth: 2 });
   const [state, setState] = useState<{ view?: NoteGraphView; error?: string; loading: boolean }>({ loading: true });
   useEffect(() => {
     let stale = false;
     setState((s) => ({ ...s, loading: true, error: undefined }));
-    void getGraphView(importId, filters).then((result) => {
+    const fetchView = isGlobal
+      ? getConceptGraphView({ mode: filters.mode, focus: filters.focus, depth: filters.depth })
+      : getGraphView(importId, filters);
+    void fetchView.then((result) => {
       if (stale) return;
       setState(result.ok ? { view: result.value, loading: false } : { error: result.error, loading: false });
     });
     return () => {
       stale = true;
     };
-  }, [importId, filters]);
+  }, [importId, isGlobal, filters]);
   const view = state.view;
   const laidOut = useNotesGraphLayout(view);
 
@@ -132,6 +143,7 @@ export function NotesGraph({ importId: initialImport }: { importId: string }) {
 
   const changeImport = (id: string) => {
     setImportId(id);
+    onScopeChange?.(id);
     setFilters({ mode: "auto", depth: 2 });
     setSelected(undefined);
   };
@@ -144,37 +156,60 @@ export function NotesGraph({ importId: initialImport }: { importId: string }) {
     if (node.kind === "note") setReading(node.id);
   };
 
-  const importName = imports.find((i) => i.id === importId)?.name;
-  const tooBigForWhole = Boolean(view && view.matchingNotes > WHOLE_GRAPH_NOTES);
+  const importName = isGlobal ? "All concepts" : imports.find((i) => i.id === importId)?.name;
+  const totalForMode = isGlobal ? (view?.totalConcepts ?? view?.nodes.length ?? 0) : (view?.matchingNotes ?? 0);
+  const tooBigForWhole = Boolean(view && totalForMode > WHOLE_GRAPH_NOTES);
+  const scopeOptions = [
+    { value: ALL_CONCEPTS, text: "All concepts" },
+    ...(imports.length > 0
+      ? imports.map((i) => ({ value: i.id, text: i.name }))
+      : isGlobal
+        ? []
+        : [{ value: importId, text: "This import" }]),
+  ];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="notes-graph">
       <div className="flex flex-wrap items-end gap-2 border-b p-3" role="toolbar" aria-label="Graph filters">
         <FilterSelect
-          label="Import"
+          label={isGlobal ? "Graph" : "Import"}
           value={importId}
           onChange={changeImport}
-          options={(imports.length > 0 ? imports : [{ id: importId, name: "This import" }]).map((i) => ({ value: i.id, text: i.name }))}
+          options={scopeOptions}
         />
-        <FilterSelect
-          label="Tag"
-          value={filters.tag ?? ALL}
-          onChange={(tag) => setFilters((f) => ({ ...f, tag: tag === ALL ? undefined : tag }))}
-          options={[{ value: ALL, text: "All tags" }, ...withCurrent(view?.tags.map((t) => ({ value: t.name, text: `#${t.name} (${t.notes})` })) ?? [], filters.tag, (t) => `#${t}`)]}
-        />
-        <FilterSelect
-          label="Folder"
-          value={filters.folder ?? ALL}
-          onChange={(folder) => setFilters((f) => ({ ...f, folder: folder === ALL ? undefined : folder }))}
-          options={[{ value: ALL, text: "All folders" }, ...withCurrent(view?.folders.map((f) => ({ value: f.path, text: `${f.path} (${f.notes})` })) ?? [], filters.folder, (f) => f)]}
-        />
+        {!isGlobal && (
+          <>
+            <FilterSelect
+              label="Tag"
+              value={filters.tag ?? ALL}
+              onChange={(tag) => setFilters((f) => ({ ...f, tag: tag === ALL ? undefined : tag }))}
+              options={[{ value: ALL, text: "All tags" }, ...withCurrent(view?.tags.map((t) => ({ value: t.name, text: `#${t.name} (${t.notes})` })) ?? [], filters.tag, (t) => `#${t}`)]}
+            />
+            <FilterSelect
+              label="Folder"
+              value={filters.folder ?? ALL}
+              onChange={(folder) => setFilters((f) => ({ ...f, folder: folder === ALL ? undefined : folder }))}
+              options={[{ value: ALL, text: "All folders" }, ...withCurrent(view?.folders.map((f) => ({ value: f.path, text: `${f.path} (${f.notes})` })) ?? [], filters.folder, (f) => f)]}
+            />
+          </>
+        )}
         <FilterSelect
           label="Show"
           value={filters.mode === "local" || tooBigForWhole ? "local" : "auto"}
-          onChange={(mode) => setFilters((f) => ({ ...f, mode: mode as GraphViewFilters["mode"] }))}
+          onChange={(mode) =>
+            setFilters((f) => ({
+              ...f,
+              mode: mode as GraphViewFilters["mode"],
+              ...(mode === "local" && isGlobal && selected ? { focus: selected } : {}),
+            }))
+          }
           options={[
-            { value: "auto", text: tooBigForWhole ? `Whole graph (over ${WHOLE_GRAPH_NOTES} notes)` : "Whole graph", disabled: tooBigForWhole },
-            { value: "local", text: "Around the selected note" },
+            {
+              value: "auto",
+              text: tooBigForWhole ? `Whole graph (over ${WHOLE_GRAPH_NOTES} ${isGlobal ? "concepts" : "notes"})` : "Whole graph",
+              disabled: tooBigForWhole,
+            },
+            { value: "local", text: isGlobal ? "Around the selected concept" : "Around the selected note" },
           ]}
         />
         {(filters.mode === "local" || tooBigForWhole) && (
@@ -185,9 +220,9 @@ export function NotesGraph({ importId: initialImport }: { importId: string }) {
             options={[1, 2, 3].map((d) => ({ value: String(d), text: plural(d, "hop") }))}
           />
         )}
-        <NoteFinder importId={importId} onPick={(note) => centreOn(note.id)} />
+        {!isGlobal && <NoteFinder importId={importId} onPick={(note) => centreOn(note.id)} />}
       </div>
-      <GraphStatus view={view} loading={state.loading || laidOut.pending} error={state.error} importName={importName} />
+      <GraphStatus view={view} loading={state.loading || laidOut.pending} error={state.error} importName={importName} isGlobal={isGlobal} />
       {!laidOut.drawn && !state.error && (state.loading || laidOut.pending) && (
         // A large vault takes a few seconds to lay out, so the empty canvas says so (the status line announces it).
         <div aria-hidden className="text-muted-foreground flex flex-1 items-center justify-center gap-2 text-sm">
@@ -305,19 +340,35 @@ function NoteFinder({ importId, onPick }: { importId: string; onPick: (note: Not
 }
 
 /** Says what's drawn and why, so a learner knows when part of a large vault is left out. Announced as it changes. */
-function GraphStatus({ view, loading, error, importName }: { view?: NoteGraphView; loading: boolean; error?: string; importName?: string }) {
+function GraphStatus({ view, loading, error, importName, isGlobal }: { view?: NoteGraphView; loading: boolean; error?: string; importName?: string; isGlobal: boolean }) {
   let text = "";
   if (view) {
-    const count = (kind: GraphNode["kind"]) => view.nodes.filter((n) => n.kind === kind).length;
-    const parts = [plural(count("note"), "note"), plural(count("tag"), "tag"), plural(count("concept"), "concept"), plural(count("ghost"), "unresolved link")];
-    const focus = view.nodes.find((n) => n.id === view.focus);
-    const where =
-      view.mode === "whole"
-        ? "Whole graph"
-        : `Around ${focus?.label ?? "the best-connected note"}, within ${plural(view.depth, "hop")}`;
-    const of = view.matchingNotes === view.totalNotes ? plural(view.totalNotes, "note") : `${plural(view.matchingNotes, "matching note")} (${plural(view.totalNotes, "note")} in all)`;
-    text = `${where}: ${parts.join(", ")}, of ${of}.${view.truncated ? " Only the nearest are drawn; filter or centre on a note to see others." : ""}`;
-    if (view.matchingNotes === 0) text = view.totalNotes === 0 ? "This import has no notes." : "No note matches these filters.";
+    if (isGlobal) {
+      const total = view.totalConcepts ?? view.nodes.length;
+      const focus = view.nodes.find((n) => n.id === view.focus);
+      if (total === 0) {
+        text = "No concepts yet. Chat with Mivra or import a vault to build your concept graph.";
+      } else {
+        const where =
+          view.mode === "whole"
+            ? "Whole concept graph"
+            : `Around ${focus?.label ?? "the best-connected concept"}, within ${plural(view.depth, "hop")}`;
+        const counts = `${plural(view.nodes.length, "concept")}, ${plural(view.edges.length, "connection")}`;
+        const of = view.mode === "local" || view.nodes.length !== total ? `, of ${plural(total, "concept")}` : "";
+        text = `${where}: ${counts}${of}.${view.truncated ? " Only the nearest are drawn; select a concept to explore further." : ""}`;
+      }
+    } else {
+      const count = (kind: GraphNode["kind"]) => view.nodes.filter((n) => n.kind === kind).length;
+      const parts = [plural(count("note"), "note"), plural(count("tag"), "tag"), plural(count("concept"), "concept"), plural(count("ghost"), "unresolved link")];
+      const focus = view.nodes.find((n) => n.id === view.focus);
+      const where =
+        view.mode === "whole"
+          ? "Whole graph"
+          : `Around ${focus?.label ?? "the best-connected note"}, within ${plural(view.depth, "hop")}`;
+      const of = view.matchingNotes === view.totalNotes ? plural(view.totalNotes, "note") : `${plural(view.matchingNotes, "matching note")} (${plural(view.totalNotes, "note")} in all)`;
+      text = `${where}: ${parts.join(", ")}, of ${of}.${view.truncated ? " Only the nearest are drawn; filter or centre on a note to see others." : ""}`;
+      if (view.matchingNotes === 0) text = view.totalNotes === 0 ? "This import has no notes." : "No note matches these filters.";
+    }
   }
   return (
     <div className="flex min-h-9 items-center gap-2 border-b px-3 py-1.5 text-sm">
@@ -326,18 +377,20 @@ function GraphStatus({ view, loading, error, importName }: { view?: NoteGraphVie
         {error ?? text}
       </p>
       {loading && <Spinner aria-label="Loading the graph" />}
-      <Legend />
+      <Legend isGlobal={isGlobal} />
     </div>
   );
 }
 
-function Legend() {
-  const items: [GraphNode["kind"], string][] = [
-    ["note", "Note"],
-    ["concept", "Concept"],
-    ["tag", "Tag"],
-    ["ghost", "Unresolved"],
-  ];
+function Legend({ isGlobal }: { isGlobal: boolean }) {
+  const items: [GraphNode["kind"], string][] = isGlobal
+    ? [["concept", "Concept"]]
+    : [
+        ["note", "Note"],
+        ["concept", "Concept"],
+        ["tag", "Tag"],
+        ["ghost", "Unresolved"],
+      ];
   return (
     <ul className="text-muted-foreground hidden shrink-0 items-center gap-3 text-xs sm:flex" aria-hidden="true">
       {items.map(([kind, text]) => (

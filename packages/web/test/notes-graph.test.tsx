@@ -1,7 +1,7 @@
 import type { NoteGraphView, NoteView, VaultImportView } from "@mivra/protocol";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { nodeInDirection, NotesGraph } from "../src/NotesGraph.js";
+import { ALL_CONCEPTS, nodeInDirection, NotesGraph } from "../src/NotesGraph.js";
 import { layoutNotesGraph } from "../src/notes-graph-layout.js";
 
 vi.setConfig({ testTimeout: 20_000 });
@@ -156,6 +156,71 @@ describe("notes graph", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => (String(input).includes("graph") ? json({ error: "Import not found" }, 404) : json([])));
     render(<NotesGraph importId="i1" />);
     await waitFor(() => expect(status().textContent).toContain("Import not found"));
+  });
+
+  it("renders the global concept graph without vault imports, including session-only concepts", async () => {
+    const conceptQueries: URLSearchParams[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/imports") return json([]);
+      if (url.pathname === "/api/concepts/graph/view") {
+        conceptQueries.push(url.searchParams);
+        return json({
+          mode: "whole",
+          focus: null,
+          depth: 2,
+          totalNotes: 0,
+          matchingNotes: 0,
+          totalConcepts: 2,
+          truncated: false,
+          nodes: [
+            { id: "concept:c1", kind: "concept", label: "Functions", notes: 0 },
+            { id: "concept:c2", kind: "concept", label: "Closures", notes: 1 },
+          ],
+          edges: [{ from: "concept:c1", to: "concept:c2", kind: "prerequisite" }],
+          tags: [],
+          folders: [],
+        } satisfies NoteGraphView);
+      }
+      return json({ error: "nope" }, 404);
+    });
+
+    render(<NotesGraph importId={ALL_CONCEPTS} />);
+    await waitFor(() => expect(status().textContent).toContain("Whole concept graph: 2 concepts, 1 connection."));
+    const group = await screen.findByRole("group", { name: /^Notes graph/ });
+    expect(within(group).getByRole("button", { name: "Functions, concept, 1 connection" })).toBeTruthy();
+    expect(within(group).getByRole("button", { name: "Closures, concept from 1 note" })).toBeTruthy();
+    // Vault-only filters are hidden in the global concept graph.
+    expect(screen.queryByRole("combobox", { name: "Tag" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Folder" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Find a note" })).toBeNull();
+    expect(conceptQueries).toHaveLength(1);
+  });
+
+  it("shows an empty state when the global concept graph has no concepts yet", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/imports") return json([]);
+      if (url.pathname === "/api/concepts/graph/view") {
+        return json({
+          mode: "whole",
+          focus: null,
+          depth: 2,
+          totalNotes: 0,
+          matchingNotes: 0,
+          totalConcepts: 0,
+          truncated: false,
+          nodes: [],
+          edges: [],
+          tags: [],
+          folders: [],
+        } satisfies NoteGraphView);
+      }
+      return json({ error: "nope" }, 404);
+    });
+
+    render(<NotesGraph importId={ALL_CONCEPTS} />);
+    await waitFor(() => expect(status().textContent).toContain("No concepts yet."));
   });
 });
 

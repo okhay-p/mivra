@@ -190,7 +190,7 @@ type Indexed = Named & { words: string[] };
  * Names to match against, each split into words once. Matching runs for every name a proposal gives, against every
  * concept node (up to MAX_CONCEPT_NODES), so nothing is recomputed per comparison.
  */
-function nameIndex(list: Named[]) {
+export function nameIndex(list: Named[]) {
   const entries: Indexed[] = [];
   const byKey = new Map<string, Indexed>();
   const add = (named: Named) => {

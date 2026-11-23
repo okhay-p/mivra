@@ -195,6 +195,22 @@ export const getGraphView = (id: string, { mode, focus, depth, tag, folder }: Gr
     async (res) => NoteGraphView.parse(await res.json()),
   );
 
+/** What the global concept graph draws (ADR-014, issue #140). */
+export interface ConceptGraphViewFilters {
+  mode: "auto" | "local";
+  focus?: string;
+  depth: number;
+}
+
+export const getConceptGraphView = ({ mode, focus, depth }: ConceptGraphViewFilters) =>
+  request(
+    () =>
+      api.concepts.graph.view.$get({
+        query: { mode, depth: String(depth), ...(focus ? { focus } : {}) },
+      }),
+    async (res) => NoteGraphView.parse(await res.json()),
+  );
+
 export const findNotes = (id: string, q: string) =>
   request(
     () => api.imports[":id"].notes.$get({ param: { id }, query: { q } }),

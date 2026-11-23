@@ -1,8 +1,20 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db/client.js";
+import { closeSpelling, nameIndex } from "../notes/distil.js";
 import { conceptKey } from "../runtime/learner-context.js";
-import { conceptEdges, conceptSources, concepts, memories, memorySources, notes, noteTags, type conceptEdgeKinds } from "../db/schema.js";
+import {
+  conceptEdges,
+  conceptSessionEdges,
+  conceptSessionSources,
+  conceptSources,
+  concepts,
+  memories,
+  memorySources,
+  notes,
+  noteTags,
+  type conceptEdgeKinds,
+} from "../db/schema.js";
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type EdgeKind = (typeof conceptEdgeKinds)[number];
@@ -69,13 +81,15 @@ export function detachMemories(tx: Db | Tx, noteIds: string[]) {
 }
 
 /**
- * Deletes concepts no note supports any more: none lists it as a source, and no edge a note drew touches it. An edge
- * keeps its ends, so rewriting one note doesn't break the edges other notes drew to its concepts.
+ * Deletes concepts no note or session supports any more: none lists it as a source, and no edge touches it. An edge
+ * keeps its ends, so rewriting one note doesn't break the edges other notes or sessions drew to its concepts.
  */
 export function dropUnsupportedConcepts(tx: Db | Tx) {
   tx.run(sql`
     delete from concepts where not exists (select 1 from concept_sources s where s.concept_id = concepts.id)
-      and not exists (select 1 from concept_edges e where e.from_id = concepts.id or e.to_id = concepts.id)`);
+      and not exists (select 1 from concept_session_sources s where s.concept_id = concepts.id)
+      and not exists (select 1 from concept_edges e where e.from_id = concepts.id or e.to_id = concepts.id)
+      and not exists (select 1 from concept_session_edges e where e.from_id = concepts.id or e.to_id = concepts.id)`);
 }
 
 /**
@@ -193,8 +207,14 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
           let to = ids.get(edge.toKey);
           if (!from || !to || from === to) continue;
           if (edge.kind === "related" && from > to) [from, to] = [to, from];
-          // A prerequisite both ways is a contradiction; the first one stated stands.
-          if (edge.kind === "prerequisite" && tx.select().from(conceptEdges).where(and(eq(conceptEdges.fromId, to), eq(conceptEdges.toId, from), eq(conceptEdges.kind, "prerequisite"))).get()) continue;
+          // A prerequisite both ways is a contradiction; the first one stated stands (whether from notes or a session).
+          if (
+            edge.kind === "prerequisite" &&
+            (tx.select().from(conceptEdges).where(and(eq(conceptEdges.fromId, to), eq(conceptEdges.toId, from), eq(conceptEdges.kind, "prerequisite"))).get() ||
+              tx.select().from(conceptSessionEdges).where(and(eq(conceptSessionEdges.fromId, to), eq(conceptSessionEdges.toId, from), eq(conceptSessionEdges.kind, "prerequisite"))).get())
+          ) {
+            continue;
+          }
           savedEdges += tx.insert(conceptEdges).values({ fromId: from, toId: to, kind: edge.kind, noteId: edge.noteId }).onConflictDoNothing().run().changes;
         }
         // Repeats are skipped: of what the learner said, or of what this import's notes already gave. A repeat of this
@@ -253,6 +273,111 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
       });
     },
 
+    /**
+     * Records a concept link proposed during a live tutoring session (ADR-014, issue #140).
+     * Reuses `conceptKey` + `closeSpelling` normalization against existing graph nodes (and then recent
+     * attempt/memory concept names), rejects self-loops and contradictory prerequisites, and enforces
+     * `MAX_CONCEPT_NODES` atomically so partial nodes are never written.
+     */
+    saveSessionEdge(input: { sessionId: string; from: string; to: string; kind: EdgeKind }):
+      | { ok: true; from: string; to: string; kind: EdgeKind; created: boolean }
+      | { ok: false; reason: string } {
+      const now = clock();
+      return db.transaction((tx) => {
+        const rawFrom = input.from.trim();
+        const rawTo = input.to.trim();
+        const rawFromKey = conceptKey(rawFrom);
+        const rawToKey = conceptKey(rawTo);
+        if (!rawFromKey || !rawToKey) {
+          return { ok: false as const, reason: "Both concept names must be non-empty." };
+        }
+
+        const existingNodes = tx.select({ id: concepts.id, key: concepts.key, name: concepts.name }).from(concepts).orderBy(asc(concepts.name)).all();
+        const nodeByKey = new Map(existingNodes.map((n) => [n.key, n]));
+        const nodeIndex = nameIndex(existingNodes);
+        const otherNames = tx
+          .all<{ concept: string }>(sql`select concept from attempts where concept is not null group by concept order by max(created_at) desc limit 300`)
+          .concat(
+            tx.all<{ concept: string }>(
+              sql`select concept from memories where concept is not null and status = 'active' and basis != 'import' group by concept order by max(created_at) desc limit 300`,
+            ),
+          )
+          .map((r) => ({ key: conceptKey(r.concept), name: r.concept }))
+          .filter((r) => r.key.length > 0);
+        const otherIndex = nameIndex(otherNames);
+
+        const resolve = (raw: string, key: string) => {
+          const matchedNode = nodeIndex.find(raw, key);
+          if (matchedNode) return { node: nodeByKey.get(matchedNode.key)!, key: matchedNode.key, name: matchedNode.name };
+          const matchedOther = otherIndex.find(raw, key);
+          if (matchedOther) return { node: undefined, key: matchedOther.key, name: matchedOther.name };
+          return { node: undefined, key, name: raw };
+        };
+
+        const from = resolve(rawFrom, rawFromKey);
+        const to = resolve(rawTo, rawToKey);
+
+        if (from.key === to.key || closeSpelling(from.name, to.name)) {
+          return { ok: false as const, reason: "An edge needs two different concepts." };
+        }
+
+        if (input.kind === "prerequisite" && from.node && to.node) {
+          const reverseNote = tx
+            .select()
+            .from(conceptEdges)
+            .where(and(eq(conceptEdges.fromId, to.node.id), eq(conceptEdges.toId, from.node.id), eq(conceptEdges.kind, "prerequisite")))
+            .get();
+          const reverseSession = tx
+            .select()
+            .from(conceptSessionEdges)
+            .where(and(eq(conceptSessionEdges.fromId, to.node.id), eq(conceptSessionEdges.toId, from.node.id), eq(conceptSessionEdges.kind, "prerequisite")))
+            .get();
+          if (reverseNote || reverseSession) {
+            return {
+              ok: false as const,
+              reason: `Contradicts an existing prerequisite: "${to.name}" is already a prerequisite of "${from.name}".`,
+            };
+          }
+        }
+
+        const neededNodes = (from.node ? 0 : 1) + (to.node ? 0 : 1);
+        if (existingNodes.length + neededNodes > MAX_CONCEPT_NODES) {
+          return { ok: false as const, reason: `The concept graph has reached its ${MAX_CONCEPT_NODES.toLocaleString("en")}-concept limit.` };
+        }
+
+        let fromId = from.node?.id;
+        if (!fromId) {
+          fromId = randomUUID();
+          tx.insert(concepts).values({ id: fromId, key: from.key, name: from.name, createdAt: now }).run();
+        }
+        let toId = to.node?.id;
+        if (!toId) {
+          toId = randomUUID();
+          tx.insert(concepts).values({ id: toId, key: to.key, name: to.name, createdAt: now }).run();
+        }
+
+        tx.insert(conceptSessionSources)
+          .values([
+            { id: randomUUID(), conceptId: fromId, sessionId: input.sessionId, createdAt: now },
+            { id: randomUUID(), conceptId: toId, sessionId: input.sessionId, createdAt: now },
+          ])
+          .onConflictDoNothing()
+          .run();
+
+        let edgeFrom = fromId;
+        let edgeTo = toId;
+        if (input.kind === "related" && edgeFrom > edgeTo) [edgeFrom, edgeTo] = [edgeTo, edgeFrom];
+
+        const inserted = tx
+          .insert(conceptSessionEdges)
+          .values({ id: randomUUID(), fromId: edgeFrom, toId: edgeTo, kind: input.kind, sessionId: input.sessionId, createdAt: now })
+          .onConflictDoNothing()
+          .run().changes;
+
+        return { ok: true as const, from: from.name, to: to.name, kind: input.kind, created: inserted > 0 };
+      });
+    },
+
     /** Every concept node and edge, each with the notes behind it, for the graph view and export. */
     conceptGraph() {
       const nodes = db.select({ id: concepts.id, name: concepts.name }).from(concepts).orderBy(asc(concepts.name)).all();
@@ -264,6 +389,10 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
         const edge = edges.get(key) ?? { from: e.fromId, to: e.toId, kind: e.kind, notes: [] };
         edge.notes.push(e.noteId);
         edges.set(key, edge);
+      }
+      for (const e of db.select({ fromId: conceptSessionEdges.fromId, toId: conceptSessionEdges.toId, kind: conceptSessionEdges.kind }).from(conceptSessionEdges).orderBy(asc(conceptSessionEdges.fromId), asc(conceptSessionEdges.toId)).all()) {
+        const key = `${e.fromId}|${e.toId}|${e.kind}`;
+        if (!edges.has(key)) edges.set(key, { from: e.fromId, to: e.toId, kind: e.kind, notes: [] });
       }
       return { concepts: nodes.map((n) => ({ ...n, notes: sources.get(n.id) ?? [] })), edges: [...edges.values()] };
     },
@@ -368,7 +497,11 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
             e.kind as kind,
             count(*) as support,
             case when e.from_id in (${ids}) and e.to_id in (${ids}) then 0 else 1 end as bothSeeds
-          from concept_edges e
+          from (
+            select from_id, to_id, kind from concept_edges
+            union all
+            select from_id, to_id, kind from concept_session_edges
+          ) e
           join concepts f on f.id = e.from_id
           join concepts t on t.id = e.to_id
           where e.from_id in (${ids}) or e.to_id in (${ids})

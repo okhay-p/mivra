@@ -6,6 +6,7 @@ import {
   AddToLesson,
   ArtifactView,
   ConceptGraph,
+  ConceptGraphViewQuery,
   CourseLessonsView,
   CourseIcon,
   CourseSummaryView,
@@ -58,7 +59,7 @@ import { createMilestoneReviewer } from "./runtime/milestone-review.js";
 import { currentMilestone, disputeMilestone, recordMilestoneCheck } from "./runtime/milestones.js";
 import { createTurnRunner, type TurnError } from "./runtime/turn-runner.js";
 import { hostGuard, isLoopbackPeer, tokenGuard, type SecurityConfig } from "./security.js";
-import { noteGraphView } from "./notes/graph-view.js";
+import { conceptGraphView, noteGraphView } from "./notes/graph-view.js";
 import { exportVault } from "./notes/vault-export.js";
 import { importVault, importView, resolveGraph } from "./notes/vault-import.js";
 import { zipStream } from "./notes/zip-writer.js";
@@ -1125,9 +1126,20 @@ const cancelDistillation = createRoute({
 const getConceptGraph = createRoute({
   method: "get",
   path: "/concepts",
-  description: "Every concept drawn from imported notes and the edges between them, each with the ids of the notes it came from.",
+  description: "Every concept from imported notes and tutoring sessions and the edges between them, each with the ids of the notes it came from.",
   responses: {
     200: { description: "The concept graph", content: { "application/json": { schema: ConceptGraph } } },
+  },
+});
+
+const getConceptGraphView = createRoute({
+  method: "get",
+  path: "/concepts/graph/view",
+  description:
+    "What the web UI's global concept graph draws (ADR-014, issue #140): concepts from imported notes and live tutoring sessions, with prerequisite and related edges. Up to 500 concepts are drawn whole; above that, or with `mode=local`, the concepts within `depth` hops of `focus`.",
+  request: { query: ConceptGraphViewQuery },
+  responses: {
+    200: { description: "The view", content: { "application/json": { schema: NoteGraphView } } },
   },
 });
 
@@ -1863,6 +1875,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
       return c.json(distiller.view(id), 200);
     })
     .openapi(getConceptGraph, (c) => c.json(knowledge.conceptGraph(), 200))
+    .openapi(getConceptGraphView, (c) => c.json(conceptGraphView(knowledge.conceptGraph(), c.req.valid("query")), 200))
     .openapi(getImportGraph, (c) => {
       const { id } = c.req.valid("param");
       if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
