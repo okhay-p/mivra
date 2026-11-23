@@ -1,4 +1,4 @@
-import { WHOLE_GRAPH_NOTES, type NoteGraphView, type NoteSummary, type NoteView, type VaultImportView } from "@mivra/protocol";
+import { WHOLE_GRAPH_NOTES, type ConceptSummary, type NoteGraphView, type NoteSummary, type NoteView, type VaultImportView } from "@mivra/protocol";
 import { Maximize, Minus, Plus, Search } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
-import { findNotes, getConceptGraphView, getGraphView, getNote, listImports, type GraphViewFilters } from "./api.js";
+import { findConcepts, findNotes, getConceptGraphView, getGraphView, getNote, listImports, type GraphViewFilters } from "./api.js";
 import { layoutNotesGraph, type NotesGraphLayout } from "./notes-graph-layout.js";
 
 type GraphNode = NoteGraphView["nodes"][number];
@@ -151,6 +151,10 @@ export function NotesGraph({ importId: initialImport = ALL_CONCEPTS, onScopeChan
     setSelected(noteId);
     setFilters((f) => ({ ...f, focus: noteId, mode: view && view.matchingNotes > WHOLE_GRAPH_NOTES ? "local" : f.mode }));
   };
+  const centreOnConcept = (conceptNodeId: string) => {
+    setSelected(conceptNodeId);
+    setFilters((f) => ({ ...f, focus: conceptNodeId, mode: tooBigForWhole ? "local" : f.mode }));
+  };
   const onActivate = (node: GraphNode) => {
     setSelected(node.id);
     if (node.kind === "note") setReading(node.id);
@@ -159,6 +163,7 @@ export function NotesGraph({ importId: initialImport = ALL_CONCEPTS, onScopeChan
   const importName = isGlobal ? "All concepts" : imports.find((i) => i.id === importId)?.name;
   const totalForMode = isGlobal ? (view?.totalConcepts ?? view?.nodes.length ?? 0) : (view?.matchingNotes ?? 0);
   const tooBigForWhole = Boolean(view && totalForMode > WHOLE_GRAPH_NOTES);
+  const selectedNode = selected ? view?.nodes.find((n) => n.id === selected) : undefined;
   const scopeOptions = [
     { value: ALL_CONCEPTS, text: "All concepts" },
     ...(imports.length > 0
@@ -220,7 +225,23 @@ export function NotesGraph({ importId: initialImport = ALL_CONCEPTS, onScopeChan
             options={[1, 2, 3].map((d) => ({ value: String(d), text: plural(d, "hop") }))}
           />
         )}
-        {!isGlobal && <NoteFinder importId={importId} onPick={(note) => centreOn(note.id)} />}
+        {!isGlobal ? (
+          <NoteFinder importId={importId} onPick={(note) => centreOn(note.id)} />
+        ) : (
+          <>
+            <ConceptFinder onPick={(concept) => centreOnConcept(`concept:${concept.id}`)} />
+            {selectedNode && selectedNode.id !== view?.focus && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setFilters((f) => ({ ...f, mode: "local", focus: selectedNode.id }))}
+              >
+                Centre on {selectedNode.label}
+              </Button>
+            )}
+          </>
+        )}
       </div>
       <GraphStatus view={view} loading={state.loading || laidOut.pending} error={state.error} importName={importName} isGlobal={isGlobal} />
       {!laidOut.drawn && !state.error && (state.loading || laidOut.pending) && (
@@ -281,6 +302,58 @@ function FilterSelect({
         </SelectContent>
       </Select>
     </div>
+  );
+}
+
+/** Finds a concept by name to centre the global concept graph on, reaching concepts outside a large local view. */
+function ConceptFinder({ onPick }: { onPick: (concept: ConceptSummary) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [found, setFound] = useState<ConceptSummary[]>([]);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) return setFound([]);
+    let stale = false;
+    const timer = setTimeout(() => {
+      void findConcepts(q).then((result) => {
+        if (!stale && result.ok) setFound(result.value);
+      });
+    }, SEARCH_DELAY_MS);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" size="sm">
+          <Search />
+          Find a concept
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 p-0" align="start">
+        <Command shouldFilter={false} label="Find a concept by name">
+          <CommandInput placeholder="Concept name" value={query} onValueChange={setQuery} aria-label="Find a concept by name" />
+          <CommandList>
+            {query.trim() && <CommandEmpty>No concept matches.</CommandEmpty>}
+            {found.map((concept) => (
+              <CommandItem
+                key={concept.id}
+                value={concept.id}
+                onSelect={() => {
+                  setOpen(false);
+                  setQuery("");
+                  onPick(concept);
+                }}
+              >
+                <span className="truncate">{concept.name}</span>
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
 

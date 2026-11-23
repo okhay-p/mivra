@@ -148,6 +148,19 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
       return db.select({ key: concepts.key, name: concepts.name }).from(concepts).orderBy(asc(concepts.name)).all();
     },
 
+    /**
+     * Up to `limit` concepts whose name contains `text`, ignoring case: names starting with it first, then
+     * shorter names, then alphabetical order. `%`, `_` and `\` in `text` are matched literally.
+     */
+    findConcepts(text: string, limit: number): { id: string; name: string }[] {
+      const escaped = text.toLowerCase().replace(/[\\%_]/g, (c) => `\\${c}`);
+      return db.all<{ id: string; name: string }>(sql`
+        select id, name from concepts
+        where lower(name) like ${`%${escaped}%`} escape '\\'
+        order by lower(name) like ${`${escaped}%`} escape '\\' desc, length(name), name
+        limit ${limit}`);
+    },
+
     /** Concept names the learner already has elsewhere: graded checks first, then memories. Not graph nodes yet. */
     otherConceptNames(limit: number): string[] {
       const fromAttempts = db.all<{ concept: string }>(sql`select concept from attempts where concept is not null group by concept order by max(created_at) desc limit ${limit}`);

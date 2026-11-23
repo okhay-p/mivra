@@ -106,3 +106,7 @@ export const ConceptGraph = z
   })
   .strict();
 export type ConceptGraph = z.infer<typeof ConceptGraph>;
+
+/** A concept found by name, for picking one to centre the global concept graph on (issue #140). */
+export const ConceptSummary = z.object({ id: z.string(), name: z.string() }).strict();
+export type ConceptSummary = z.infer<typeof ConceptSummary>;

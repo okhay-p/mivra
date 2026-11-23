@@ -222,6 +222,82 @@ describe("notes graph", () => {
     render(<NotesGraph importId={ALL_CONCEPTS} />);
     await waitFor(() => expect(status().textContent).toContain("No concepts yet."));
   });
+
+  it("navigates disconnected clusters above 500 concepts via concept finder and explicit centre button", async () => {
+    const queries: URLSearchParams[] = [];
+    const clusterA: NoteGraphView = {
+      mode: "local",
+      focus: "concept:a0",
+      depth: 2,
+      totalNotes: 0,
+      matchingNotes: 0,
+      totalConcepts: 502,
+      truncated: true,
+      nodes: [
+        { id: "concept:a0", kind: "concept", label: "Alpha root", notes: 0, hops: 0 },
+        { id: "concept:a1", kind: "concept", label: "Alpha child", notes: 0, hops: 1 },
+      ],
+      edges: [{ from: "concept:a0", to: "concept:a1", kind: "prerequisite" }],
+      tags: [],
+      folders: [],
+    };
+    const clusterB: NoteGraphView = {
+      mode: "local",
+      focus: "concept:b0",
+      depth: 2,
+      totalNotes: 0,
+      matchingNotes: 0,
+      totalConcepts: 502,
+      truncated: false,
+      nodes: [
+        { id: "concept:b0", kind: "concept", label: "Beta root", notes: 0, hops: 0 },
+        { id: "concept:b1", kind: "concept", label: "Beta leaf", notes: 0, hops: 1 },
+      ],
+      edges: [{ from: "concept:b0", to: "concept:b1", kind: "prerequisite" }],
+      tags: [],
+      folders: [],
+    };
+    const aroundB1: NoteGraphView = {
+      ...clusterB,
+      focus: "concept:b1",
+      nodes: [
+        { id: "concept:b0", kind: "concept", label: "Beta root", notes: 0, hops: 1 },
+        { id: "concept:b1", kind: "concept", label: "Beta leaf", notes: 0, hops: 0 },
+      ],
+    };
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/imports") return json([]);
+      if (url.pathname === "/api/concepts/search") return json([{ id: "b0", name: "Beta root" }]);
+      if (url.pathname === "/api/concepts/graph/view") {
+        queries.push(url.searchParams);
+        const focus = url.searchParams.get("focus");
+        if (focus === "concept:b0") return json(clusterB);
+        if (focus === "concept:b1") return json(aroundB1);
+        return json(clusterA);
+      }
+      return json({ error: "nope" }, 404);
+    });
+
+    render(<NotesGraph importId={ALL_CONCEPTS} />);
+    await waitFor(() => expect(status().textContent).toContain("Around Alpha root, within 2 hops: 2 concepts, 1 connection, of 502 concepts."));
+
+    // Reach disconnected cluster B via Find a concept.
+    fireEvent.click(screen.getByRole("button", { name: "Find a concept" }));
+    fireEvent.change(await screen.findByRole("combobox", { name: "Find a concept by name" }), { target: { value: "Beta" } });
+    fireEvent.click(await screen.findByRole("option", { name: "Beta root" }));
+    await waitFor(() => expect(queries.at(-1)?.get("focus")).toBe("concept:b0"));
+    expect(queries.at(-1)?.get("mode")).toBe("local");
+    await waitFor(() => expect(status().textContent).toContain("Around Beta root, within 2 hops"));
+
+    // Select a drawn neighbour concept and explicitly centre on it.
+    fireEvent.click(await screen.findByRole("button", { name: "Beta leaf, concept, 1 connection" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Centre on Beta leaf" }));
+    await waitFor(() => expect(queries.at(-1)?.get("focus")).toBe("concept:b1"));
+    expect(queries.at(-1)?.get("mode")).toBe("local");
+    await waitFor(() => expect(status().textContent).toContain("Around Beta leaf, within 2 hops"));
+  });
 });
 
 describe("notes graph layout", () => {

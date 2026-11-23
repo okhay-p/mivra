@@ -1,5 +1,6 @@
 import {
   ConceptGraphViewQuery,
+  ConceptSummary,
   MAX_GRAPH_FACETS,
   MAX_GRAPH_VIEW_EDGES,
   MAX_GRAPH_VIEW_NODES,
@@ -284,21 +285,51 @@ describe("conceptGraphView & global concept graph API", () => {
     expect(v.nodes.map((n) => n.id)).toEqual(["concept:k9", "concept:k10", "concept:k11"]);
   });
 
-  it("serves GET /api/concepts/graph/view without any vault import", async () => {
+  it("serves GET /api/concepts/graph/view and /api/concepts/search without any vault import", async () => {
     const db = openDb(":memory:");
     const sessions = createSessionStore(db);
     const knowledge = createKnowledgeStore(db);
     const session = sessions.createSession("Live session");
     knowledge.saveSessionEdge({ sessionId: session.id, from: "Functions", to: "Closures", kind: "prerequisite" });
+    knowledge.saveSessionEdge({ sessionId: session.id, from: "100% coverage", to: "Testing", kind: "related" });
 
     const app = createApp({ db, model: () => { throw new Error("no model"); }, security: { token: "t", allowedHosts: [] } });
     const res = await app.request("/api/concepts/graph/view", { headers: { Authorization: "Bearer t" } });
     expect(res.status).toBe(200);
     const v = NoteGraphView.parse(await res.json());
-    expect(v.totalConcepts).toBe(2);
-    expect(v.nodes.map((n) => n.label)).toEqual(["Closures", "Functions"]);
-    expect(v.edges).toHaveLength(1);
-    expect(v.edges[0]!.kind).toBe("prerequisite");
+    expect(v.totalConcepts).toBe(4);
+    expect(v.nodes.map((n) => n.label)).toEqual(["100% coverage", "Closures", "Functions", "Testing"]);
+    expect(v.edges).toHaveLength(2);
     expect((await app.request("/api/concepts/graph/view?depth=9", { headers: { Authorization: "Bearer t" } })).status).toBe(400);
+
+    const search = async (q: string) =>
+      ConceptSummary.array().parse(await (await app.request(`/api/concepts/search?q=${encodeURIComponent(q)}`, { headers: { Authorization: "Bearer t" } })).json());
+    expect((await search("clos")).map((c) => c.name)).toEqual(["Closures"]);
+    expect((await search("100%")).map((c) => c.name)).toEqual(["100% coverage"]);
+    expect(await search("1%c")).toEqual([]);
+    expect((await app.request("/api/concepts/search?q=", { headers: { Authorization: "Bearer t" } })).status).toBe(400);
+  });
+
+  it("navigates between disconnected clusters above WHOLE_GRAPH_NOTES concepts by changing focus", () => {
+    // Cluster A: 500 concepts in a chain; Cluster B: 2 disconnected concepts.
+    const concepts: ConceptGraph = {
+      concepts: [
+        ...Array.from({ length: WHOLE_GRAPH_NOTES }, (_, i) => ({ id: `a${i}`, name: `Alpha ${String(i).padStart(3, "0")}`, notes: [] })),
+        { id: "b0", name: "Beta root", notes: [] },
+        { id: "b1", name: "Beta leaf", notes: [] },
+      ],
+      edges: [
+        ...Array.from({ length: WHOLE_GRAPH_NOTES - 1 }, (_, i) => ({ from: `a${i}`, to: `a${i + 1}`, kind: "related" as const, notes: [] })),
+        { from: "b0", to: "b1", kind: "prerequisite" as const, notes: [] },
+      ],
+    };
+    const initial = cView(concepts);
+    expect(initial.mode).toBe("local");
+    expect(initial.nodes.some((n) => n.id === "concept:b0")).toBe(false);
+
+    const refocused = cView(concepts, { mode: "local", focus: "concept:b0", depth: 1 });
+    expect(refocused.mode).toBe("local");
+    expect(refocused.focus).toBe("concept:b0");
+    expect(refocused.nodes.map((n) => n.id)).toEqual(["concept:b1", "concept:b0"]);
   });
 });

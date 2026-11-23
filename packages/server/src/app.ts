@@ -7,6 +7,7 @@ import {
   ArtifactView,
   ConceptGraph,
   ConceptGraphViewQuery,
+  ConceptSummary,
   CourseLessonsView,
   CourseIcon,
   CourseSummaryView,
@@ -1143,6 +1144,16 @@ const getConceptGraphView = createRoute({
   },
 });
 
+const searchConceptsRoute = createRoute({
+  method: "get",
+  path: "/concepts/search",
+  description: "Up to 20 concepts whose name contains `q`, ignoring case, for picking a focus concept in the global concept graph.",
+  request: { query: z.object({ q: z.string().trim().min(1).max(200) }) },
+  responses: {
+    200: { description: "Matching concepts", content: { "application/json": { schema: z.array(ConceptSummary) } } },
+  },
+});
+
 /** Documented only: the handler streams the zip. */
 const exportObsidian = createRoute({
   method: "get",
@@ -1876,6 +1887,7 @@ export function createApp({ db, model, models: modelOptions = {}, security, prov
     })
     .openapi(getConceptGraph, (c) => c.json(knowledge.conceptGraph(), 200))
     .openapi(getConceptGraphView, (c) => c.json(conceptGraphView(knowledge.conceptGraph(), c.req.valid("query")), 200))
+    .openapi(searchConceptsRoute, (c) => c.json(knowledge.findConcepts(c.req.valid("query").q, 20), 200))
     .openapi(getImportGraph, (c) => {
       const { id } = c.req.valid("param");
       if (!noteStore.findImport(id)) return c.json({ error: "Import not found" }, 404);
