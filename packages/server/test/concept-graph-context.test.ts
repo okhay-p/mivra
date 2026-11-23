@@ -228,7 +228,7 @@ describe("concept graph in chat turns, placement interviews, and lesson generati
       return systems.at(-1)!;
     };
 
-    return { app, db, store, lessons, systems, turn };
+    return { app, db, store, lessons, knowledge, systems, turn };
   }
 
   it("includes relevant concept edges on a chat turn when notes match, and omits them when nothing matches", async () => {
@@ -294,6 +294,54 @@ describe("concept graph in chat turns, placement interviews, and lesson generati
     const { course } = store.createCourse("Calculus");
     store.writeFirstSyllabus(course.id, null, {
       topics: [{ title: "Derivatives", summary: "Rates of change", reason: "Core", requestedByLearner: false, concepts: ["Derivatives"] }],
+      known: [],
+    });
+    const [topic] = store.latestSyllabus(course.id)!.topics;
+
+    const res = await app.request(`/api/courses/${course.id}/lessons`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ topicId: topic!.id }),
+    });
+    expect(res.status).toBe(201);
+    const { lesson } = (await res.json()) as { lesson: { id: string } };
+    await vi.waitFor(() => {
+      const row = db.select().from(lessonsTable).where(eq(lessonsTable.id, lesson.id)).get();
+      expect(row?.status).not.toBe("generating");
+    });
+
+    const lessonSystem = systems.find((s) => s.includes("writing one lesson of a course"));
+    expect(lessonSystem).toBeDefined();
+    expect(graphRows(lessonSystem)).toEqual([{ from: "Limits", to: "Derivatives", kind: "prerequisite" }]);
+  });
+
+  it("seeds concept edges from sentence course goals and chat messages for session-only concepts", async () => {
+    const { store, knowledge, turn } = await setup();
+    const origin = store.createSession("Earlier chat");
+    const saved = knowledge.saveSessionEdge({
+      sessionId: origin.id,
+      from: "Dynamic Programming",
+      to: "Greedy Algorithms",
+      kind: "related",
+    });
+    expect(saved.ok).toBe(true);
+
+    // Sentence course goal mentioning a session-only concept (no vault note mentions Greedy Algorithms).
+    const { session: interviewSession } = store.createCourse("Learn greedy algorithms for coding interviews");
+    const interviewSys = await turn(interviewSession.id, "Let's start");
+    expect(graphRows(interviewSys)).toEqual([{ from: "Dynamic Programming", to: "Greedy Algorithms", kind: "related" }]);
+
+    // Free chat mentioning a session-only concept directly.
+    const chat = store.createSession("Free chat");
+    const chatSys = await turn(chat.id, "When should I use greedy algorithms?");
+    expect(graphRows(chatSys)).toEqual([{ from: "Dynamic Programming", to: "Greedy Algorithms", kind: "related" }]);
+  });
+
+  it("seeds concept edges from sentence lesson topic titles", async () => {
+    const { app, db, store, systems } = await setup();
+    const { course } = store.createCourse("Calculus");
+    store.writeFirstSyllabus(course.id, null, {
+      topics: [{ title: "Applying Derivatives to optimization", summary: "Rates of change", reason: "Core", requestedByLearner: false, concepts: ["Optimization"] }],
       known: [],
     });
     const [topic] = store.latestSyllabus(course.id)!.topics;

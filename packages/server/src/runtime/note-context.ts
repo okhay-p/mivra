@@ -303,6 +303,23 @@ function matchedConceptKeys(knowledge: KnowledgeStore, terms: string[], hintConc
 }
 
 /**
+ * Concept keys whose topic words all appear within at least one of `texts`, multi-word concepts first.
+ * Reads `knowledge.conceptNodes()` once across all texts without letting words from separate strings combine.
+ */
+export function matchConceptKeysInText(knowledge: KnowledgeStore, ...texts: string[]): string[] {
+  const termSets = texts.map((text) => new Set(queryTerms(text, isTopicWord))).filter((set) => set.size > 0);
+  if (termSets.length === 0) return [];
+  const matched: { key: string; words: number }[] = [];
+  for (const node of knowledge.conceptNodes()) {
+    const words = queryTerms(node.key, isTopicWord);
+    if (words.length > 0 && termSets.some((termSet) => words.every((w) => termSet.has(w)))) {
+      matched.push({ key: node.key, words: words.length });
+    }
+  }
+  return matched.sort((a, b) => b.words - a.words).map((m) => m.key);
+}
+
+/**
  * The excerpts that match `text`, best notes first; empty without a real match. When FTS5 matches fewer than
  * CONCEPT_FALLBACK_THRESHOLD chunks and a KnowledgeStore is provided, supplements with lead chunks of notes
  * supporting matching distilled concepts within the same MAX_NOTE_CHARS budget.
