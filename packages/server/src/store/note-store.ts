@@ -8,7 +8,7 @@ import { clearDistilled, detachMemories, dropUnsupportedConcepts } from "./knowl
 
 export type VaultImportRow = typeof vaultImports.$inferSelect & { noteCount: number };
 export type NoteRow = typeof notes.$inferSelect;
-export type NoteLinkRow = typeof noteLinks.$inferSelect;
+export type NoteLinkRow = Pick<typeof noteLinks.$inferSelect, "noteId" | "target" | "kind">;
 /** A chunk of a note matched by search, with what's needed to cite it. */
 /** A matching chunk. `rank` is its FTS5 bm25 score for the query: negative, and lower is a better match. */
 export type NoteExcerpt = { chunkId: number; noteId: string; importId: string; path: string; title: string; heading: string | null; seq: number; text: string; rank: number };
@@ -46,8 +46,24 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
     "insert into notes (id, import_id, path, title, title_key, aliases, body, hash, created_at, updated_at) values (@id, @importId, @path, @title, @titleKey, @aliases, @body, @hash, @now, @now)",
   );
   const insertChunk = db.$client.prepare("insert into note_chunks (note_id, seq, heading, text) values (@noteId, @seq, @heading, @text)");
-  const insertLink = db.$client.prepare("insert into note_links (note_id, target, kind) values (@noteId, @target, @kind)");
+  const insertLink = db.$client.prepare("insert into note_links (note_id, target, target_key, kind) values (@noteId, @target, @targetKey, @kind)");
   const insertTag = db.$client.prepare("insert into note_tags (note_id, tag) values (@noteId, @tag)");
+
+  // Backfill target_key for links written before the target_key column existed. Uses note_links_target_key_idx.
+  const missingTargetKeys = db.all<{ noteId: string; target: string; kind: string }>(
+    sql`select note_id as noteId, target, kind from note_links where target_key = ''`,
+  );
+  if (missingTargetKeys.length > 0) {
+    const updateTargetKey = db.$client.prepare(
+      "update note_links set target_key = @targetKey where note_id = @noteId and target = @target and kind = @kind",
+    );
+    db.transaction(() => {
+      for (const row of missingTargetKeys) {
+        const key = noteKey(row.target);
+        if (key) updateTargetKey.run({ ...row, targetKey: key });
+      }
+    });
+  }
 
   const withCount = (tx: Db | Tx, row: typeof vaultImports.$inferSelect): VaultImportRow => ({
     ...row,
@@ -84,7 +100,7 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
     for (const { note, id, isNew } of written) {
       if (isNew) insertNote.run({ id, importId, path: note.path, title: note.parsed.title, titleKey: note.titleKey, aliases: JSON.stringify(note.aliasKeys), body: note.body, hash: note.hash, now: now.getTime() });
       for (const chunk of note.parsed.chunks) insertChunk.run({ noteId: id, seq: chunk.seq, heading: chunk.heading, text: chunk.text });
-      for (const link of note.parsed.links) insertLink.run({ noteId: id, target: link.target, kind: link.kind });
+      for (const link of note.parsed.links) insertLink.run({ noteId: id, target: link.target, targetKey: noteKey(link.target), kind: link.kind });
       for (const tag of note.parsed.tags) insertTag.run({ noteId: id, tag });
     }
 
@@ -264,7 +280,7 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
         join notes n on n.id = l.note_id
         where n.import_id = ${importId}
           and l.note_id != ${note.id}
-          and lower(l.target) in (${keys})
+          and l.target_key in (${keys})
         order by n.path asc, l.rowid asc
         limit ${scanLimit}`);
       if (raw.length === 0) return [];

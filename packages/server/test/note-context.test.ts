@@ -282,6 +282,36 @@ describe("imported notes in the tutor's context", () => {
       expect(leads.every((c) => c.seq === 0)).toBe(true);
     });
 
+    it("NoteStore.backlinks matches Unicode case-folded and whitespace-normalised links via note_links_target_key_idx", async () => {
+      const { db, importVault } = setup();
+      const importId = await importVault("Unicode", [
+        { path: "überblick.md", text: "Übersicht über Themen.\n" },
+        { path: "Machine Learning.md", text: "Supervised and unsupervised methods.\n" },
+        { path: "Caller.md", text: "See [[Überblick]] and [[Machine  Learning]].\n" },
+      ]);
+      const byPath = new Map(db.select().from(notesTable).all().map((n) => [n.path, n]));
+      const ueberblick = byPath.get("überblick.md")!;
+      const ml = byPath.get("Machine Learning.md")!;
+
+      // Verify pre-existing rows with empty target_key (from older DBs) are backfilled on store creation.
+      db.$client.prepare("update note_links set target_key = ''").run();
+      const store = createNoteStore(db);
+
+      expect(store.backlinks(importId, ueberblick, 10).map((b) => b.path)).toEqual(["Caller.md"]);
+      expect(store.backlinks(importId, ml, 10).map((b) => b.path)).toEqual(["Caller.md"]);
+
+      // Verify SQLite uses note_links_target_key_idx instead of a full table scan.
+      const plan = db.$client
+        .prepare(
+          `explain query plan
+           select l.note_id, l.target, l.kind, n.title, n.path
+           from note_links l join notes n on n.id = l.note_id
+           where n.import_id = ? and l.note_id != ? and l.target_key in (?)`,
+        )
+        .all(importId, ueberblick.id, "überblick") as { detail: string }[];
+      expect(plan.some((row) => row.detail.includes("note_links_target_key_idx"))).toBe(true);
+    });
+
     it("falls back to distilled concept sources when FTS5 finds no chunks, without matching chatter or partial multi-word concepts", async () => {
       const { db, importVault, newSession, turn } = setup();
       await importVault("My vault", [

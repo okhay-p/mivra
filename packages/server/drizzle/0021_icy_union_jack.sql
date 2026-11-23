@@ -1,1 +1,0 @@
-CREATE INDEX `note_links_target_idx` ON `note_links` (`target`);

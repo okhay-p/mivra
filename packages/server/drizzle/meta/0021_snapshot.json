@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "5d749280-e37b-4930-81c9-d2de5dda960b",
+  "id": "33d84283-0d10-49e5-bb05-ade70b1f772c",
   "prevId": "1ca53cca-e209-4ab5-87e2-cd0ce4cf625d",
   "tables": {
     "artifacts": {
@@ -1475,6 +1475,14 @@
           "notNull": true,
           "autoincrement": false
         },
+        "target_key": {
+          "name": "target_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "''"
+        },
         "kind": {
           "name": "kind",
           "type": "text",
@@ -1484,10 +1492,10 @@
         }
       },
       "indexes": {
-        "note_links_target_idx": {
-          "name": "note_links_target_idx",
+        "note_links_target_key_idx": {
+          "name": "note_links_target_key_idx",
           "columns": [
-            "target"
+            "target_key"
           ],
           "isUnique": false
         }
