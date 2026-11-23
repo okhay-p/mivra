@@ -209,8 +209,26 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
         limit ${limit}`);
     },
 
-    /** Chunks of every imported note matching an FTS5 query, best first. The query must already be safe: see ftsQuery. */
-    searchNoteChunks(query: string, limit: number): NoteExcerpt[] {
+    /** Chunks of every imported note matching an FTS5 query (optionally restricted to a tag or its subtags), best first. The query must already be safe: see ftsQuery. */
+    searchNoteChunks(query: string, limit: number, tag?: string): NoteExcerpt[] {
+      const max = Math.floor(limit);
+      if (!Number.isFinite(max) || max <= 0) return [];
+      const normTag = tag?.trim().replace(/^#/, "").replace(/\/+$/, "").toLowerCase();
+      if (normTag) {
+        const escaped = normTag.replace(/[\\%_]/g, (c) => `\\${c}`);
+        return db.all<NoteExcerpt>(sql`
+          select c.id as chunkId, n.id as noteId, n.import_id as importId, n.path, n.title, c.heading, c.seq, c.text, f.rank
+          from note_chunks_fts f
+          join note_chunks c on c.id = f.rowid
+          join notes n on n.id = c.note_id
+          where note_chunks_fts match ${query}
+            and exists (
+              select 1 from note_tags t
+              where t.note_id = n.id and (t.tag = ${normTag} or t.tag like ${`${escaped}/%`} escape '\\')
+            )
+          order by f.rank
+          limit ${max}`);
+      }
       return db.all<NoteExcerpt>(sql`
         select c.id as chunkId, n.id as noteId, n.import_id as importId, n.path, n.title, c.heading, c.seq, c.text, f.rank
         from note_chunks_fts f
@@ -218,7 +236,25 @@ export function createNoteStore(db: Db, clock: () => Date = () => new Date()) {
         join notes n on n.id = c.note_id
         where note_chunks_fts match ${query}
         order by f.rank
-        limit ${limit}`);
+        limit ${max}`);
+    },
+
+    /** Up to `limit` notes having `tag` (or a nested subtag `tag/...`), with their lead chunk if any, in path order. */
+    notesByTag(tag: string, limit: number): { noteId: string; importId: string; path: string; title: string; heading: string | null; text: string }[] {
+      const max = Math.floor(limit);
+      const normTag = tag.trim().replace(/^#/, "").replace(/\/+$/, "").toLowerCase();
+      if (!normTag || !Number.isFinite(max) || max <= 0) return [];
+      const escaped = normTag.replace(/[\\%_]/g, (c) => `\\${c}`);
+      return db.all<{ noteId: string; importId: string; path: string; title: string; heading: string | null; text: string }>(sql`
+        select n.id as noteId, n.import_id as importId, n.path, n.title, c.heading, coalesce(c.text, '') as text
+        from notes n
+        left join note_chunks c on c.note_id = n.id and c.seq = 0
+        where exists (
+          select 1 from note_tags t
+          where t.note_id = n.id and (t.tag = ${normTag} or t.tag like ${`${escaped}/%`} escape '\\')
+        )
+        order by n.path asc
+        limit ${max}`);
     },
 
     /** Which of the chunks `chunkIds` match an FTS5 query. The query must already be safe: see ftsQuery. */
