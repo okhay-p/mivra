@@ -7,6 +7,13 @@ import { conceptEdges, conceptSources, concepts, memories, memorySources, notes,
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 type EdgeKind = (typeof conceptEdgeKinds)[number];
 
+/** One directed (`prerequisite`) or symmetric (`related`) edge between two distilled concepts. */
+export interface ConceptGraphEdge {
+  from: string;
+  to: string;
+  kind: EdgeKind;
+}
+
 /** A note waiting to be distilled: its text as it is now, and the hash that text has. */
 export type PendingNote = { id: string; path: string; title: string; body: string; hash: string; tags: string[] };
 
@@ -259,6 +266,103 @@ export function createKnowledgeStore(db: Db, clock: () => Date = () => new Date(
         edges.set(key, edge);
       }
       return { concepts: nodes.map((n) => ({ ...n, notes: sources.get(n.id) ?? [] })), edges: [...edges.values()] };
+    },
+
+    /** Concepts supported by the given notes, in key order. */
+    conceptsForNotes(noteIds: string[], limit = MAX_CONCEPT_NODES): { key: string; name: string }[] {
+      const unique = [...new Set(noteIds)];
+      const max = Math.floor(limit);
+      if (unique.length === 0 || !Number.isFinite(max) || max <= 0) return [];
+      const found = new Map<string, string>();
+      for (const batch of batches(unique)) {
+        const rows = db
+          .selectDistinct({ key: concepts.key, name: concepts.name })
+          .from(conceptSources)
+          .innerJoin(concepts, eq(concepts.id, conceptSources.conceptId))
+          .where(inArray(conceptSources.noteId, batch))
+          .orderBy(asc(concepts.key))
+          .limit(max)
+          .all();
+        for (const row of rows) {
+          if (!found.has(row.key)) found.set(row.key, row.name);
+        }
+      }
+      return [...found.entries()]
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .slice(0, max)
+        .map(([key, name]) => ({ key, name }));
+    },
+
+    /**
+     * Bounded 1-hop edges (`prerequisite` and `related`) touching any of the seed concept keys.
+     * Prioritises edges between two seed concepts, then `prerequisite` over `related`, then edges
+     * supported by more notes, and finally key order (with `related` endpoints ordered by key) so
+     * results are deterministic regardless of random concept ids or input order.
+     */
+    conceptNeighborhood(conceptKeys: string[], limit: number): ConceptGraphEdge[] {
+      const keys = [...new Set(conceptKeys.map(conceptKey).filter(Boolean))];
+      const max = Math.floor(limit);
+      if (keys.length === 0 || !Number.isFinite(max) || max <= 0) return [];
+      const seedIds: string[] = [];
+      const seedKeySet = new Set<string>();
+      for (const batch of batches(keys)) {
+        for (const row of db.select({ id: concepts.id, key: concepts.key }).from(concepts).where(inArray(concepts.key, batch)).all()) {
+          seedIds.push(row.id);
+          seedKeySet.add(row.key);
+        }
+      }
+      if (seedIds.length === 0) return [];
+      type Candidate = { fromKey: string; from: string; toKey: string; to: string; kind: EdgeKind; support: number; bothSeeds: number };
+      const byEdge = new Map<string, Candidate>();
+      // Two IN clauses per query, so halve the batch size to stay well below SQLite's bind limit.
+      const edgeBatch = Math.floor(BATCH / 2);
+      for (let i = 0; i < seedIds.length; i += edgeBatch) {
+        const batch = seedIds.slice(i, i + edgeBatch);
+        const ids = sql.join(batch.map((id) => sql`${id}`), sql`, `);
+        const rows = db.all<Candidate>(sql`
+          select
+            case when e.kind = 'related' and f.key > t.key then t.key else f.key end as fromKey,
+            case when e.kind = 'related' and f.key > t.key then t.name else f.name end as "from",
+            case when e.kind = 'related' and f.key > t.key then f.key else t.key end as toKey,
+            case when e.kind = 'related' and f.key > t.key then f.name else t.name end as "to",
+            e.kind as kind,
+            count(*) as support,
+            case when e.from_id in (${ids}) and e.to_id in (${ids}) then 0 else 1 end as bothSeeds
+          from concept_edges e
+          join concepts f on f.id = e.from_id
+          join concepts t on t.id = e.to_id
+          where e.from_id in (${ids}) or e.to_id in (${ids})
+          group by e.from_id, e.to_id, e.kind
+          order by
+            bothSeeds asc,
+            case e.kind when 'prerequisite' then 0 else 1 end asc,
+            support desc,
+            fromKey asc,
+            toKey asc
+          limit ${max}
+        `);
+        for (const row of rows) {
+          const edgeKey = `${row.kind}\u0000${row.fromKey}\u0000${row.toKey}`;
+          if (!byEdge.has(edgeKey)) {
+            byEdge.set(edgeKey, {
+              ...row,
+              bothSeeds: seedKeySet.has(row.fromKey) && seedKeySet.has(row.toKey) ? 0 : 1,
+            });
+          }
+        }
+      }
+      const kindRank = (k: EdgeKind) => (k === "prerequisite" ? 0 : 1);
+      return [...byEdge.values()]
+        .sort(
+          (a, b) =>
+            a.bothSeeds - b.bothSeeds ||
+            kindRank(a.kind) - kindRank(b.kind) ||
+            b.support - a.support ||
+            (a.fromKey < b.fromKey ? -1 : a.fromKey > b.fromKey ? 1 : 0) ||
+            (a.toKey < b.toKey ? -1 : a.toKey > b.toKey ? 1 : 0),
+        )
+        .slice(0, max)
+        .map(({ from, to, kind }) => ({ from, to, kind }));
     },
   };
 }
