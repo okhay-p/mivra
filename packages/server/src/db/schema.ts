@@ -396,7 +396,7 @@ export const noteLinks = sqliteTable(
     target: text("target").notNull(),
     kind: text("kind", { enum: ["link", "embed"] }).notNull(),
   },
-  (t) => [primaryKey({ columns: [t.noteId, t.target, t.kind] })],
+  (t) => [primaryKey({ columns: [t.noteId, t.target, t.kind] }), index("note_links_target_idx").on(t.target)],
 );
 
 /** A tag from a note's text or frontmatter, lower-cased and without its `#`. */
