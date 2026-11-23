@@ -335,6 +335,27 @@ describe("concept graph in chat turns, placement interviews, and lesson generati
     const chat = store.createSession("Free chat");
     const chatSys = await turn(chat.id, "When should I use greedy algorithms?");
     expect(graphRows(chatSys)).toEqual([{ from: "Dynamic Programming", to: "Greedy Algorithms", kind: "related" }]);
+
+    // Short / stopword / symbol programming-language concepts (Go, C++, R) match sentence goals on token boundaries
+    // without falsely matching substrings in unrelated words.
+    expect(knowledge.saveSessionEdge({ sessionId: origin.id, from: "Go", to: "Goroutines", kind: "prerequisite" }).ok).toBe(true);
+    expect(knowledge.saveSessionEdge({ sessionId: origin.id, from: "C++", to: "RAII", kind: "prerequisite" }).ok).toBe(true);
+    expect(knowledge.saveSessionEdge({ sessionId: origin.id, from: "R", to: "Data Frames", kind: "prerequisite" }).ok).toBe(true);
+
+    const { session: goSession } = store.createCourse("Learn Go for backend development");
+    expect(graphRows(await turn(goSession.id, "Let's begin"))).toEqual([{ from: "Go", to: "Goroutines", kind: "prerequisite" }]);
+
+    const { session: cppSession } = store.createCourse("Learn C++ memory management");
+    expect(graphRows(await turn(cppSession.id, "Let's begin"))).toEqual([{ from: "C++", to: "RAII", kind: "prerequisite" }]);
+
+    const { session: rSession } = store.createCourse("Statistics in R.");
+    expect(graphRows(await turn(rSession.id, "Let's begin"))).toEqual([{ from: "R", to: "Data Frames", kind: "prerequisite" }]);
+
+    // Unrelated text containing substrings ("algorithms" has "go", "Rust" has "r", "cooking" has "c") must not match.
+    const unrelated = store.createSession("Unrelated");
+    expect(await turn(unrelated.id, "Tell me about cooking pasta")).not.toContain("<learner_concept_graph>");
+    const { session: rustSession } = store.createCourse("Learn Rust for systems programming");
+    expect(await turn(rustSession.id, "Let's begin")).not.toContain("<learner_concept_graph>");
   });
 
   it("seeds concept edges from sentence lesson topic titles", async () => {
