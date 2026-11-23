@@ -399,7 +399,7 @@ export function createTurnRunner({ store, registry, model, models, lessons, note
       let assembled: Awaited<ReturnType<AssembleContext>>;
       try {
         // Plugin code runs here, so any failure must still release the run.
-        turnTools = registry.toolsFor({ sessionId, runId, store, lessons, lessonId });
+        turnTools = registry.toolsFor({ sessionId, runId, store, lessons, notes, lessonId });
         const gradedConversation = withAttemptResults(conversation, registry, store);
         // A model-only session event separates automatic assistant turns and closes the prompt.
         // It is never persisted or presented as a learner bubble. Tool call/result pairs remain intact.

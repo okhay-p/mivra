@@ -207,30 +207,8 @@ function packChunks(sections: { heading: string | null; lines: string[] }[]) {
   return chunks;
 }
 
-/** Parses one note. `path` is its vault path, which gives its title (the file name, as in Obsidian). */
-export function parseNote(path: string, raw: string): ParsedNote {
-  const text = raw.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
-  const { frontmatter, body } = splitFrontmatter(text);
-  const meta = readFrontmatter(frontmatter);
-  const title = posix.basename(path).replace(/\.md$/i, "");
-
-  let truncated = false;
-  const links = new Map<string, ParsedLink>();
-  const addLink = (target: string, kind: ParsedLink["kind"]) => {
-    const key = `${kind}:${target}`;
-    if (links.has(key)) return;
-    if (links.size >= MAX_LINKS_PER_NOTE) truncated = true;
-    else links.set(key, { target, kind });
-  };
-  const tags = new Set<string>();
-  const addTag = (raw: string) => {
-    const tag = raw.replace(/^#/, "").replace(/\/+$/, "").toLowerCase();
-    if (!tag || tags.has(tag) || tag.length > MAX_TAG_CHARS || /^[\d/]+$/.test(tag) || !/^[\p{L}\p{N}_/-]+$/u.test(tag)) return;
-    if (tags.size >= MAX_TAGS_PER_NOTE) truncated = true;
-    else tags.add(tag);
-  };
-  for (const tag of meta.tags) addTag(tag);
-
+/** Splits a frontmatter-free body into heading-labelled sections and non-fenced prose lines. */
+function splitSections(body: string): { sections: { heading: string | null; lines: string[] }[]; prose: string[] } {
   const sections: { heading: string | null; lines: string[] }[] = [{ heading: null, lines: [] }];
   const headingPath: string[] = [];
   // Lines outside code fences, where links and tags count. Each pattern then runs once over all of them, not per line.
@@ -260,6 +238,48 @@ export function parseNote(path: string, raw: string): ParsedNote {
       sections.at(-1)!.lines.push(line);
     }
   }
+  return { sections, prose };
+}
+
+/**
+ * Splits a note's raw markdown (stripping BOM, CRLF and YAML frontmatter) into heading-labelled sections
+ * using the same linear-time, fence-aware rules as `parseNote`.
+ */
+export function extractNoteSections(raw: string): { body: string; sections: { heading: string | null; text: string }[] } {
+  const text = raw.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const { body } = splitFrontmatter(text);
+  const { sections } = splitSections(body);
+  return {
+    body: body.trim(),
+    sections: sections.map((s) => ({ heading: s.heading, text: s.lines.join("\n").trim() })),
+  };
+}
+
+/** Parses one note. `path` is its vault path, which gives its title (the file name, as in Obsidian). */
+export function parseNote(path: string, raw: string): ParsedNote {
+  const text = raw.replace(/^﻿/, "").replace(/\r\n?/g, "\n");
+  const { frontmatter, body } = splitFrontmatter(text);
+  const meta = readFrontmatter(frontmatter);
+  const title = posix.basename(path).replace(/\.md$/i, "");
+
+  let truncated = false;
+  const links = new Map<string, ParsedLink>();
+  const addLink = (target: string, kind: ParsedLink["kind"]) => {
+    const key = `${kind}:${target}`;
+    if (links.has(key)) return;
+    if (links.size >= MAX_LINKS_PER_NOTE) truncated = true;
+    else links.set(key, { target, kind });
+  };
+  const tags = new Set<string>();
+  const addTag = (raw: string) => {
+    const tag = raw.replace(/^#/, "").replace(/\/+$/, "").toLowerCase();
+    if (!tag || tags.has(tag) || tag.length > MAX_TAG_CHARS || /^[\d/]+$/.test(tag) || !/^[\p{L}\p{N}_/-]+$/u.test(tag)) return;
+    if (tags.size >= MAX_TAGS_PER_NOTE) truncated = true;
+    else tags.add(tag);
+  };
+  for (const tag of meta.tags) addTag(tag);
+
+  const { sections, prose } = splitSections(body);
 
   const proseText = prose.join("\n").replace(INLINE_CODE, " ");
   // Notes repeat links; each distinct spelling is parsed once.

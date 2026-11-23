@@ -48,6 +48,7 @@ import type { Extract } from "./documents/extract-in-child.js";
 import { coreCourse } from "./plugins/core-course.js";
 import { coreLearning } from "./plugins/core-learning.js";
 import { coreMemory } from "./plugins/core-memory.js";
+import { coreNotes } from "./plugins/core-notes.js";
 import { presentMessages } from "./runtime/artifacts.js";
 import { submitAttempt } from "./runtime/attempts.js";
 import { createCapabilityRegistry, type Plugin } from "./runtime/capabilities.js";
@@ -97,7 +98,7 @@ export interface AppDeps {
      */
     custom?: { env?: (name: string) => string | undefined; fetch?: typeof fetch };
   };
-  /** Defaults to the first-party core-learning, core-memory and core-course plugins. */
+  /** Defaults to the first-party core-learning, core-memory, core-course and core-notes plugins. */
   plugins?: Plugin[];
   /** Defaults to extracting on a worker thread. */
   extractDocument?: Extract;
@@ -1271,7 +1272,7 @@ function toDocumentJson(row: DocumentRow): DocumentView {
 
 const uploadOf = (c: Context) => ({ body: c.req.raw.body, contentType: c.req.header("content-type"), contentLength: c.req.header("content-length") });
 
-export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse], extractDocument, unzipVault }: AppDeps) {
+export function createApp({ db, model, models: modelOptions = {}, security, providers = { credentials: memoryCredentials() }, plugins = [coreLearning, coreMemory, coreCourse, coreNotes], extractDocument, unzipVault }: AppDeps) {
   const store = createSessionStore(db);
   const { credentials, check, isLocal = isLoopbackPeer, chatgpt, fetch: fetchImpl = fetch } = providers;
   const settingsStore = createSettingsStore(db);
